@@ -1,13 +1,24 @@
 import React from 'react';
-import { Tabs } from 'expo-router';
 import { View } from 'react-native';
+import { withLayoutContext } from 'expo-router';
+import { createMaterialTopTabNavigator } from '@react-navigation/material-top-tabs';
 import { Trophy, ClipboardList, Calculator, Settings, Dumbbell } from 'lucide-react-native';
+
+const { Navigator } = createMaterialTopTabNavigator();
+const Tabs = withLayoutContext(Navigator);
 
 export default function TabLayout() {
   return (
     <Tabs
+      tabBarPosition="bottom"
       screenOptions={{
         headerShown: false,
+
+        // Smooth swipe + animated transitions (web + native)
+        swipeEnabled: true,
+        animationEnabled: true,
+        lazy: true,
+
         tabBarActiveTintColor: '#4A90D9',
         tabBarInactiveTintColor: '#A0A0A0',
         tabBarStyle: {
@@ -22,10 +33,13 @@ export default function TabLayout() {
         tabBarLabelStyle: {
           fontSize: 10,
           fontWeight: '600',
+          textTransform: 'none',
         },
-        tabBarBackground: () => (
-          <View className="absolute inset-0 bg-af-navy/95" />
-        ),
+        tabBarIndicatorStyle: {
+          // Hide the usual “top tabs” indicator line
+          height: 0,
+        },
+        tabBarBackground: () => <View className="absolute inset-0 bg-af-navy/95" />,
       }}
     >
       <Tabs.Screen
@@ -83,12 +97,9 @@ export default function TabLayout() {
           ),
         }}
       />
-      <Tabs.Screen
-        name="two"
-        options={{
-          href: null, // Hide this tab
-        }}
-      />
+
+      {/* Hidden route used elsewhere in the app */}
+      <Tabs.Screen name="two" options={{ href: null }} />
     </Tabs>
   );
 }
