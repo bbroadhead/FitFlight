@@ -8,7 +8,6 @@ import * as Haptics from 'expo-haptics';
 import { format, startOfWeek, addDays, subWeeks, addWeeks, isSameDay } from 'date-fns';
 import { useMemberStore, useAuthStore, type Flight, canEditAttendance, getDisplayName } from '@/lib/store';
 import { cn } from '@/lib/cn';
-import { SwipeableTabView } from '@/components/SwipeableTabView';
 
 const FLIGHTS: Flight[] = ['Avatar', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
 const PT_DAYS = [1, 3, 5]; // Monday, Wednesday, Friday
@@ -102,7 +101,6 @@ export default function AttendanceScreen() {
   };
 
   return (
-    <SwipeableTabView>
     <View className="flex-1">
       <LinearGradient
         colors={['#0A1628', '#001F5C', '#0A1628']}
@@ -287,6 +285,5 @@ export default function AttendanceScreen() {
         )}
       </SafeAreaView>
     </View>
-    </SwipeableTabView>
   );
 }
