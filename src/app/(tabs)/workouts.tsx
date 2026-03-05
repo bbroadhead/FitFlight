@@ -8,7 +8,6 @@ import * as Haptics from 'expo-haptics';
 import SmartSlider from "../../components/SmartSlider";
 import { useMemberStore, useAuthStore, getDisplayName, type WorkoutType, type SharedWorkout, type Squadron, WORKOUT_TYPES, isAdmin } from '@/lib/store';
 import { cn } from '@/lib/cn';
-import { SwipeableTabView } from '@/components/SwipeableTabView';
 
 type FilterType = 'all' | 'favorites' | 'mine';
 type SortType = 'newest' | 'popular' | 'duration';
@@ -345,7 +344,6 @@ export default function WorkoutsScreen() {
   const canSubmit = newName.trim().length > 0 && (!isMultiStep || steps.some(s => s.trim()));
 
   return (
-    <SwipeableTabView>
     <View className="flex-1">
       <LinearGradient
         colors={['#0A1628', '#001F5C', '#0A1628']}
@@ -753,6 +751,5 @@ export default function WorkoutsScreen() {
         </View>
       </Modal>
     </View>
-    </SwipeableTabView>
   );
 }
