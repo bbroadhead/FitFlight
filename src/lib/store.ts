@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Types
 export type Flight = 'Avatar' | 'Bomber' | 'Cryptid' | 'Doom' | 'Ewok' | 'Foxhound' | 'ADF' | 'DET';
-export type AccountType = 'flighttrack_creator' | 'ufpm' | 'ptl' | 'standard';
+export type AccountType = 'fitflight_creator' | 'ufpm' | 'ptl' | 'standard';
 export type Squadron = '392 IS';
 export type WorkoutType = 'Running' | 'Walking' | 'Cycling' | 'Strength' | 'HIIT' | 'Swimming' | 'Sports' | 'Cardio' | 'Flexibility' | 'Other';
 export type IntegrationService = 'apple_health' | 'strava' | 'garmin';
@@ -278,7 +278,7 @@ interface MemberState {
   toggleFavoriteWorkout: (workoutId: string, memberId: string) => void;
 }
 
-// FlightTrack Creator account (owner)
+// FitFlight Creator account (owner)
 const OWNER_ACCOUNT: Member = {
   id: 'owner_001',
   rank: 'SSgt',
@@ -286,7 +286,7 @@ const OWNER_ACCOUNT: Member = {
   lastName: 'Broadhead',
   flight: 'Doom',
   squadron: '392 IS',
-  accountType: 'flighttrack_creator',
+  accountType: 'fitflight_creator',
   email: 'benjamin.broadhead.2@us.af.mil',
   exerciseMinutes: 0,
   distanceRun: 0,
@@ -664,15 +664,15 @@ export const useMemberStore = create<MemberState>()(
 
 // Helper to check if user can manage PTL status
 export const canManagePTL = (accountType: AccountType): boolean => {
-  return accountType === 'flighttrack_creator' || accountType === 'ufpm';
+  return accountType === 'fitflight_creator' || accountType === 'ufpm';
 };
 
 // Helper to check if user can edit PT attendance
 export const canEditAttendance = (accountType: AccountType): boolean => {
-  return accountType === 'flighttrack_creator' || accountType === 'ufpm' || accountType === 'ptl';
+  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'ptl';
 };
 
 // Helper to check if user has admin access
 export const isAdmin = (accountType: AccountType): boolean => {
-  return accountType === 'flighttrack_creator' || accountType === 'ufpm';
+  return accountType === 'fitflight_creator' || accountType === 'ufpm';
 };
