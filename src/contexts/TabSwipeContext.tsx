@@ -1,37 +1,28 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
+import React, { createContext, useContext, useMemo, useState } from 'react';
 
 type TabSwipeContextValue = {
   swipeEnabled: boolean;
   setSwipeEnabled: (enabled: boolean) => void;
-  /** Convenience helpers */
-  disableSwipe: () => void;
-  enableSwipe: () => void;
 };
 
 const TabSwipeContext = createContext<TabSwipeContextValue | null>(null);
 
 export function TabSwipeProvider({ children }: { children: React.ReactNode }) {
-  const [swipeEnabled, setSwipeEnabledState] = useState(true);
-
-  const setSwipeEnabled = useCallback((enabled: boolean) => {
-    setSwipeEnabledState(enabled);
-  }, []);
-
-  const disableSwipe = useCallback(() => setSwipeEnabledState(false), []);
-  const enableSwipe = useCallback(() => setSwipeEnabledState(true), []);
+  const [swipeEnabled, setSwipeEnabled] = useState(true);
 
   const value = useMemo(
-    () => ({ swipeEnabled, setSwipeEnabled, disableSwipe, enableSwipe }),
-    [swipeEnabled, setSwipeEnabled, disableSwipe, enableSwipe]
+    () => ({ swipeEnabled, setSwipeEnabled }),
+    [swipeEnabled]
   );
 
   return <TabSwipeContext.Provider value={value}>{children}</TabSwipeContext.Provider>;
 }
 
-export function useTabSwipe() {
+export function useTabSwipe(): TabSwipeContextValue {
   const ctx = useContext(TabSwipeContext);
   if (!ctx) {
-    throw new Error("useTabSwipe must be used within a TabSwipeProvider");
+    // Safe default: keep swipe enabled if provider isn't mounted for some reason
+    return { swipeEnabled: true, setSwipeEnabled: () => {} };
   }
   return ctx;
 }
