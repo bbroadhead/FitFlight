@@ -25,10 +25,12 @@ interface TutorialSlide {
 const TUTORIAL_SLIDES: TutorialSlide[] = [
   {
     id: 'welcome',
-    <Image
-      source={require('@/assets/images/TotalFlight_Icon_Resized.png')}
-      style={{ width: 90, height: 90, resizeMode: 'contain' }}
-    />
+    image: (
+      <Image
+        source={require('@/assets/images/TotalFlight_Icon_Resized.png')}
+        style={{ width: 90, height: 90, resizeMode: 'contain' }}
+      />
+    ),
     title: 'Welcome to FitFlight',
     description: 'Your squadron\'s all-in-one PT and fitness solution.',
     features: [
