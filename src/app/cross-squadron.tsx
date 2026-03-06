@@ -49,8 +49,8 @@ export default function CrossSquadronScreen() {
     ? squadronStats.find(s => s.squadron === selectedSquadron)
     : null;
 
-  // Redirect if not flighttrack_creator
-  if (user?.accountType !== 'flighttrack_creator') {
+  // Redirect if not fitflight_creator
+  if (user?.accountType !== 'fitflight_creator') {
     return (
       <View className="flex-1 bg-af-navy items-center justify-center">
         <Text className="text-white">Access Denied</Text>
@@ -84,7 +84,7 @@ export default function CrossSquadronScreen() {
           </Pressable>
           <View>
             <Text className="text-white text-xl font-bold">Cross-Squadron View</Text>
-            <Text className="text-af-silver text-sm">FlightTrack Creator Access</Text>
+            <Text className="text-af-silver text-sm">FitFlight Creator Access</Text>
           </View>
         </Animated.View>
 
