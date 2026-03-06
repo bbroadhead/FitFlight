@@ -11,7 +11,7 @@ import { format } from 'date-fns';
 import { useMemberStore, useAuthStore, type Flight, type ScheduledPTSession, canEditAttendance, getDisplayName } from '@/lib/store';
 import { cn } from '@/lib/cn';
 
-const FLIGHTS: Flight[] = ['Avatar', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
+const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
 
 export default function ScheduleSessionScreen() {
   const router = useRouter();
@@ -25,7 +25,7 @@ export default function ScheduleSessionScreen() {
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [selectedTime, setSelectedTime] = useState(new Date());
-  const [selectedFlight, setSelectedFlight] = useState<Flight>(user?.flight ?? 'Avatar');
+  const [selectedFlight, setSelectedFlight] = useState<Flight>(user?.flight ?? 'Apex');
   const [description, setDescription] = useState('');
   const [editingSession, setEditingSession] = useState<ScheduledPTSession | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
