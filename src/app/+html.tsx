@@ -11,7 +11,9 @@ export default function Root({ children }: { children: React.ReactNode }) {
         <meta charSet="utf-8" />
         <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
         <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
-
+        <link rel="manifest" href="/FitFlight/manifest.json" />
+        <link rel="apple-touch-icon" href="/FitFlight/apple-touch-icon.png" />
+        <meta name="theme-color" content="#001F5C" />
         {/* 
           Disable body scrolling on web. This makes ScrollView components work closer to how they do on native. 
           However, body scrolling is often nice to have for mobile web. If you want to enable it, remove this line.
