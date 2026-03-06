@@ -7,6 +7,9 @@
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "web": {
+      "favicon": "./assets/images/TotalFlight_Icon_Resized.png"
+    }
     "ios": {
       "supportsTablet": true
     },
