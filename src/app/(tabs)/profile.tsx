@@ -10,7 +10,7 @@ import { useRouter } from 'expo-router';
 import { useAuthStore, useMemberStore, type Flight, type Member, type AccountType, type Squadron, type IntegrationService, getDisplayName, canEditAttendance, canManagePTL, isAdmin, SQUADRONS } from '@/lib/store';
 import { cn } from '@/lib/cn';
 
-const FLIGHTS: Flight[] = ['Avatar', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
+const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
 const RANKS = ['AB', 'Amn', 'A1C', 'SrA', 'SSgt', 'TSgt', 'MSgt', 'SMSgt', 'CMSgt'];
 
 export default function ProfileScreen() {
@@ -40,7 +40,7 @@ export default function ProfileScreen() {
   const [newMemberFirstName, setNewMemberFirstName] = useState('');
   const [newMemberLastName, setNewMemberLastName] = useState('');
   const [newMemberRank, setNewMemberRank] = useState('A1C');
-  const [newMemberFlight, setNewMemberFlight] = useState<Flight>('Avatar');
+  const [newMemberFlight, setNewMemberFlight] = useState<Flight>('Apex');
   const [newMemberEmail, setNewMemberEmail] = useState('');
 
   const isAuthenticated = useAuthStore(s => s.isAuthenticated);
@@ -102,7 +102,7 @@ export default function ProfileScreen() {
     setNewMemberFirstName('');
     setNewMemberLastName('');
     setNewMemberRank('A1C');
-    setNewMemberFlight('Avatar');
+    setNewMemberFlight('Apex');
     setNewMemberEmail('');
   };
 
