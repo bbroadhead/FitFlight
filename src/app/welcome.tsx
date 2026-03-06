@@ -27,7 +27,7 @@ const TUTORIAL_SLIDES: TutorialSlide[] = [
     id: 'welcome',
     image: (
       <Image
-        source={require('./public/logo192.png')}
+        source={require('../../assets/images/logo192.png')}
         style={{ width: 90, height: 90, resizeMode: 'contain' }}
       />
     ),
