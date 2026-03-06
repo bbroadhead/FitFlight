@@ -8,6 +8,7 @@ import Animated, { FadeInDown, FadeInUp, useAnimatedStyle, useSharedValue, withS
 import * as Haptics from 'expo-haptics';
 import { useAuthStore } from '@/lib/store';
 import { cn } from '@/lib/cn';
+import { Image } from 'react-native';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -24,11 +25,12 @@ interface TutorialSlide {
 const TUTORIAL_SLIDES: TutorialSlide[] = [
   {
     id: 'welcome',
-    icon: Shield,
-    iconColor: '#4A90D9',
-    iconBg: 'bg-af-accent/30',
-    title: 'Welcome to FlightTrack',
-    description: 'Your squadron\'s all-in-one PT tracking solution. Built for Airmen, by Airmen.',
+    <Image
+      source={require('@/assets/images/TotalFlight_Icon_Resized.png')}
+      style={{ width: 90, height: 90, resizeMode: 'contain' }}
+    />
+    title: 'Welcome to FitFlight',
+    description: 'Your squadron\'s all-in-one PT and fitness solution.',
     features: [
       'Track personal fitness progress',
       'Log workouts and PT sessions',
