@@ -115,6 +115,7 @@ export default function CalculatorScreen() {
           {/* Header */}
           <View className="px-6 pt-4 pb-2">
             <Text className="text-white text-2xl font-bold">PFRA Calculator</Text>
+            <Text className="text-af-silver text-sm mt-1">Based on PFRA Scoring Charts released on 1 MAR 2026</Text>
           </View>
 
           {/* Sticky score card wrapper - background stays transparent, only card is visible */}
@@ -172,7 +173,7 @@ export default function CalculatorScreen() {
 
           {/* Profile */}
           <View className="mx-6 mt-6 bg-white/5 rounded-2xl p-5 border border-white/10">
-            <Text className="text-white font-semibold text-lg mb-4">Profile</Text>
+            <Text className="text-white font-semibold text-lg mb-4">Metrics</Text>
 
             <View className="mb-5">
               <Text className="text-af-silver text-sm mb-2">Age: {ageYears}</Text>
@@ -188,7 +189,6 @@ export default function CalculatorScreen() {
             </View>
 
             <View className="mb-5">
-              <Text className="text-af-silver text-sm mb-2">Gender</Text>
               <View className="flex-row bg-white/10 rounded-lg p-1">
                 <Pressable
                   onPress={() => setGender('male')}
@@ -261,7 +261,7 @@ export default function CalculatorScreen() {
                     cardioTest === 'run_2mile' ? 'text-white' : 'text-white/60'
                   )}
                 >
-                  2 mi
+                  2-mile Run
                 </Text>
               </Pressable>
               <Pressable
@@ -287,14 +287,14 @@ export default function CalculatorScreen() {
                     cardioTest === 'walk_2k' ? 'text-white' : 'text-white/60'
                   )}
                 >
-                  Walk
+                  2km Walk
                 </Text>
               </Pressable>
             </View>
 
             {cardioTest === 'run_2mile' && (
               <View>
-                <Text className="text-af-silver text-sm mb-2">2-mile time: {formatMMSS(runSec)}</Text>
+                <Text className="text-af-silver text-sm mb-2">2-mile time (Pass/Fail Only): {formatMMSS(runSec)}</Text>
                 <SmartSlider
                   onSlidingStart={disableSwipe}
                   onSlidingComplete={enableSwipe}
@@ -324,7 +324,7 @@ export default function CalculatorScreen() {
 
             {cardioTest === 'hamr_20m' && (
               <View>
-                <Text className="text-af-silver text-sm mb-2">HAMR shuttles: {hamrShuttles}</Text>
+                <Text className="text-af-silver text-sm mb-2">HAMR Shuttles: {hamrShuttles}</Text>
                 <SmartSlider
                   onSlidingStart={disableSwipe}
                   onSlidingComplete={enableSwipe}
@@ -369,7 +369,7 @@ export default function CalculatorScreen() {
                     strengthTest === 'hand_release_pushups' ? 'text-white' : 'text-white/60'
                   )}
                 >
-                  HR Push
+                  Hand-release Push-ups
                 </Text>
               </Pressable>
             </View>
@@ -419,7 +419,7 @@ export default function CalculatorScreen() {
                     coreTest === 'cross_leg_reverse_crunch' ? 'text-white' : 'text-white/60'
                   )}
                 >
-                  CLRC
+                  Cross-leg Reverse Crunch
                 </Text>
               </Pressable>
               <Pressable
