@@ -294,7 +294,7 @@ export default function CalculatorScreen() {
 
             {cardioTest === 'run_2mile' && (
               <View>
-                <Text className="text-af-silver text-sm mb-2">2-mile time (Pass/Fail Only): {formatMMSS(runSec)}</Text>
+                <Text className="text-af-silver text-sm mb-2">2-mile time: {formatMMSS(runSec)}</Text>
                 <SmartSlider
                   onSlidingStart={disableSwipe}
                   onSlidingComplete={enableSwipe}
@@ -309,7 +309,7 @@ export default function CalculatorScreen() {
 
             {cardioTest === 'walk_2k' && (
               <View>
-                <Text className="text-af-silver text-sm mb-2">2K walk time: {formatMMSS(walkSec)}</Text>
+                <Text className="text-af-silver text-sm mb-2">2K walk time (Pass/Fail only): {formatMMSS(walkSec)}</Text>
                 <SmartSlider
                   onSlidingStart={disableSwipe}
                   onSlidingComplete={enableSwipe}
@@ -369,7 +369,7 @@ export default function CalculatorScreen() {
                     strengthTest === 'hand_release_pushups' ? 'text-white' : 'text-white/60'
                   )}
                 >
-                  Hand-release Push-ups
+                  Hand-release
                 </Text>
               </Pressable>
             </View>
@@ -419,7 +419,7 @@ export default function CalculatorScreen() {
                     coreTest === 'cross_leg_reverse_crunch' ? 'text-white' : 'text-white/60'
                   )}
                 >
-                  Cross-leg Reverse Crunch
+                  Cross-leg
                 </Text>
               </Pressable>
               <Pressable
