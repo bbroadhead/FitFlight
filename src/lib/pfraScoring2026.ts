@@ -39,6 +39,14 @@ export function getWalkAgeBracket(ageYears: number): WalkAgeBracket {
   return '60+';
 }
 
+export function passesWalk2k(ageYears: number, gender: Gender, valueSec: number): boolean {
+  const bracket = getWalkAgeBracket(ageYears);
+  const row = (WALK_2K_MAX_SEC as any).find((r: any) => r.bracket === bracket);
+  if (!row) return false;
+  const maxSec = gender === 'male' ? row.male_max : row.female_max;
+  return valueSec <= maxSec;
+}
+
 function scoreHigherIsBetter<T extends number>(rows: readonly PointsRow<T>[], age: PFRAAgeBracket, gender: Gender, value: number): number {
   for (const row of rows) {
     const thr = row.thresholds[age][gender];
@@ -80,13 +88,8 @@ export function scoreCore(ageYears: number, gender: Gender, test: 'situps' | 'cr
 
 export function scoreCardio(ageYears: number, gender: Gender, test: 'run_2mile' | 'hamr_20m' | 'walk_2k', value: number): number {
   if (test === 'walk_2k') {
-    const bracket = getWalkAgeBracket(ageYears);
-    const row = (WALK_2K_MAX_SEC as any).find((r: any) => r.bracket === bracket);
-    if (!row) return 0;
-    const maxSec = gender === 'male' ? row.male_max : row.female_max;
-    // The chart provides a maximum time standard, but does not provide graded points.
-    // We treat it as pass/fail (50 points if within max time).
-    return value <= maxSec ? 50 : 0;
+    // Official chart is pass/fail only, so there is no numeric cardio score to return.
+    return 0;
   }
   const age = getPFRAAgeBracket(ageYears);
   if (test === 'run_2mile') return scoreLowerIsBetter(RUN_2MILE_ROWS_SEC as any, age, gender, value);
