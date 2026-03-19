@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, Pressable, ScrollView, TextInput, Platform, Linking } from 'react-native';
+import { View, Text, Pressable, ScrollView, TextInput, Platform, Linking, LayoutChangeEvent } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -9,8 +9,24 @@ import * as Sharing from 'expo-sharing';
 import Svg, { Circle } from 'react-native-svg';
 
 import SmartSlider from '@/components/SmartSlider';
-import { cn } from '@/lib/cn';
-import { passesWalk2k, scoreTotal, type Gender } from '@/lib/pfraScoring2026';
+import {
+  HAND_RELEASE_PUSHUP_ROWS,
+  HAMR_20M_ROWS,
+  PFRA_MINIMUM_COMPONENT_POINTS,
+  PLANK_ROWS_SEC,
+  PUSHUP_ROWS,
+  REVERSE_CRUNCH_ROWS,
+  RUN_2MILE_ROWS_SEC,
+  SITUP_ROWS,
+  WHtR_ROWS,
+  WALK_2K_MAX_SEC,
+  getPFRAAgeBracket,
+  getWalkAgeBracket,
+  meetsPFRAComponentMinimums,
+  passesWalk2k,
+  scoreTotal,
+  type Gender,
+} from '@/lib/pfraScoring2026';
 
 let useTabSwipeSafe: null | (() => { setSwipeEnabled: (v: boolean) => void }) = null;
 try {
@@ -30,6 +46,13 @@ type ComponentTheme = {
   border: string;
   tint: string;
 };
+
+type ThresholdRow = { points: number; thresholds: Record<string, Record<Gender, number>> };
+type TargetZone = { start: number; end: number; color: string; label: string };
+
+const ZONE_FAIL = '#EF4444';
+const ZONE_SAT = '#4A90D9';
+const ZONE_EXCELLENT = '#22C55E';
 
 const THEMES: Record<'whtR' | 'cardio' | 'strength' | 'core', ComponentTheme> = {
   whtR: { color: '#14B8A6', soft: 'rgba(20,184,166,0.14)', border: 'rgba(20,184,166,0.38)', tint: 'rgba(20,184,166,0.22)' },
@@ -87,11 +110,88 @@ function parseMMSS(input: string): number | null {
   return mins * 60 + secs;
 }
 
-function scoreStatus(total: number | null) {
-  if (total === null) return { label: 'Walk is pass/fail only', color: '#C0C0C0', icon: 'information-circle' as const };
+function scoreStatus(total: number | null, meetsMinimums: boolean, walkPass: boolean) {
+  if (total === null) {
+    return walkPass
+      ? { label: 'Pass', color: '#4A90D9', icon: 'checkmark-circle' as const }
+      : { label: 'Fail', color: '#EF4444', icon: 'alert-circle' as const };
+  }
+  if (!meetsMinimums || total < 75) return { label: 'Fail', color: '#EF4444', icon: 'alert-circle' as const };
   if (total >= 90) return { label: 'Excellent', color: '#22C55E', icon: 'checkmark-circle' as const };
-  if (total >= 75) return { label: 'Satisfactory', color: '#4A90D9', icon: 'checkmark-circle' as const };
-  return { label: 'Fail', color: '#EF4444', icon: 'alert-circle' as const };
+  return { label: 'Satisfactory', color: '#4A90D9', icon: 'checkmark-circle' as const };
+}
+
+function getThresholdForPoints(rows: readonly ThresholdRow[], ageBracket: string, gender: Gender, points: number) {
+  const row = rows.find((entry) => entry.points === points);
+  return row?.thresholds?.[ageBracket]?.[gender] ?? 0;
+}
+
+function makeHigherIsBetterZones(minValue: number, maxValue: number, passThreshold: number, excellentThreshold: number): TargetZone[] {
+  const safeMin = Math.min(minValue, maxValue);
+  const safeMax = Math.max(minValue, maxValue);
+  const pass = clamp(passThreshold, safeMin, safeMax);
+  const excellent = clamp(excellentThreshold, pass, safeMax);
+  return [
+    { start: safeMin, end: pass, color: ZONE_FAIL, label: 'Fail' },
+    { start: pass, end: excellent, color: ZONE_SAT, label: 'Satisfactory' },
+    { start: excellent, end: safeMax, color: ZONE_EXCELLENT, label: 'Excellent' },
+  ];
+}
+
+function makeLowerIsBetterZones(minValue: number, maxValue: number, excellentThreshold: number, passThreshold: number): TargetZone[] {
+  const safeMin = Math.min(minValue, maxValue);
+  const safeMax = Math.max(minValue, maxValue);
+  const excellent = clamp(excellentThreshold, safeMin, safeMax);
+  const pass = clamp(passThreshold, excellent, safeMax);
+  return [
+    { start: safeMin, end: excellent, color: ZONE_EXCELLENT, label: 'Excellent' },
+    { start: excellent, end: pass, color: ZONE_SAT, label: 'Satisfactory' },
+    { start: pass, end: safeMax, color: ZONE_FAIL, label: 'Fail' },
+  ];
+}
+
+function SliderTargetZones({ zones, min, max, currentValue }: { zones: TargetZone[]; min: number; max: number; currentValue: number; }) {
+  const range = Math.max(1, max - min);
+  const markerLeft = `${clamp(((currentValue - min) / range) * 100, 0, 100)}%`;
+
+  return (
+    <View className="mt-2">
+      <View className="relative h-2 overflow-hidden rounded-full bg-white/10">
+        {zones.map((zone, idx) => {
+          const left = `${clamp(((zone.start - min) / range) * 100, 0, 100)}%`;
+          const width = `${clamp(((zone.end - zone.start) / range) * 100, 0, 100)}%`;
+          return (
+            <View
+              key={`${zone.label}-${idx}`}
+              style={{ left, width, backgroundColor: zone.color, opacity: 0.9, position: 'absolute', top: 0, bottom: 0 }}
+            />
+          );
+        })}
+        <View
+          style={{ position: 'absolute', left: markerLeft, top: -2, bottom: -2, width: 2, marginLeft: -1, backgroundColor: '#FFFFFF', borderRadius: 999 }}
+        />
+      </View>
+      <View className="mt-1 flex-row items-center justify-between">
+        {[...new Set(zones.map((zone) => zone.label).filter(Boolean))].map((label) => {
+          const zone = zones.find((entry) => entry.label === label);
+          return (
+            <Text key={label} className="text-[10px] font-semibold" style={{ color: zone?.color ?? 'rgba(255,255,255,0.55)' }}>
+              {label}
+            </Text>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+function MetricRow({ label, value }: { label: string; value: string }) {
+  return (
+    <View className="mb-3 flex-row items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+      <Text className="text-sm text-af-silver">{label}</Text>
+      <Text className="text-sm font-semibold text-white">{value}</Text>
+    </View>
+  );
 }
 
 function BoundNumberField({ value, onChange, min, max, step = 1, decimals = 0 }: { value: number; onChange: (next: number) => void; min: number; max: number; step?: number; decimals?: number; }) {
@@ -145,7 +245,7 @@ function BoundTimeField({ valueSec, onChange, minSec, maxSec }: { valueSec: numb
   );
 }
 
-function LabeledSlider({ label, valueLabel, theme, children, input }: { label: string; valueLabel: string; theme: ComponentTheme; children: React.ReactNode; input: React.ReactNode; }) {
+function LabeledSlider({ label, valueLabel, theme, children, input, zones, zoneMin, zoneMax, currentValue }: { label: string; valueLabel: string; theme: ComponentTheme; children: React.ReactNode; input: React.ReactNode; zones?: TargetZone[]; zoneMin?: number; zoneMax?: number; currentValue?: number; }) {
   return (
     <View className="mb-5">
       <View className="mb-2 flex-row items-center justify-between gap-3">
@@ -156,29 +256,34 @@ function LabeledSlider({ label, valueLabel, theme, children, input }: { label: s
         {input}
       </View>
       {children}
+      {zones && zoneMin !== undefined && zoneMax !== undefined && currentValue !== undefined ? (
+        <SliderTargetZones zones={zones} min={zoneMin} max={zoneMax} currentValue={currentValue} />
+      ) : null}
     </View>
   );
 }
 
-function ComponentScoreBar({ label, value, max, theme, isPassFail = false }: { label: string; value: number; max: number; theme: ComponentTheme; isPassFail?: boolean; }) {
+function ComponentScoreBar({ label, value, max, theme, isPassFail = false, onPress }: { label: string; value: number; max: number; theme: ComponentTheme; isPassFail?: boolean; onPress?: () => void; }) {
   const widthPct = max > 0 ? `${Math.min(100, Math.max(0, (value / max) * 100))}%` : '0%';
   const labelText = isPassFail ? (value > 0 ? 'PASS' : 'FAIL') : `${value.toFixed(1)}/${max}`;
 
   return (
-    <View className="mb-2">
-      <Text className="mb-1 text-[11px] font-semibold uppercase tracking-[0.4px] text-white/70">{label}</Text>
-      <View className="relative h-6 overflow-hidden rounded-full border border-white/10 bg-white/10">
-        <View style={{ width: widthPct, backgroundColor: theme.color }} className="absolute left-0 top-0 h-full rounded-full" />
-        <View className="absolute inset-0 items-center justify-center px-2">
-          <Text
-            className="text-[11px] font-bold text-white"
-            style={{ textShadowColor: 'rgba(0,0,0,0.65)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 }}
-          >
-            {labelText}
-          </Text>
+    <Pressable className="mb-2" onPress={onPress} disabled={!onPress}>
+      <View pointerEvents="none">
+        <Text className="mb-1 text-[11px] font-semibold uppercase tracking-[0.4px] text-white/70">{label}</Text>
+        <View className="relative h-6 overflow-hidden rounded-full border border-white/10 bg-white/10">
+          <View style={{ width: widthPct, backgroundColor: theme.color }} className="absolute left-0 top-0 h-full rounded-full" />
+          <View className="absolute inset-0 items-center justify-center px-2">
+            <Text
+              className="text-[11px] font-bold text-white"
+              style={{ textShadowColor: 'rgba(0,0,0,0.65)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 }}
+            >
+              {labelText}
+            </Text>
+          </View>
         </View>
       </View>
-    </View>
+    </Pressable>
   );
 }
 
@@ -200,12 +305,33 @@ function AudioPanel() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [positionSec, setPositionSec] = useState(0);
   const [durationSec, setDurationSec] = useState(0);
+  const [audioUri, setAudioUri] = useState<string | null>(null);
   const soundRef = useRef<Audio.Sound | null>(null);
   const webAudioRef = useRef<any>(null);
-  const audioAsset = useMemo(() => Asset.fromModule(require('../../../assets/audio/20m HAMR Audio File.m4a')), []);
+  const audioModule = useMemo(() => require('../../../assets/audio/20m HAMR Audio File.m4a'), []);
 
   useEffect(() => {
+    let isMounted = true;
+
+    (async () => {
+      try {
+        const [asset] = await Asset.loadAsync(audioModule);
+        if (!isMounted) return;
+        setAudioUri(asset.localUri ?? asset.uri ?? null);
+      } catch {
+        try {
+          const fallbackAsset = Asset.fromModule(audioModule);
+          if (!isMounted) return;
+          setAudioUri(fallbackAsset.localUri ?? fallbackAsset.uri ?? null);
+        } catch {
+          if (!isMounted) return;
+          setAudioUri(null);
+        }
+      }
+    })();
+
     return () => {
+      isMounted = false;
       soundRef.current?.unloadAsync().catch(() => undefined);
       const webAudio = webAudioRef.current as HTMLAudioElement | null;
       if (webAudio) {
@@ -213,20 +339,20 @@ function AudioPanel() {
         webAudio.src = '';
       }
     };
-  }, []);
+  }, [audioModule]);
 
   const progressPct = durationSec > 0 ? `${Math.min(100, Math.max(0, (positionSec / durationSec) * 100))}%` : '0%';
 
   const handleDownload = async () => {
     try {
-      await audioAsset.downloadAsync();
-      const resolvedUri = audioAsset.localUri ?? audioAsset.uri;
+      const resolvedUri = audioUri ?? Asset.fromModule(audioModule).uri;
       if (!resolvedUri) return;
 
       if (Platform.OS === 'web') {
         const link = document.createElement('a');
         link.href = resolvedUri;
         link.download = '20m-HAMR-Audio-File.m4a';
+        link.rel = 'noopener';
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -248,7 +374,6 @@ function AudioPanel() {
     }
   };
 
-
   const togglePlayback = async () => {
     try {
       if (Platform.OS === 'web') {
@@ -265,18 +390,23 @@ function AudioPanel() {
       }
 
       if (!soundRef.current) {
-        const { sound } = await Audio.Sound.createAsync(audioAsset, { shouldPlay: false }, (status) => {
-          if (!status.isLoaded) return;
-          setIsPlaying(status.isPlaying);
-          setPositionSec((status.positionMillis ?? 0) / 1000);
-          setDurationSec(((status.durationMillis ?? 0) / 1000) || durationSec);
-          if (status.didJustFinish) {
-            setIsPlaying(false);
-            setPositionSec(0);
-          }
-        });
+        const { sound } = await Audio.Sound.createAsync(
+          audioUri ? { uri: audioUri } : audioModule,
+          { shouldPlay: false, progressUpdateIntervalMillis: 250 },
+          (status) => {
+            if (!status.isLoaded) return;
+            setIsPlaying(status.isPlaying);
+            setPositionSec((status.positionMillis ?? 0) / 1000);
+            setDurationSec(((status.durationMillis ?? 0) / 1000) || 0);
+            if (status.didJustFinish) {
+              setIsPlaying(false);
+              setPositionSec(0);
+            }
+          },
+        );
         soundRef.current = sound;
       }
+
       const status = await soundRef.current.getStatusAsync();
       if (!status.isLoaded) return;
       setDurationSec(((status.durationMillis ?? 0) / 1000) || durationSec);
@@ -293,15 +423,15 @@ function AudioPanel() {
   };
 
   return (
-    <View className="mx-6 mt-6 rounded-2xl border border-white/10 bg-white/5 p-5">
-      <Text className="mb-1 text-lg font-semibold text-white">20m HAMR Audio</Text>
-      <Text className="mb-4 text-sm text-af-silver">Official pacing audio for practicing or checking your 20-meter HAMR cadence.</Text>
+    <View className="mx-6 mt-6 rounded-2xl border border-white/10 bg-white/5 p-4">
+      <Text className="mb-3 text-lg font-semibold text-white">20m HAMR Audio</Text>
 
       {Platform.OS === 'web' ? (
         // eslint-disable-next-line jsx-a11y/media-has-caption
         <audio
           ref={webAudioRef}
           preload="metadata"
+          src={audioUri ?? undefined}
           onLoadedMetadata={(event) => {
             const audio = event.currentTarget;
             setDurationSec(Number.isFinite(audio.duration) ? audio.duration : 0);
@@ -316,35 +446,44 @@ function AudioPanel() {
             setPositionSec(0);
           }}
           style={{ display: 'none' }}
-        >
-          <source src={audioAsset.uri} />
-        </audio>
+        />
       ) : null}
 
-      <View className="mb-4 flex-row items-center gap-3">
-        <Pressable onPress={togglePlayback} className="flex-1 flex-row items-center justify-center rounded-xl bg-white/10 px-4 py-3">
+      <View className="flex-row items-center gap-3">
+        <Pressable onPress={togglePlayback} className="h-10 w-10 items-center justify-center rounded-full bg-white/10">
           <Ionicons name={isPlaying ? 'pause' : 'play'} size={18} color="#FFFFFF" />
-          <Text className="ml-2 font-semibold text-white">{isPlaying ? 'Pause' : 'Play'}</Text>
         </Pressable>
-        <Pressable onPress={handleDownload} className="rounded-xl bg-white/10 px-4 py-3">
+
+        <View className="flex-1">
+          <View className="mb-1 h-3 overflow-hidden rounded-full bg-white/10">
+            <View style={{ width: progressPct }} className="h-full rounded-full bg-af-primary" />
+          </View>
+          <View className="flex-row items-center justify-end">
+            <Text className="text-sm font-semibold text-white/90">{formatMMSS(positionSec)}/{formatMMSS(durationSec)}</Text>
+          </View>
+        </View>
+
+        <Pressable onPress={handleDownload} className="h-10 w-10 items-center justify-center rounded-full bg-white/10">
           <Ionicons name="download-outline" size={18} color="#FFFFFF" />
         </Pressable>
-      </View>
-
-      <View className="mb-2 h-3 overflow-hidden rounded-full bg-white/10">
-        <Pressable onPress={() => undefined} className="h-full w-full justify-center">
-          <View style={{ width: progressPct }} className="h-full rounded-full bg-af-primary" />
-        </Pressable>
-      </View>
-      <View className="flex-row items-center justify-between">
-        <Text className="text-sm text-white/80">Playback</Text>
-        <Text className="text-sm font-semibold text-white/90">{formatMMSS(positionSec)}/{formatMMSS(durationSec)}</Text>
       </View>
     </View>
   );
 }
 
 export default function CalculatorScreen() {
+  const scrollRef = useRef<ScrollView | null>(null);
+  const sectionYRef = useRef<Record<'metrics' | 'strength' | 'core' | 'cardio', number>>({ metrics: 0, strength: 0, core: 0, cardio: 0 });
+
+  const setSectionY = (key: 'metrics' | 'strength' | 'core' | 'cardio') => (event: LayoutChangeEvent) => {
+    sectionYRef.current[key] = event.nativeEvent.layout.y;
+  };
+
+  const scrollToSection = (key: 'metrics' | 'strength' | 'core' | 'cardio') => {
+    const targetY = Math.max(0, (sectionYRef.current[key] ?? 0) - 116);
+    scrollRef.current?.scrollTo({ y: targetY, animated: true });
+  };
+
   const tabSwipe = useTabSwipeSafe ? useTabSwipeSafe() : null;
   const disableSwipe = () => tabSwipe?.setSwipeEnabled(false);
   const enableSwipe = () => tabSwipe?.setSwipeEnabled(true);
@@ -386,8 +525,33 @@ export default function CalculatorScreen() {
   }, [ageYears, gender, waistIn, heightIn, strengthTest, pushupReps, coreTest, coreValue, cardioTest, cardioValue]);
 
   const walkPass = cardioTest === 'walk_2k' ? passesWalk2k(ageYears, gender, walkSec) : false;
+  const meetsMinimums = cardioTest === 'walk_2k' ? walkPass : meetsPFRAComponentMinimums(scores);
   const officialTotal = cardioTest === 'walk_2k' ? null : scores.total;
-  const status = scoreStatus(officialTotal);
+  const status = scoreStatus(officialTotal, meetsMinimums, walkPass);
+
+  const whtrValue = heightIn > 0 ? waistIn / heightIn : 0;
+  const ageBracket = getPFRAAgeBracket(ageYears);
+  const walkAgeBracket = getWalkAgeBracket(ageYears);
+
+  const waistZones = useMemo(() => makeLowerIsBetterZones(20, 60, heightIn * WHtR_ROWS[0].ratio, heightIn * WHtR_ROWS[WHtR_ROWS.length - 2].ratio), [heightIn]);
+
+  const strengthRows = strengthTest === 'pushups' ? PUSHUP_ROWS : HAND_RELEASE_PUSHUP_ROWS;
+  const strengthZones = useMemo(() => makeHigherIsBetterZones(0, 100, getThresholdForPoints(strengthRows as readonly ThresholdRow[], ageBracket, gender, PFRA_MINIMUM_COMPONENT_POINTS.strength), getThresholdForPoints(strengthRows as readonly ThresholdRow[], ageBracket, gender, 15)), [strengthRows, ageBracket, gender]);
+
+  const coreRows = coreTest === 'situps' ? SITUP_ROWS : coreTest === 'cross_leg_reverse_crunch' ? REVERSE_CRUNCH_ROWS : PLANK_ROWS_SEC;
+  const coreMax = coreTest === 'plank' ? 300 : 100;
+  const coreZones = useMemo(() => makeHigherIsBetterZones(0, coreMax, getThresholdForPoints(coreRows as readonly ThresholdRow[], ageBracket, gender, PFRA_MINIMUM_COMPONENT_POINTS.core), getThresholdForPoints(coreRows as readonly ThresholdRow[], ageBracket, gender, 15)), [coreRows, coreMax, ageBracket, gender]);
+
+  const runZones = useMemo(() => makeLowerIsBetterZones(8 * 60, 30 * 60, getThresholdForPoints(RUN_2MILE_ROWS_SEC as readonly ThresholdRow[], ageBracket, gender, 50), getThresholdForPoints(RUN_2MILE_ROWS_SEC as readonly ThresholdRow[], ageBracket, gender, PFRA_MINIMUM_COMPONENT_POINTS.cardio)), [ageBracket, gender]);
+  const hamrZones = useMemo(() => makeHigherIsBetterZones(0, 120, getThresholdForPoints(HAMR_20M_ROWS as readonly ThresholdRow[], ageBracket, gender, PFRA_MINIMUM_COMPONENT_POINTS.cardio), getThresholdForPoints(HAMR_20M_ROWS as readonly ThresholdRow[], ageBracket, gender, 50)), [ageBracket, gender]);
+  const walkPassThreshold = useMemo(() => {
+    const row = WALK_2K_MAX_SEC.find((entry) => entry.bracket === walkAgeBracket);
+    return gender === 'male' ? (row?.male_max ?? 0) : (row?.female_max ?? 0);
+  }, [walkAgeBracket, gender]);
+  const walkZones = useMemo(() => [
+    { start: 10 * 60, end: walkPassThreshold, color: ZONE_SAT, label: 'Pass' },
+    { start: walkPassThreshold, end: 30 * 60, color: ZONE_FAIL, label: 'Fail' },
+  ] as TargetZone[], [walkPassThreshold]);
 
   const circleSize = 110;
   const strokeWidth = 9;
@@ -406,7 +570,7 @@ export default function CalculatorScreen() {
       />
 
       <SafeAreaView edges={['top']} className="flex-1">
-        <ScrollView className="flex-1" contentContainerStyle={{ paddingBottom: 120 }} showsVerticalScrollIndicator={false} stickyHeaderIndices={[1]}>
+        <ScrollView ref={scrollRef} className="flex-1" contentContainerStyle={{ paddingBottom: 120 }} showsVerticalScrollIndicator={false} stickyHeaderIndices={[1]}>
           <View className="px-6 pt-4 pb-2">
             <Text className="text-2xl font-bold text-white">PFRA Calculator</Text>
             <Text className="mt-1 text-sm text-af-silver">Based on PFRA Scoring Charts released on 1 MAR 2026</Text>
@@ -438,7 +602,7 @@ export default function CalculatorScreen() {
                       <Text className="text-3xl font-bold" style={{ color: officialTotal === null ? '#FFFFFF' : status.color }}>
                         {officialTotal === null ? '--' : officialTotal.toFixed(1)}
                       </Text>
-                      <Text className="text-xs text-af-silver">{officialTotal === null ? 'Walk mode' : '/ 100'}</Text>
+                      <Text className="text-xs text-af-silver">{officialTotal === null ? (walkPass ? 'Walk pass' : 'Walk fail') : '/ 100'}</Text>
                     </View>
                   </View>
                   <View className="mt-2 flex-row items-center rounded-full px-3 py-1.5" style={{ backgroundColor: `${status.color}20` }}>
@@ -448,10 +612,10 @@ export default function CalculatorScreen() {
                 </View>
 
                 <View className="flex-1">
-                  <ComponentScoreBar label="WHtR" value={scores.waist} max={20} theme={THEMES.whtR} />
-                  <ComponentScoreBar label="Strength" value={scores.strength} max={15} theme={THEMES.strength} />
-                  <ComponentScoreBar label="Core" value={scores.core} max={15} theme={THEMES.core} />
-                  <ComponentScoreBar label="Cardio" value={cardioTest === 'walk_2k' ? (walkPass ? 50 : 0) : scores.cardio} max={50} theme={THEMES.cardio} isPassFail={cardioTest === 'walk_2k'} />
+                  <ComponentScoreBar label="WHtR" value={scores.waist} max={20} theme={THEMES.whtR} onPress={() => scrollToSection('metrics')} />
+                  <ComponentScoreBar label="Strength" value={scores.strength} max={15} theme={THEMES.strength} onPress={() => scrollToSection('strength')} />
+                  <ComponentScoreBar label="Core" value={scores.core} max={15} theme={THEMES.core} onPress={() => scrollToSection('core')} />
+                  <ComponentScoreBar label="Cardio" value={cardioTest === 'walk_2k' ? (walkPass ? 50 : 0) : scores.cardio} max={50} theme={THEMES.cardio} isPassFail={cardioTest === 'walk_2k'} onPress={() => scrollToSection('cardio')} />
                 </View>
               </View>
             </View>
@@ -459,8 +623,10 @@ export default function CalculatorScreen() {
 
           <AudioPanel />
 
-          <View className="mx-6 mt-6 rounded-2xl border p-5" style={{ backgroundColor: THEMES.whtR.soft, borderColor: THEMES.whtR.border }}>
+          <View onLayout={setSectionY('metrics')} className="mx-6 mt-6 rounded-2xl border p-5" style={{ backgroundColor: THEMES.whtR.soft, borderColor: THEMES.whtR.border }}>
             <Text className="mb-4 text-lg font-semibold text-white">Metrics</Text>
+
+            <MetricRow label="WHtR" value={whtrValue.toFixed(2)} />
 
             <LabeledSlider label="Age" valueLabel={`${ageYears} years`} theme={THEMES.whtR} input={<BoundNumberField value={ageYears} onChange={(v) => setAgeYears(Math.round(v))} min={17} max={65} step={1} />}>
               <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={ageYears} onValueChange={(v) => setAgeYears(Math.round(v as number))} minimumValue={17} maximumValue={65} step={1} />
@@ -473,44 +639,14 @@ export default function CalculatorScreen() {
               </View>
             </View>
 
-            <LabeledSlider label="Waist" valueLabel={`${waistIn.toFixed(1)} in`} theme={THEMES.whtR} input={<BoundNumberField value={waistIn} onChange={setWaistIn} min={20} max={60} step={0.5} decimals={1} />}>
+            <LabeledSlider label="Waist" valueLabel={`${waistIn.toFixed(1)} in • WHtR ${whtrValue.toFixed(2)}`} theme={THEMES.whtR} input={<BoundNumberField value={waistIn} onChange={setWaistIn} min={20} max={60} step={0.5} decimals={1} />} zones={waistZones} zoneMin={20} zoneMax={60} currentValue={waistIn}>
               <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={waistIn} onValueChange={(v) => setWaistIn(Number(v))} minimumValue={20} maximumValue={60} step={0.5} />
             </LabeledSlider>
 
             <LabeledSlider label="Height" valueLabel={`${heightIn.toFixed(1)} in`} theme={THEMES.whtR} input={<BoundNumberField value={heightIn} onChange={setHeightIn} min={48} max={84} step={0.5} decimals={1} />}>
               <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={heightIn} onValueChange={(v) => setHeightIn(Number(v))} minimumValue={48} maximumValue={84} step={0.5} />
             </LabeledSlider>
-          </View>
-
-          <View className="mx-6 mt-6 rounded-2xl border p-5" style={{ backgroundColor: THEMES.cardio.soft, borderColor: THEMES.cardio.border }}>
-            <Text className="mb-4 text-lg font-semibold text-white">Cardio</Text>
-
-            <View className="mb-5 rounded-lg bg-white/10 p-1 flex-row">
-              <SegmentedOption selected={cardioTest === 'run_2mile'} label="2-mile Run" onPress={() => setCardioTest('run_2mile')} theme={THEMES.cardio} />
-              <SegmentedOption selected={cardioTest === 'hamr_20m'} label="HAMR" onPress={() => setCardioTest('hamr_20m')} theme={THEMES.cardio} />
-              <SegmentedOption selected={cardioTest === 'walk_2k'} label="2km Walk" onPress={() => setCardioTest('walk_2k')} theme={THEMES.cardio} />
-            </View>
-
-            {cardioTest === 'run_2mile' && (
-              <LabeledSlider label="2-mile time" valueLabel={formatMMSS(runSec)} theme={THEMES.cardio} input={<BoundTimeField valueSec={runSec} onChange={setRunSec} minSec={8 * 60} maxSec={30 * 60} />}>
-                <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={runSec} onValueChange={(v) => setRunSec(Math.round(v as number))} minimumValue={8 * 60} maximumValue={30 * 60} step={1} />
-              </LabeledSlider>
-            )}
-
-            {cardioTest === 'walk_2k' && (
-              <LabeledSlider label="2K walk maximum time" valueLabel={`${formatMMSS(walkSec)} • pass/fail only`} theme={THEMES.cardio} input={<BoundTimeField valueSec={walkSec} onChange={setWalkSec} minSec={10 * 60} maxSec={30 * 60} />}>
-                <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={walkSec} onValueChange={(v) => setWalkSec(Math.round(v as number))} minimumValue={10 * 60} maximumValue={30 * 60} step={1} />
-              </LabeledSlider>
-            )}
-
-            {cardioTest === 'hamr_20m' && (
-              <LabeledSlider label="HAMR shuttles" valueLabel={`${hamrShuttles} shuttles`} theme={THEMES.cardio} input={<BoundNumberField value={hamrShuttles} onChange={(v) => setHamrShuttles(Math.round(v))} min={0} max={120} step={1} />}>
-                <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={hamrShuttles} onValueChange={(v) => setHamrShuttles(Math.round(v as number))} minimumValue={0} maximumValue={120} step={1} />
-              </LabeledSlider>
-            )}
-          </View>
-
-          <View className="mx-6 mt-6 rounded-2xl border p-5" style={{ backgroundColor: THEMES.strength.soft, borderColor: THEMES.strength.border }}>
+          </View>          <View onLayout={setSectionY('strength')} className="mx-6 mt-6 rounded-2xl border p-5" style={{ backgroundColor: THEMES.strength.soft, borderColor: THEMES.strength.border }}>
             <Text className="mb-4 text-lg font-semibold text-white">Strength</Text>
 
             <View className="mb-5 rounded-lg bg-white/10 p-1 flex-row">
@@ -518,12 +654,12 @@ export default function CalculatorScreen() {
               <SegmentedOption selected={strengthTest === 'hand_release_pushups'} label="Hand-release" onPress={() => setStrengthTest('hand_release_pushups')} theme={THEMES.strength} />
             </View>
 
-            <LabeledSlider label="Reps" valueLabel={`${pushupReps} reps`} theme={THEMES.strength} input={<BoundNumberField value={pushupReps} onChange={(v) => setPushupReps(Math.round(v))} min={0} max={100} step={1} />}>
+            <LabeledSlider label="Reps" valueLabel={`${pushupReps} reps`} theme={THEMES.strength} input={<BoundNumberField value={pushupReps} onChange={(v) => setPushupReps(Math.round(v))} min={0} max={100} step={1} />} zones={strengthZones} zoneMin={0} zoneMax={100} currentValue={pushupReps}>
               <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={pushupReps} onValueChange={(v) => setPushupReps(Math.round(v as number))} minimumValue={0} maximumValue={100} step={1} />
             </LabeledSlider>
           </View>
 
-          <View className="mx-6 mt-6 rounded-2xl border p-5" style={{ backgroundColor: THEMES.core.soft, borderColor: THEMES.core.border }}>
+          <View onLayout={setSectionY('core')} className="mx-6 mt-6 rounded-2xl border p-5" style={{ backgroundColor: THEMES.core.soft, borderColor: THEMES.core.border }}>
             <Text className="mb-4 text-lg font-semibold text-white">Core</Text>
 
             <View className="mb-5 rounded-lg bg-white/10 p-1 flex-row">
@@ -533,15 +669,44 @@ export default function CalculatorScreen() {
             </View>
 
             {coreTest === 'plank' ? (
-              <LabeledSlider label="Time" valueLabel={formatMMSS(plankSec)} theme={THEMES.core} input={<BoundTimeField valueSec={plankSec} onChange={setPlankSec} minSec={0} maxSec={300} />}>
+              <LabeledSlider label="Time" valueLabel={formatMMSS(plankSec)} theme={THEMES.core} input={<BoundTimeField valueSec={plankSec} onChange={setPlankSec} minSec={0} maxSec={300} />} zones={coreZones} zoneMin={0} zoneMax={300} currentValue={plankSec}>
                 <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={plankSec} onValueChange={(v) => setPlankSec(Math.round(v as number))} minimumValue={0} maximumValue={300} step={1} />
               </LabeledSlider>
             ) : (
-              <LabeledSlider label="Reps" valueLabel={`${coreReps} reps`} theme={THEMES.core} input={<BoundNumberField value={coreReps} onChange={(v) => setCoreReps(Math.round(v))} min={0} max={100} step={1} />}>
+              <LabeledSlider label="Reps" valueLabel={`${coreReps} reps`} theme={THEMES.core} input={<BoundNumberField value={coreReps} onChange={(v) => setCoreReps(Math.round(v))} min={0} max={100} step={1} />} zones={coreZones} zoneMin={0} zoneMax={100} currentValue={coreReps}>
                 <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={coreReps} onValueChange={(v) => setCoreReps(Math.round(v as number))} minimumValue={0} maximumValue={100} step={1} />
               </LabeledSlider>
             )}
           </View>
+
+          <View onLayout={setSectionY('cardio')} className="mx-6 mt-6 rounded-2xl border p-5" style={{ backgroundColor: THEMES.cardio.soft, borderColor: THEMES.cardio.border }}>
+            <Text className="mb-4 text-lg font-semibold text-white">Cardio</Text>
+
+            <View className="mb-5 rounded-lg bg-white/10 p-1 flex-row">
+              <SegmentedOption selected={cardioTest === 'run_2mile'} label="2-mile Run" onPress={() => setCardioTest('run_2mile')} theme={THEMES.cardio} />
+              <SegmentedOption selected={cardioTest === 'hamr_20m'} label="HAMR" onPress={() => setCardioTest('hamr_20m')} theme={THEMES.cardio} />
+              <SegmentedOption selected={cardioTest === 'walk_2k'} label="2km Walk" onPress={() => setCardioTest('walk_2k')} theme={THEMES.cardio} />
+            </View>
+
+            {cardioTest === 'run_2mile' && (
+              <LabeledSlider label="2-mile time" valueLabel={formatMMSS(runSec)} theme={THEMES.cardio} input={<BoundTimeField valueSec={runSec} onChange={setRunSec} minSec={8 * 60} maxSec={30 * 60} />} zones={runZones} zoneMin={8 * 60} zoneMax={30 * 60} currentValue={runSec}>
+                <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={runSec} onValueChange={(v) => setRunSec(Math.round(v as number))} minimumValue={8 * 60} maximumValue={30 * 60} step={1} />
+              </LabeledSlider>
+            )}
+
+            {cardioTest === 'walk_2k' && (
+              <LabeledSlider label="2K walk maximum time" valueLabel={`${formatMMSS(walkSec)} • pass/fail only`} theme={THEMES.cardio} input={<BoundTimeField valueSec={walkSec} onChange={setWalkSec} minSec={10 * 60} maxSec={30 * 60} />} zones={walkZones} zoneMin={10 * 60} zoneMax={30 * 60} currentValue={walkSec}>
+                <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={walkSec} onValueChange={(v) => setWalkSec(Math.round(v as number))} minimumValue={10 * 60} maximumValue={30 * 60} step={1} />
+              </LabeledSlider>
+            )}
+
+            {cardioTest === 'hamr_20m' && (
+              <LabeledSlider label="HAMR shuttles" valueLabel={`${hamrShuttles} shuttles`} theme={THEMES.cardio} input={<BoundNumberField value={hamrShuttles} onChange={(v) => setHamrShuttles(Math.round(v))} min={0} max={120} step={1} />} zones={hamrZones} zoneMin={0} zoneMax={120} currentValue={hamrShuttles}>
+                <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={hamrShuttles} onValueChange={(v) => setHamrShuttles(Math.round(v as number))} minimumValue={0} maximumValue={120} step={1} />
+              </LabeledSlider>
+            )}
+          </View>
+
         </ScrollView>
       </SafeAreaView>
     </View>
