@@ -96,10 +96,28 @@ export function scoreCardio(ageYears: number, gender: Gender, test: 'run_2mile' 
   return scoreHigherIsBetter(HAMR_20M_ROWS as any, age, gender, value);
 }
 
-export function scoreTotal(params: { ageYears: number; gender: Gender; waistIn: number; heightIn: number; strengthTest: 'pushups' | 'hand_release_pushups'; strengthReps: number; coreTest: 'situps' | 'cross_leg_reverse_crunch' | 'plank'; coreValue: number; cardioTest: 'run_2mile' | 'hamr_20m' | 'walk_2k'; cardioValue: number; }): { waist: number; strength: number; core: number; cardio: number; total: number } {
+export const PFRA_MINIMUM_COMPONENT_POINTS = {
+  waist: 2.5,
+  strength: 2.5,
+  core: 2.5,
+  cardio: 35.0,
+} as const;
+
+export type ScoreBreakdown = { waist: number; strength: number; core: number; cardio: number; total: number };
+
+export function scoreTotal(params: { ageYears: number; gender: Gender; waistIn: number; heightIn: number; strengthTest: 'pushups' | 'hand_release_pushups'; strengthReps: number; coreTest: 'situps' | 'cross_leg_reverse_crunch' | 'plank'; coreValue: number; cardioTest: 'run_2mile' | 'hamr_20m' | 'walk_2k'; cardioValue: number; }): ScoreBreakdown {
   const waist = scoreWHtR(params.waistIn, params.heightIn);
   const strength = scoreStrength(params.ageYears, params.gender, params.strengthTest, params.strengthReps);
   const core = scoreCore(params.ageYears, params.gender, params.coreTest, params.coreValue);
   const cardio = scoreCardio(params.ageYears, params.gender, params.cardioTest, params.cardioValue);
   return { waist, strength, core, cardio, total: waist + strength + core + cardio };
+}
+
+export function meetsPFRAComponentMinimums(scores: Pick<ScoreBreakdown, 'waist' | 'strength' | 'core' | 'cardio'>): boolean {
+  return (
+    scores.waist >= PFRA_MINIMUM_COMPONENT_POINTS.waist &&
+    scores.strength >= PFRA_MINIMUM_COMPONENT_POINTS.strength &&
+    scores.core >= PFRA_MINIMUM_COMPONENT_POINTS.core &&
+    scores.cardio >= PFRA_MINIMUM_COMPONENT_POINTS.cardio
+  );
 }
