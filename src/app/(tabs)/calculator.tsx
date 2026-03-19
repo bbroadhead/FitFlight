@@ -194,7 +194,7 @@ function MetricRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function BoundNumberField({ value, onChange, min, max, step = 1, decimals = 0 }: { value: number; onChange: (next: number) => void; min: number; max: number; step?: number; decimals?: number; }) {
+function BoundNumberField({ value, onChange, min, max, step = 1, decimals = 0, className = 'min-w-[74px] px-3' }: { value: number; onChange: (next: number) => void; min: number; max: number; step?: number; decimals?: number; className?: string; }) {
   const [draft, setDraft] = useState(formatNumber(value, decimals));
 
   useEffect(() => {
@@ -214,7 +214,7 @@ function BoundNumberField({ value, onChange, min, max, step = 1, decimals = 0 }:
       }}
       onBlur={() => setDraft(formatNumber(value, decimals))}
       keyboardType={Platform.OS === 'ios' ? 'decimal-pad' : 'numeric'}
-      className="min-w-[74px] rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-right text-white"
+      className={`${className} rounded-xl border border-white/15 bg-white/10 py-2 text-right text-white`}
       placeholderTextColor="rgba(255,255,255,0.45)"
     />
   );
@@ -473,14 +473,15 @@ function AudioPanel() {
 
 export default function CalculatorScreen() {
   const scrollRef = useRef<ScrollView | null>(null);
-  const sectionYRef = useRef<Record<'metrics' | 'strength' | 'core' | 'cardio', number>>({ metrics: 0, strength: 0, core: 0, cardio: 0 });
+  const sectionYRef = useRef<Record<'metrics' | 'bodycomp' | 'strength' | 'core' | 'cardio', number>>({ metrics: 0, bodycomp: 0, strength: 0, core: 0, cardio: 0 });
+  const STICKY_TOTAL_OFFSET = 168;
 
-  const setSectionY = (key: 'metrics' | 'strength' | 'core' | 'cardio') => (event: LayoutChangeEvent) => {
+  const setSectionY = (key: 'metrics' | 'bodycomp' | 'strength' | 'core' | 'cardio') => (event: LayoutChangeEvent) => {
     sectionYRef.current[key] = event.nativeEvent.layout.y;
   };
 
-  const scrollToSection = (key: 'metrics' | 'strength' | 'core' | 'cardio') => {
-    const targetY = Math.max(0, (sectionYRef.current[key] ?? 0) - 116);
+  const scrollToSection = (key: 'metrics' | 'bodycomp' | 'strength' | 'core' | 'cardio') => {
+    const targetY = Math.max(0, (sectionYRef.current[key] ?? 0) - STICKY_TOTAL_OFFSET);
     scrollRef.current?.scrollTo({ y: targetY, animated: true });
   };
 
@@ -612,7 +613,7 @@ export default function CalculatorScreen() {
                 </View>
 
                 <View className="flex-1">
-                  <ComponentScoreBar label="WHtR" value={scores.waist} max={20} theme={THEMES.whtR} onPress={() => scrollToSection('metrics')} />
+                  <ComponentScoreBar label="WHtR" value={scores.waist} max={20} theme={THEMES.whtR} onPress={() => scrollToSection('bodycomp')} />
                   <ComponentScoreBar label="Strength" value={scores.strength} max={15} theme={THEMES.strength} onPress={() => scrollToSection('strength')} />
                   <ComponentScoreBar label="Core" value={scores.core} max={15} theme={THEMES.core} onPress={() => scrollToSection('core')} />
                   <ComponentScoreBar label="Cardio" value={cardioTest === 'walk_2k' ? (walkPass ? 50 : 0) : scores.cardio} max={50} theme={THEMES.cardio} isPassFail={cardioTest === 'walk_2k'} onPress={() => scrollToSection('cardio')} />
@@ -626,27 +627,39 @@ export default function CalculatorScreen() {
           <View onLayout={setSectionY('metrics')} className="mx-6 mt-6 rounded-2xl border p-5" style={{ backgroundColor: THEMES.whtR.soft, borderColor: THEMES.whtR.border }}>
             <Text className="mb-4 text-lg font-semibold text-white">Metrics</Text>
 
-            <MetricRow label="WHtR" value={whtrValue.toFixed(2)} />
-
             <LabeledSlider label="Age" valueLabel={`${ageYears} years`} theme={THEMES.whtR} input={<BoundNumberField value={ageYears} onChange={(v) => setAgeYears(Math.round(v))} min={17} max={65} step={1} />}>
               <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={ageYears} onValueChange={(v) => setAgeYears(Math.round(v as number))} minimumValue={17} maximumValue={65} step={1} />
             </LabeledSlider>
 
-            <View className="mb-5">
-              <View className="rounded-lg bg-white/10 p-1 flex-row">
-                <SegmentedOption selected={gender === 'male'} label="Male" onPress={() => setGender('male')} theme={THEMES.whtR} />
-                <SegmentedOption selected={gender === 'female'} label="Female" onPress={() => setGender('female')} theme={THEMES.whtR} />
+            <View className="rounded-lg bg-white/10 p-1 flex-row">
+              <SegmentedOption selected={gender === 'male'} label="Male" onPress={() => setGender('male')} theme={THEMES.whtR} />
+              <SegmentedOption selected={gender === 'female'} label="Female" onPress={() => setGender('female')} theme={THEMES.whtR} />
+            </View>
+          </View>
+
+          <View onLayout={setSectionY('bodycomp')} className="mx-6 mt-6 rounded-2xl border p-5" style={{ backgroundColor: THEMES.whtR.soft, borderColor: THEMES.whtR.border }}>
+            <View className="mb-4 flex-row items-center justify-between">
+              <View>
+                <Text className="text-lg font-semibold text-white">Body Composition</Text>
+                <Text className="mt-1 text-xs text-white/60">Waist, height, and WHtR update together in real time.</Text>
+              </View>
+              <View className="rounded-full px-3 py-1" style={{ backgroundColor: THEMES.whtR.tint }}>
+                <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: THEMES.whtR.color }}>WHtR Focus</Text>
               </View>
             </View>
 
-            <LabeledSlider label="Waist" valueLabel={`${waistIn.toFixed(1)} in • WHtR ${whtrValue.toFixed(2)}`} theme={THEMES.whtR} input={<BoundNumberField value={waistIn} onChange={setWaistIn} min={20} max={60} step={0.5} decimals={1} />} zones={waistZones} zoneMin={20} zoneMax={60} currentValue={waistIn}>
+            <MetricRow label="WHtR" value={whtrValue.toFixed(2)} />
+
+            <LabeledSlider label="Waist" valueLabel={`${waistIn.toFixed(1)} in • score ${scores.waist.toFixed(1)}/20`} theme={THEMES.whtR} input={<BoundNumberField value={waistIn} onChange={setWaistIn} min={20} max={60} step={0.5} decimals={1} className="min-w-[64px] px-2.5" />} zones={waistZones} zoneMin={20} zoneMax={60} currentValue={waistIn}>
               <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={waistIn} onValueChange={(v) => setWaistIn(Number(v))} minimumValue={20} maximumValue={60} step={0.5} />
             </LabeledSlider>
 
-            <LabeledSlider label="Height" valueLabel={`${heightIn.toFixed(1)} in`} theme={THEMES.whtR} input={<BoundNumberField value={heightIn} onChange={setHeightIn} min={48} max={84} step={0.5} decimals={1} />}>
+            <LabeledSlider label="Height" valueLabel={`${heightIn.toFixed(1)} in`} theme={THEMES.whtR} input={<BoundNumberField value={heightIn} onChange={setHeightIn} min={48} max={84} step={0.5} decimals={1} className="min-w-[68px] px-2.5" />}>
               <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={heightIn} onValueChange={(v) => setHeightIn(Number(v))} minimumValue={48} maximumValue={84} step={0.5} />
             </LabeledSlider>
-          </View>          <View onLayout={setSectionY('strength')} className="mx-6 mt-6 rounded-2xl border p-5" style={{ backgroundColor: THEMES.strength.soft, borderColor: THEMES.strength.border }}>
+          </View>
+
+          <View onLayout={setSectionY('strength')} className="mx-6 mt-6 rounded-2xl border p-5" style={{ backgroundColor: THEMES.strength.soft, borderColor: THEMES.strength.border }}>
             <Text className="mb-4 text-lg font-semibold text-white">Strength</Text>
 
             <View className="mb-5 rounded-lg bg-white/10 p-1 flex-row">
