@@ -127,17 +127,17 @@ function SliderMarkers({ markers, min, max, theme }: { markers: SliderMarker[]; 
 
   return (
     <>
-      <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, top: 7, height: 22, justifyContent: 'center' }}>
+      <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, top: 6, height: 20, justifyContent: 'center' }}>
         {markers.map((marker) => {
           const left = `${clamp(((marker.value - min) / range) * 100, 0, 100)}%`;
           return (
-            <View key={`${marker.label}-${marker.value}`} style={{ position: 'absolute', left, top: 0, bottom: 0, marginLeft: -1, width: 2 }}>
+            <View key={`${marker.label}-${marker.value}`} style={{ position: 'absolute', left, top: 1, bottom: 1, marginLeft: -1, width: 2 }}>
               <View style={{ flex: 1, backgroundColor: marker.color ?? theme.color, borderRadius: 999, opacity: 0.98 }} />
             </View>
           );
         })}
       </View>
-      <View pointerEvents="none" className="relative mt-1 h-3">
+      <View pointerEvents="none" className="relative mt-2 h-4">
         {markers.map((marker) => {
           const leftPct = clamp(((marker.value - min) / range) * 100, 0, 100);
           const anchorStyle = leftPct <= 12 ? { left: 0 } : leftPct >= 88 ? { right: 0 } : { left: `${leftPct}%`, transform: [{ translateX: -24 }] };
@@ -145,7 +145,7 @@ function SliderMarkers({ markers, min, max, theme }: { markers: SliderMarker[]; 
             <Text
               key={`${marker.label}-caption-${marker.value}`}
               className="absolute text-[10px] font-semibold"
-              style={{ color: marker.color ?? theme.color, ...anchorStyle }}
+              style={{ color: marker.color ?? theme.color, top: 0, ...anchorStyle }}
             >
               {marker.label}
             </Text>
@@ -552,12 +552,12 @@ export default function CalculatorScreen() {
   const ageBracket = getPFRAAgeBracket(ageYears);
   const walkAgeBracket = getWalkAgeBracket(ageYears);
 
-  const waistPassValue = heightIn * WHtR_ROWS[WHtR_ROWS.length - 2].ratio;
-  const waistMaxValue = heightIn * WHtR_ROWS[0].ratio;
+  const waistPassValue = useMemo(() => heightIn * WHtR_ROWS[WHtR_ROWS.length - 2].ratio, [heightIn, ageYears, gender]);
+  const waistMaxValue = useMemo(() => heightIn * WHtR_ROWS[0].ratio, [heightIn, ageYears, gender]);
   const waistMarkers = useMemo<SliderMarker[]>(() => ([
     { value: clamp(waistPassValue, 20, 60), label: `MIN ${clamp(waistPassValue, 20, 60).toFixed(1)}` },
     { value: clamp(waistMaxValue, 20, 60), label: `MAX ${clamp(waistMaxValue, 20, 60).toFixed(1)}` },
-  ]), [waistPassValue, waistMaxValue]);
+  ]), [waistPassValue, waistMaxValue, ageYears, gender]);
 
   const strengthRows = strengthTest === 'pushups' ? PUSHUP_ROWS : HAND_RELEASE_PUSHUP_ROWS;
   const strengthPassValue = getThresholdForPoints(strengthRows as readonly ThresholdRow[], ageBracket, gender, PFRA_MINIMUM_COMPONENT_POINTS.strength);
