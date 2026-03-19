@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, Pressable, ScrollView, TextInput, Platform } from 'react-native';
+import { View, Text, Pressable, ScrollView, TextInput, Platform, Linking } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { Audio, ResizeMode, Video } from 'expo-av';
+import { Audio } from 'expo-av';
+import { Asset } from 'expo-asset';
+import * as Sharing from 'expo-sharing';
 import Svg, { Circle } from 'react-native-svg';
 
 import SmartSlider from '@/components/SmartSlider';
@@ -72,7 +74,17 @@ function parseMMSS(input: string): number | null {
   }
 
   if (!/^\d+$/.test(cleaned)) return null;
-  return Number(cleaned);
+
+  if (cleaned.length <= 2) {
+    return Number(cleaned) * 60;
+  }
+
+  const minsRaw = cleaned.slice(0, -2);
+  const secsRaw = cleaned.slice(-2);
+  const mins = Number(minsRaw);
+  const secs = Number(secsRaw);
+  if (secs >= 60) return null;
+  return mins * 60 + secs;
 }
 
 function scoreStatus(total: number | null) {
@@ -155,9 +167,15 @@ function ComponentScoreBar({ label, value, max, theme, isPassFail = false }: { l
   return (
     <View className="mb-2">
       <Text className="mb-1 text-[11px] font-semibold uppercase tracking-[0.4px] text-white/70">{label}</Text>
-      <View className="h-6 overflow-hidden rounded-full border border-white/10 bg-white/10">
-        <View style={{ width: widthPct, backgroundColor: theme.color }} className="h-full items-center justify-center rounded-full px-2">
-          <Text className="text-[11px] font-bold text-white">{labelText}</Text>
+      <View className="relative h-6 overflow-hidden rounded-full border border-white/10 bg-white/10">
+        <View style={{ width: widthPct, backgroundColor: theme.color }} className="absolute left-0 top-0 h-full rounded-full" />
+        <View className="absolute inset-0 items-center justify-center px-2">
+          <Text
+            className="text-[11px] font-bold text-white"
+            style={{ textShadowColor: 'rgba(0,0,0,0.65)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 }}
+          >
+            {labelText}
+          </Text>
         </View>
       </View>
     </View>
@@ -180,35 +198,88 @@ function SegmentedOption({ selected, label, onPress, theme }: { selected: boolea
 
 function AudioPanel() {
   const [isPlaying, setIsPlaying] = useState(false);
+  const [positionSec, setPositionSec] = useState(0);
+  const [durationSec, setDurationSec] = useState(0);
   const soundRef = useRef<Audio.Sound | null>(null);
+  const webAudioRef = useRef<any>(null);
+  const audioAsset = useMemo(() => Asset.fromModule(require('../../../assets/audio/20m HAMR Audio File.m4a')), []);
 
   useEffect(() => {
     return () => {
       soundRef.current?.unloadAsync().catch(() => undefined);
+      const webAudio = webAudioRef.current as HTMLAudioElement | null;
+      if (webAudio) {
+        webAudio.pause();
+        webAudio.src = '';
+      }
     };
   }, []);
 
-  if (Platform.OS === 'web') {
-    return (
-      <View className="mx-6 mt-6 rounded-2xl border border-white/10 bg-white/5 p-5">
-        <Text className="mb-1 text-lg font-semibold text-white">20m HAMR Audio</Text>
-        <Text className="mb-4 text-sm text-af-silver">Official pacing audio for practicing or checking your 20-meter HAMR cadence.</Text>
-        {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-        <audio controls preload="metadata" style={{ width: '100%' }}>
-          <source src={require('../../../assets/audio/20m HAMR Audio File.m4a')} />
-        </audio>
-      </View>
-    );
-  }
+  const progressPct = durationSec > 0 ? `${Math.min(100, Math.max(0, (positionSec / durationSec) * 100))}%` : '0%';
+
+  const handleDownload = async () => {
+    try {
+      await audioAsset.downloadAsync();
+      const resolvedUri = audioAsset.localUri ?? audioAsset.uri;
+      if (!resolvedUri) return;
+
+      if (Platform.OS === 'web') {
+        const link = document.createElement('a');
+        link.href = resolvedUri;
+        link.download = '20m-HAMR-Audio-File.m4a';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        return;
+      }
+
+      const isShareAvailable = await Sharing.isAvailableAsync();
+      if (isShareAvailable) {
+        await Sharing.shareAsync(resolvedUri, {
+          dialogTitle: 'Download 20m HAMR Audio',
+          mimeType: 'audio/mp4',
+          UTI: 'public.mpeg-4-audio',
+        });
+      } else {
+        await Linking.openURL(resolvedUri);
+      }
+    } catch {
+      // no-op
+    }
+  };
+
 
   const togglePlayback = async () => {
     try {
+      if (Platform.OS === 'web') {
+        const webAudio = webAudioRef.current as HTMLAudioElement | null;
+        if (!webAudio) return;
+        if (webAudio.paused) {
+          await webAudio.play();
+          setIsPlaying(true);
+        } else {
+          webAudio.pause();
+          setIsPlaying(false);
+        }
+        return;
+      }
+
       if (!soundRef.current) {
-        const { sound } = await Audio.Sound.createAsync(require('../../../assets/audio/20m HAMR Audio File.m4a'));
+        const { sound } = await Audio.Sound.createAsync(audioAsset, { shouldPlay: false }, (status) => {
+          if (!status.isLoaded) return;
+          setIsPlaying(status.isPlaying);
+          setPositionSec((status.positionMillis ?? 0) / 1000);
+          setDurationSec(((status.durationMillis ?? 0) / 1000) || durationSec);
+          if (status.didJustFinish) {
+            setIsPlaying(false);
+            setPositionSec(0);
+          }
+        });
         soundRef.current = sound;
       }
       const status = await soundRef.current.getStatusAsync();
       if (!status.isLoaded) return;
+      setDurationSec(((status.durationMillis ?? 0) / 1000) || durationSec);
       if (status.isPlaying) {
         await soundRef.current.pauseAsync();
         setIsPlaying(false);
@@ -225,19 +296,50 @@ function AudioPanel() {
     <View className="mx-6 mt-6 rounded-2xl border border-white/10 bg-white/5 p-5">
       <Text className="mb-1 text-lg font-semibold text-white">20m HAMR Audio</Text>
       <Text className="mb-4 text-sm text-af-silver">Official pacing audio for practicing or checking your 20-meter HAMR cadence.</Text>
-      <Pressable onPress={togglePlayback} className="flex-row items-center justify-center rounded-xl bg-white/10 px-4 py-3">
-        <Ionicons name={isPlaying ? 'pause' : 'play'} size={18} color="#FFFFFF" />
-        <Text className="ml-2 font-semibold text-white">{isPlaying ? 'Pause audio' : 'Play audio'}</Text>
-      </Pressable>
-      <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.08)', marginVertical: 12 }} />
-      <Video
-        source={require('../../../assets/audio/20m HAMR Audio File.m4a')}
-        style={{ height: 1, width: 1, opacity: 0 }}
-        resizeMode={ResizeMode.CONTAIN}
-        shouldPlay={false}
-        useNativeControls={false}
-        isMuted
-      />
+
+      {Platform.OS === 'web' ? (
+        // eslint-disable-next-line jsx-a11y/media-has-caption
+        <audio
+          ref={webAudioRef}
+          preload="metadata"
+          onLoadedMetadata={(event) => {
+            const audio = event.currentTarget;
+            setDurationSec(Number.isFinite(audio.duration) ? audio.duration : 0);
+          }}
+          onTimeUpdate={(event) => {
+            setPositionSec(event.currentTarget.currentTime ?? 0);
+          }}
+          onPlay={() => setIsPlaying(true)}
+          onPause={() => setIsPlaying(false)}
+          onEnded={() => {
+            setIsPlaying(false);
+            setPositionSec(0);
+          }}
+          style={{ display: 'none' }}
+        >
+          <source src={audioAsset.uri} />
+        </audio>
+      ) : null}
+
+      <View className="mb-4 flex-row items-center gap-3">
+        <Pressable onPress={togglePlayback} className="flex-1 flex-row items-center justify-center rounded-xl bg-white/10 px-4 py-3">
+          <Ionicons name={isPlaying ? 'pause' : 'play'} size={18} color="#FFFFFF" />
+          <Text className="ml-2 font-semibold text-white">{isPlaying ? 'Pause' : 'Play'}</Text>
+        </Pressable>
+        <Pressable onPress={handleDownload} className="rounded-xl bg-white/10 px-4 py-3">
+          <Ionicons name="download-outline" size={18} color="#FFFFFF" />
+        </Pressable>
+      </View>
+
+      <View className="mb-2 h-3 overflow-hidden rounded-full bg-white/10">
+        <Pressable onPress={() => undefined} className="h-full w-full justify-center">
+          <View style={{ width: progressPct }} className="h-full rounded-full bg-af-primary" />
+        </Pressable>
+      </View>
+      <View className="flex-row items-center justify-between">
+        <Text className="text-sm text-white/80">Playback</Text>
+        <Text className="text-sm font-semibold text-white/90">{formatMMSS(positionSec)}/{formatMMSS(durationSec)}</Text>
+      </View>
     </View>
   );
 }
