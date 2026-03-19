@@ -48,11 +48,7 @@ type ComponentTheme = {
 };
 
 type ThresholdRow = { points: number; thresholds: Record<string, Record<Gender, number>> };
-type TargetZone = { start: number; end: number; color: string; label: string };
-
-const ZONE_FAIL = '#EF4444';
-const ZONE_SAT = '#4A90D9';
-const ZONE_EXCELLENT = '#22C55E';
+type SliderMarker = { value: number; label: string; color?: string };
 
 const THEMES: Record<'whtR' | 'cardio' | 'strength' | 'core', ComponentTheme> = {
   whtR: { color: '#14B8A6', soft: 'rgba(20,184,166,0.14)', border: 'rgba(20,184,166,0.38)', tint: 'rgba(20,184,166,0.22)' },
@@ -126,57 +122,34 @@ function getThresholdForPoints(rows: readonly ThresholdRow[], ageBracket: string
   return row?.thresholds?.[ageBracket]?.[gender] ?? 0;
 }
 
-function makeHigherIsBetterZones(minValue: number, maxValue: number, passThreshold: number, excellentThreshold: number): TargetZone[] {
-  const safeMin = Math.min(minValue, maxValue);
-  const safeMax = Math.max(minValue, maxValue);
-  const pass = clamp(passThreshold, safeMin, safeMax);
-  const excellent = clamp(excellentThreshold, pass, safeMax);
-  return [
-    { start: safeMin, end: pass, color: ZONE_FAIL, label: 'Fail' },
-    { start: pass, end: excellent, color: ZONE_SAT, label: 'Satisfactory' },
-    { start: excellent, end: safeMax, color: ZONE_EXCELLENT, label: 'Excellent' },
-  ];
-}
-
-function makeLowerIsBetterZones(minValue: number, maxValue: number, excellentThreshold: number, passThreshold: number): TargetZone[] {
-  const safeMin = Math.min(minValue, maxValue);
-  const safeMax = Math.max(minValue, maxValue);
-  const excellent = clamp(excellentThreshold, safeMin, safeMax);
-  const pass = clamp(passThreshold, excellent, safeMax);
-  return [
-    { start: safeMin, end: excellent, color: ZONE_EXCELLENT, label: 'Excellent' },
-    { start: excellent, end: pass, color: ZONE_SAT, label: 'Satisfactory' },
-    { start: pass, end: safeMax, color: ZONE_FAIL, label: 'Fail' },
-  ];
-}
-
-function SliderTargetZones({ zones, min, max, currentValue }: { zones: TargetZone[]; min: number; max: number; currentValue: number; }) {
+function SliderMarkers({ markers, min, max, currentValue, theme }: { markers: SliderMarker[]; min: number; max: number; currentValue: number; theme: ComponentTheme; }) {
   const range = Math.max(1, max - min);
-  const markerLeft = `${clamp(((currentValue - min) / range) * 100, 0, 100)}%`;
+  const currentLeft = `${clamp(((currentValue - min) / range) * 100, 0, 100)}%`;
 
   return (
-    <View className="mt-2">
-      <View className="relative h-2 overflow-hidden rounded-full bg-white/10">
-        {zones.map((zone, idx) => {
-          const left = `${clamp(((zone.start - min) / range) * 100, 0, 100)}%`;
-          const width = `${clamp(((zone.end - zone.start) / range) * 100, 0, 100)}%`;
+    <View className="-mt-3 mb-1">
+      <View className="relative h-5 justify-center">
+        {markers.map((marker) => {
+          const left = `${clamp(((marker.value - min) / range) * 100, 0, 100)}%`;
           return (
-            <View
-              key={`${zone.label}-${idx}`}
-              style={{ left, width, backgroundColor: zone.color, opacity: 0.9, position: 'absolute', top: 0, bottom: 0 }}
-            />
+            <View key={`${marker.label}-${marker.value}`} style={{ position: 'absolute', left, top: 0, bottom: 0, marginLeft: -1, width: 2 }}>
+              <View style={{ flex: 1, backgroundColor: marker.color ?? theme.color, borderRadius: 999, opacity: 0.95 }} />
+            </View>
           );
         })}
-        <View
-          style={{ position: 'absolute', left: markerLeft, top: -2, bottom: -2, width: 2, marginLeft: -1, backgroundColor: '#FFFFFF', borderRadius: 999 }}
-        />
+        <View style={{ position: 'absolute', left: currentLeft, top: 2, bottom: 2, marginLeft: -1, width: 2, backgroundColor: '#FFFFFF', borderRadius: 999 }} />
       </View>
-      <View className="mt-1 flex-row items-center justify-between">
-        {[...new Set(zones.map((zone) => zone.label).filter(Boolean))].map((label) => {
-          const zone = zones.find((entry) => entry.label === label);
+      <View className="relative mt-1 h-3">
+        {markers.map((marker) => {
+          const leftPct = clamp(((marker.value - min) / range) * 100, 0, 100);
+          const anchorStyle = leftPct <= 10 ? { left: 0 } : leftPct >= 90 ? { right: 0 } : { left: `${leftPct}%`, transform: [{ translateX: -24 }] };
           return (
-            <Text key={label} className="text-[10px] font-semibold" style={{ color: zone?.color ?? 'rgba(255,255,255,0.55)' }}>
-              {label}
+            <Text
+              key={`${marker.label}-caption-${marker.value}`}
+              className="absolute text-[10px] font-semibold"
+              style={{ color: marker.color ?? theme.color, ...anchorStyle }}
+            >
+              {marker.label}
             </Text>
           );
         })}
@@ -245,7 +218,7 @@ function BoundTimeField({ valueSec, onChange, minSec, maxSec }: { valueSec: numb
   );
 }
 
-function LabeledSlider({ label, valueLabel, theme, children, input, zones, zoneMin, zoneMax, currentValue }: { label: string; valueLabel: string; theme: ComponentTheme; children: React.ReactNode; input: React.ReactNode; zones?: TargetZone[]; zoneMin?: number; zoneMax?: number; currentValue?: number; }) {
+function LabeledSlider({ label, valueLabel, theme, children, input, markers, markerMin, markerMax, currentValue }: { label: string; valueLabel: string; theme: ComponentTheme; children: React.ReactNode; input: React.ReactNode; markers?: SliderMarker[]; markerMin?: number; markerMax?: number; currentValue?: number; }) {
   return (
     <View className="mb-5">
       <View className="mb-2 flex-row items-center justify-between gap-3">
@@ -256,8 +229,8 @@ function LabeledSlider({ label, valueLabel, theme, children, input, zones, zoneM
         {input}
       </View>
       {children}
-      {zones && zoneMin !== undefined && zoneMax !== undefined && currentValue !== undefined ? (
-        <SliderTargetZones zones={zones} min={zoneMin} max={zoneMax} currentValue={currentValue} />
+      {markers && markerMin !== undefined && markerMax !== undefined && currentValue !== undefined ? (
+        <SliderMarkers markers={markers} min={markerMin} max={markerMax} currentValue={currentValue} theme={theme} />
       ) : null}
     </View>
   );
@@ -306,6 +279,7 @@ function AudioPanel() {
   const [positionSec, setPositionSec] = useState(0);
   const [durationSec, setDurationSec] = useState(0);
   const [audioUri, setAudioUri] = useState<string | null>(null);
+  const [isSeeking, setIsSeeking] = useState(false);
   const soundRef = useRef<Audio.Sound | null>(null);
   const webAudioRef = useRef<any>(null);
   const audioModule = useMemo(() => require('../../../assets/audio/20m HAMR Audio File.m4a'), []);
@@ -315,14 +289,17 @@ function AudioPanel() {
 
     (async () => {
       try {
-        const [asset] = await Asset.loadAsync(audioModule);
+        const asset = Asset.fromModule(audioModule);
+        if (Platform.OS !== 'web') {
+          await asset.downloadAsync();
+        }
         if (!isMounted) return;
         setAudioUri(asset.localUri ?? asset.uri ?? null);
       } catch {
         try {
-          const fallbackAsset = Asset.fromModule(audioModule);
+          const asset = Asset.fromModule(audioModule);
           if (!isMounted) return;
-          setAudioUri(fallbackAsset.localUri ?? fallbackAsset.uri ?? null);
+          setAudioUri(asset.uri ?? null);
         } catch {
           if (!isMounted) return;
           setAudioUri(null);
@@ -341,7 +318,7 @@ function AudioPanel() {
     };
   }, [audioModule]);
 
-  const progressPct = durationSec > 0 ? `${Math.min(100, Math.max(0, (positionSec / durationSec) * 100))}%` : '0%';
+  const progressValue = durationSec > 0 ? clamp(positionSec, 0, durationSec) : 0;
 
   const handleDownload = async () => {
     try {
@@ -374,6 +351,45 @@ function AudioPanel() {
     }
   };
 
+  const ensureSoundLoaded = async () => {
+    if (soundRef.current) return soundRef.current;
+    const { sound } = await Audio.Sound.createAsync(
+      audioUri ? { uri: audioUri } : audioModule,
+      { shouldPlay: false, progressUpdateIntervalMillis: 250 },
+      (status) => {
+        if (!status.isLoaded) return;
+        setIsPlaying(status.isPlaying);
+        if (!isSeeking) {
+          setPositionSec((status.positionMillis ?? 0) / 1000);
+        }
+        setDurationSec(((status.durationMillis ?? 0) / 1000) || 0);
+        if (status.didJustFinish) {
+          setIsPlaying(false);
+          setPositionSec(0);
+        }
+      },
+    );
+    soundRef.current = sound;
+    return sound;
+  };
+
+  const seekTo = async (nextSec: number) => {
+    const clamped = clamp(nextSec, 0, durationSec || nextSec || 0);
+    setPositionSec(clamped);
+    try {
+      if (Platform.OS === 'web') {
+        const webAudio = webAudioRef.current as HTMLAudioElement | null;
+        if (!webAudio) return;
+        webAudio.currentTime = clamped;
+        return;
+      }
+      const sound = await ensureSoundLoaded();
+      await sound.setPositionAsync(Math.round(clamped * 1000));
+    } catch {
+      // no-op
+    }
+  };
+
   const togglePlayback = async () => {
     try {
       if (Platform.OS === 'web') {
@@ -389,32 +405,15 @@ function AudioPanel() {
         return;
       }
 
-      if (!soundRef.current) {
-        const { sound } = await Audio.Sound.createAsync(
-          audioUri ? { uri: audioUri } : audioModule,
-          { shouldPlay: false, progressUpdateIntervalMillis: 250 },
-          (status) => {
-            if (!status.isLoaded) return;
-            setIsPlaying(status.isPlaying);
-            setPositionSec((status.positionMillis ?? 0) / 1000);
-            setDurationSec(((status.durationMillis ?? 0) / 1000) || 0);
-            if (status.didJustFinish) {
-              setIsPlaying(false);
-              setPositionSec(0);
-            }
-          },
-        );
-        soundRef.current = sound;
-      }
-
-      const status = await soundRef.current.getStatusAsync();
+      const sound = await ensureSoundLoaded();
+      const status = await sound.getStatusAsync();
       if (!status.isLoaded) return;
       setDurationSec(((status.durationMillis ?? 0) / 1000) || durationSec);
       if (status.isPlaying) {
-        await soundRef.current.pauseAsync();
+        await sound.pauseAsync();
         setIsPlaying(false);
       } else {
-        await soundRef.current.playAsync();
+        await sound.playAsync();
         setIsPlaying(true);
       }
     } catch {
@@ -431,13 +430,15 @@ function AudioPanel() {
         <audio
           ref={webAudioRef}
           preload="metadata"
-          src={audioUri ?? undefined}
+          src={audioUri ?? Asset.fromModule(audioModule).uri ?? undefined}
           onLoadedMetadata={(event) => {
             const audio = event.currentTarget;
             setDurationSec(Number.isFinite(audio.duration) ? audio.duration : 0);
           }}
           onTimeUpdate={(event) => {
-            setPositionSec(event.currentTarget.currentTime ?? 0);
+            if (!isSeeking) {
+              setPositionSec(event.currentTarget.currentTime ?? 0);
+            }
           }}
           onPlay={() => setIsPlaying(true)}
           onPause={() => setIsPlaying(false)}
@@ -450,21 +451,35 @@ function AudioPanel() {
       ) : null}
 
       <View className="flex-row items-center gap-3">
-        <Pressable onPress={togglePlayback} className="h-10 w-10 items-center justify-center rounded-full bg-white/10">
-          <Ionicons name={isPlaying ? 'pause' : 'play'} size={18} color="#FFFFFF" />
+        <Pressable onPress={togglePlayback} className="h-9 w-9 items-center justify-center rounded-full bg-white/10">
+          <Ionicons name={isPlaying ? 'pause' : 'play'} size={16} color="#FFFFFF" />
         </Pressable>
 
         <View className="flex-1">
-          <View className="mb-1 h-3 overflow-hidden rounded-full bg-white/10">
-            <View style={{ width: progressPct }} className="h-full rounded-full bg-af-primary" />
-          </View>
-          <View className="flex-row items-center justify-end">
+          <SmartSlider
+            onSlidingStart={() => setIsSeeking(true)}
+            onSlidingComplete={(value) => {
+              const nextSec = Number(value) || 0;
+              setIsSeeking(false);
+              void seekTo(nextSec);
+            }}
+            onValueChange={(value) => setPositionSec(Number(value) || 0)}
+            value={progressValue}
+            minimumValue={0}
+            maximumValue={Math.max(durationSec, 1)}
+            step={0.1}
+            minimumTrackTintColor="#4A90D9"
+            maximumTrackTintColor="rgba(255,255,255,0.16)"
+            thumbTintColor="#FFFFFF"
+            webStyle={{ accentColor: '#4A90D9' }}
+          />
+          <View className="-mt-1 flex-row items-center justify-end">
             <Text className="text-sm font-semibold text-white/90">{formatMMSS(positionSec)}/{formatMMSS(durationSec)}</Text>
           </View>
         </View>
 
-        <Pressable onPress={handleDownload} className="h-10 w-10 items-center justify-center rounded-full bg-white/10">
-          <Ionicons name="download-outline" size={18} color="#FFFFFF" />
+        <Pressable onPress={handleDownload} className="h-9 w-9 items-center justify-center rounded-full bg-white/10">
+          <Ionicons name="download-outline" size={16} color="#FFFFFF" />
         </Pressable>
       </View>
     </View>
@@ -534,25 +549,50 @@ export default function CalculatorScreen() {
   const ageBracket = getPFRAAgeBracket(ageYears);
   const walkAgeBracket = getWalkAgeBracket(ageYears);
 
-  const waistZones = useMemo(() => makeLowerIsBetterZones(20, 60, heightIn * WHtR_ROWS[0].ratio, heightIn * WHtR_ROWS[WHtR_ROWS.length - 2].ratio), [heightIn]);
+  const waistPassValue = heightIn * WHtR_ROWS[WHtR_ROWS.length - 2].ratio;
+  const waistMaxValue = heightIn * WHtR_ROWS[0].ratio;
+  const waistMarkers = useMemo<SliderMarker[]>(() => ([
+    { value: clamp(waistPassValue, 20, 60), label: `MIN ${clamp(waistPassValue, 20, 60).toFixed(1)}` },
+    { value: clamp(waistMaxValue, 20, 60), label: `MAX ${clamp(waistMaxValue, 20, 60).toFixed(1)}` },
+  ]), [waistPassValue, waistMaxValue]);
 
   const strengthRows = strengthTest === 'pushups' ? PUSHUP_ROWS : HAND_RELEASE_PUSHUP_ROWS;
-  const strengthZones = useMemo(() => makeHigherIsBetterZones(0, 100, getThresholdForPoints(strengthRows as readonly ThresholdRow[], ageBracket, gender, PFRA_MINIMUM_COMPONENT_POINTS.strength), getThresholdForPoints(strengthRows as readonly ThresholdRow[], ageBracket, gender, 15)), [strengthRows, ageBracket, gender]);
+  const strengthPassValue = getThresholdForPoints(strengthRows as readonly ThresholdRow[], ageBracket, gender, PFRA_MINIMUM_COMPONENT_POINTS.strength);
+  const strengthMaxValue = getThresholdForPoints(strengthRows as readonly ThresholdRow[], ageBracket, gender, 15);
+  const strengthMarkers = useMemo<SliderMarker[]>(() => ([
+    { value: clamp(strengthPassValue, 0, 100), label: `MIN ${Math.round(clamp(strengthPassValue, 0, 100))}` },
+    { value: clamp(strengthMaxValue, 0, 100), label: `MAX ${Math.round(clamp(strengthMaxValue, 0, 100))}` },
+  ]), [strengthPassValue, strengthMaxValue]);
 
   const coreRows = coreTest === 'situps' ? SITUP_ROWS : coreTest === 'cross_leg_reverse_crunch' ? REVERSE_CRUNCH_ROWS : PLANK_ROWS_SEC;
   const coreMax = coreTest === 'plank' ? 300 : 100;
-  const coreZones = useMemo(() => makeHigherIsBetterZones(0, coreMax, getThresholdForPoints(coreRows as readonly ThresholdRow[], ageBracket, gender, PFRA_MINIMUM_COMPONENT_POINTS.core), getThresholdForPoints(coreRows as readonly ThresholdRow[], ageBracket, gender, 15)), [coreRows, coreMax, ageBracket, gender]);
+  const corePassValue = getThresholdForPoints(coreRows as readonly ThresholdRow[], ageBracket, gender, PFRA_MINIMUM_COMPONENT_POINTS.core);
+  const coreMaxValue = getThresholdForPoints(coreRows as readonly ThresholdRow[], ageBracket, gender, 15);
+  const coreMarkers = useMemo<SliderMarker[]>(() => ([
+    { value: clamp(corePassValue, 0, coreMax), label: coreTest === 'plank' ? `MIN ${formatMMSS(clamp(corePassValue, 0, coreMax))}` : `MIN ${Math.round(clamp(corePassValue, 0, coreMax))}` },
+    { value: clamp(coreMaxValue, 0, coreMax), label: coreTest === 'plank' ? `MAX ${formatMMSS(clamp(coreMaxValue, 0, coreMax))}` : `MAX ${Math.round(clamp(coreMaxValue, 0, coreMax))}` },
+  ]), [corePassValue, coreMaxValue, coreMax, coreTest]);
 
-  const runZones = useMemo(() => makeLowerIsBetterZones(8 * 60, 30 * 60, getThresholdForPoints(RUN_2MILE_ROWS_SEC as readonly ThresholdRow[], ageBracket, gender, 50), getThresholdForPoints(RUN_2MILE_ROWS_SEC as readonly ThresholdRow[], ageBracket, gender, PFRA_MINIMUM_COMPONENT_POINTS.cardio)), [ageBracket, gender]);
-  const hamrZones = useMemo(() => makeHigherIsBetterZones(0, 120, getThresholdForPoints(HAMR_20M_ROWS as readonly ThresholdRow[], ageBracket, gender, PFRA_MINIMUM_COMPONENT_POINTS.cardio), getThresholdForPoints(HAMR_20M_ROWS as readonly ThresholdRow[], ageBracket, gender, 50)), [ageBracket, gender]);
+  const runMaxValue = getThresholdForPoints(RUN_2MILE_ROWS_SEC as readonly ThresholdRow[], ageBracket, gender, 50);
+  const runPassValue = getThresholdForPoints(RUN_2MILE_ROWS_SEC as readonly ThresholdRow[], ageBracket, gender, PFRA_MINIMUM_COMPONENT_POINTS.cardio);
+  const runMarkers = useMemo<SliderMarker[]>(() => ([
+    { value: clamp(runPassValue, 8 * 60, 30 * 60), label: `MIN ${formatMMSS(clamp(runPassValue, 8 * 60, 30 * 60))}` },
+    { value: clamp(runMaxValue, 8 * 60, 30 * 60), label: `MAX ${formatMMSS(clamp(runMaxValue, 8 * 60, 30 * 60))}` },
+  ]), [runPassValue, runMaxValue]);
+  const hamrPassValue = getThresholdForPoints(HAMR_20M_ROWS as readonly ThresholdRow[], ageBracket, gender, PFRA_MINIMUM_COMPONENT_POINTS.cardio);
+  const hamrMaxValue = getThresholdForPoints(HAMR_20M_ROWS as readonly ThresholdRow[], ageBracket, gender, 50);
+  const hamrMarkers = useMemo<SliderMarker[]>(() => ([
+    { value: clamp(hamrPassValue, 0, 120), label: `MIN ${Math.round(clamp(hamrPassValue, 0, 120))}` },
+    { value: clamp(hamrMaxValue, 0, 120), label: `MAX ${Math.round(clamp(hamrMaxValue, 0, 120))}` },
+  ]), [hamrPassValue, hamrMaxValue]);
   const walkPassThreshold = useMemo(() => {
     const row = WALK_2K_MAX_SEC.find((entry) => entry.bracket === walkAgeBracket);
     return gender === 'male' ? (row?.male_max ?? 0) : (row?.female_max ?? 0);
   }, [walkAgeBracket, gender]);
-  const walkZones = useMemo(() => [
-    { start: 10 * 60, end: walkPassThreshold, color: ZONE_SAT, label: 'Pass' },
-    { start: walkPassThreshold, end: 30 * 60, color: ZONE_FAIL, label: 'Fail' },
-  ] as TargetZone[], [walkPassThreshold]);
+  const walkMarkers = useMemo<SliderMarker[]>(() => ([
+    { value: clamp(walkPassThreshold, 10 * 60, 30 * 60), label: `PASS ${formatMMSS(clamp(walkPassThreshold, 10 * 60, 30 * 60))}` },
+    { value: 10 * 60, label: 'BEST 10:00' },
+  ]), [walkPassThreshold]);
 
   const circleSize = 110;
   const strokeWidth = 9;
@@ -638,19 +678,13 @@ export default function CalculatorScreen() {
           </View>
 
           <View onLayout={setSectionY('bodycomp')} className="mx-6 mt-6 rounded-2xl border p-5" style={{ backgroundColor: THEMES.whtR.soft, borderColor: THEMES.whtR.border }}>
-            <View className="mb-4 flex-row items-center justify-between">
-              <View>
-                <Text className="text-lg font-semibold text-white">Body Composition</Text>
-                <Text className="mt-1 text-xs text-white/60">Waist, height, and WHtR update together in real time.</Text>
-              </View>
-              <View className="rounded-full px-3 py-1" style={{ backgroundColor: THEMES.whtR.tint }}>
-                <Text className="text-[11px] font-bold uppercase tracking-[0.4px]" style={{ color: THEMES.whtR.color }}>WHtR Focus</Text>
-              </View>
+            <View className="mb-4">
+              <Text className="text-lg font-semibold text-white">Body Composition</Text>
             </View>
 
             <MetricRow label="WHtR" value={whtrValue.toFixed(2)} />
 
-            <LabeledSlider label="Waist" valueLabel={`${waistIn.toFixed(1)} in • score ${scores.waist.toFixed(1)}/20`} theme={THEMES.whtR} input={<BoundNumberField value={waistIn} onChange={setWaistIn} min={20} max={60} step={0.5} decimals={1} className="min-w-[64px] px-2.5" />} zones={waistZones} zoneMin={20} zoneMax={60} currentValue={waistIn}>
+            <LabeledSlider label="Waist" valueLabel={`${waistIn.toFixed(1)} in • score ${scores.waist.toFixed(1)}/20`} theme={THEMES.whtR} input={<BoundNumberField value={waistIn} onChange={setWaistIn} min={20} max={60} step={0.5} decimals={1} className="min-w-[64px] px-2.5" />} markers={waistMarkers} markerMin={20} markerMax={60} currentValue={waistIn}>
               <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={waistIn} onValueChange={(v) => setWaistIn(Number(v))} minimumValue={20} maximumValue={60} step={0.5} />
             </LabeledSlider>
 
@@ -667,7 +701,7 @@ export default function CalculatorScreen() {
               <SegmentedOption selected={strengthTest === 'hand_release_pushups'} label="Hand-release" onPress={() => setStrengthTest('hand_release_pushups')} theme={THEMES.strength} />
             </View>
 
-            <LabeledSlider label="Reps" valueLabel={`${pushupReps} reps`} theme={THEMES.strength} input={<BoundNumberField value={pushupReps} onChange={(v) => setPushupReps(Math.round(v))} min={0} max={100} step={1} />} zones={strengthZones} zoneMin={0} zoneMax={100} currentValue={pushupReps}>
+            <LabeledSlider label="Reps" valueLabel={`${pushupReps} reps`} theme={THEMES.strength} input={<BoundNumberField value={pushupReps} onChange={(v) => setPushupReps(Math.round(v))} min={0} max={100} step={1} />} markers={strengthMarkers} markerMin={0} markerMax={100} currentValue={pushupReps}>
               <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={pushupReps} onValueChange={(v) => setPushupReps(Math.round(v as number))} minimumValue={0} maximumValue={100} step={1} />
             </LabeledSlider>
           </View>
@@ -682,11 +716,11 @@ export default function CalculatorScreen() {
             </View>
 
             {coreTest === 'plank' ? (
-              <LabeledSlider label="Time" valueLabel={formatMMSS(plankSec)} theme={THEMES.core} input={<BoundTimeField valueSec={plankSec} onChange={setPlankSec} minSec={0} maxSec={300} />} zones={coreZones} zoneMin={0} zoneMax={300} currentValue={plankSec}>
+              <LabeledSlider label="Time" valueLabel={formatMMSS(plankSec)} theme={THEMES.core} input={<BoundTimeField valueSec={plankSec} onChange={setPlankSec} minSec={0} maxSec={300} />} markers={coreMarkers} markerMin={0} markerMax={300} currentValue={plankSec}>
                 <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={plankSec} onValueChange={(v) => setPlankSec(Math.round(v as number))} minimumValue={0} maximumValue={300} step={1} />
               </LabeledSlider>
             ) : (
-              <LabeledSlider label="Reps" valueLabel={`${coreReps} reps`} theme={THEMES.core} input={<BoundNumberField value={coreReps} onChange={(v) => setCoreReps(Math.round(v))} min={0} max={100} step={1} />} zones={coreZones} zoneMin={0} zoneMax={100} currentValue={coreReps}>
+              <LabeledSlider label="Reps" valueLabel={`${coreReps} reps`} theme={THEMES.core} input={<BoundNumberField value={coreReps} onChange={(v) => setCoreReps(Math.round(v))} min={0} max={100} step={1} />} markers={coreMarkers} markerMin={0} markerMax={100} currentValue={coreReps}>
                 <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={coreReps} onValueChange={(v) => setCoreReps(Math.round(v as number))} minimumValue={0} maximumValue={100} step={1} />
               </LabeledSlider>
             )}
@@ -702,19 +736,19 @@ export default function CalculatorScreen() {
             </View>
 
             {cardioTest === 'run_2mile' && (
-              <LabeledSlider label="2-mile time" valueLabel={formatMMSS(runSec)} theme={THEMES.cardio} input={<BoundTimeField valueSec={runSec} onChange={setRunSec} minSec={8 * 60} maxSec={30 * 60} />} zones={runZones} zoneMin={8 * 60} zoneMax={30 * 60} currentValue={runSec}>
+              <LabeledSlider label="2-mile time" valueLabel={formatMMSS(runSec)} theme={THEMES.cardio} input={<BoundTimeField valueSec={runSec} onChange={setRunSec} minSec={8 * 60} maxSec={30 * 60} />} markers={runMarkers} markerMin={8 * 60} markerMax={30 * 60} currentValue={runSec}>
                 <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={runSec} onValueChange={(v) => setRunSec(Math.round(v as number))} minimumValue={8 * 60} maximumValue={30 * 60} step={1} />
               </LabeledSlider>
             )}
 
             {cardioTest === 'walk_2k' && (
-              <LabeledSlider label="2K walk maximum time" valueLabel={`${formatMMSS(walkSec)} • pass/fail only`} theme={THEMES.cardio} input={<BoundTimeField valueSec={walkSec} onChange={setWalkSec} minSec={10 * 60} maxSec={30 * 60} />} zones={walkZones} zoneMin={10 * 60} zoneMax={30 * 60} currentValue={walkSec}>
+              <LabeledSlider label="2K walk maximum time" valueLabel={`${formatMMSS(walkSec)} • pass/fail only`} theme={THEMES.cardio} input={<BoundTimeField valueSec={walkSec} onChange={setWalkSec} minSec={10 * 60} maxSec={30 * 60} />} markers={walkMarkers} markerMin={10 * 60} markerMax={30 * 60} currentValue={walkSec}>
                 <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={walkSec} onValueChange={(v) => setWalkSec(Math.round(v as number))} minimumValue={10 * 60} maximumValue={30 * 60} step={1} />
               </LabeledSlider>
             )}
 
             {cardioTest === 'hamr_20m' && (
-              <LabeledSlider label="HAMR shuttles" valueLabel={`${hamrShuttles} shuttles`} theme={THEMES.cardio} input={<BoundNumberField value={hamrShuttles} onChange={(v) => setHamrShuttles(Math.round(v))} min={0} max={120} step={1} />} zones={hamrZones} zoneMin={0} zoneMax={120} currentValue={hamrShuttles}>
+              <LabeledSlider label="HAMR shuttles" valueLabel={`${hamrShuttles} shuttles`} theme={THEMES.cardio} input={<BoundNumberField value={hamrShuttles} onChange={(v) => setHamrShuttles(Math.round(v))} min={0} max={120} step={1} />} markers={hamrMarkers} markerMin={0} markerMax={120} currentValue={hamrShuttles}>
                 <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={hamrShuttles} onValueChange={(v) => setHamrShuttles(Math.round(v as number))} minimumValue={0} maximumValue={120} step={1} />
               </LabeledSlider>
             )}
