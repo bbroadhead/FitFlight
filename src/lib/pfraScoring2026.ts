@@ -48,6 +48,14 @@ export function passesWalk2k(ageYears: number, gender: Gender, valueSec: number)
 }
 
 function scoreHigherIsBetter<T extends number>(rows: readonly PointsRow<T>[], age: PFRAAgeBracket, gender: Gender, value: number): number {
+  const minimumRow = rows[rows.length - 1];
+  const minimumThreshold = minimumRow.thresholds[age][gender];
+
+  // The official charts can include a starred minimum passing threshold that is
+  // numerically identical to the next higher score threshold. In that case, an
+  // exact match at the minimum must still score as the minimum passing value.
+  if (value === minimumThreshold) return minimumRow.points;
+
   for (const row of rows) {
     const thr = row.thresholds[age][gender];
     if (value >= thr) return row.points;
