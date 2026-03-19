@@ -122,27 +122,25 @@ function getThresholdForPoints(rows: readonly ThresholdRow[], ageBracket: string
   return row?.thresholds?.[ageBracket]?.[gender] ?? 0;
 }
 
-function SliderMarkers({ markers, min, max, currentValue, theme }: { markers: SliderMarker[]; min: number; max: number; currentValue: number; theme: ComponentTheme; }) {
+function SliderMarkers({ markers, min, max, theme }: { markers: SliderMarker[]; min: number; max: number; theme: ComponentTheme; }) {
   const range = Math.max(1, max - min);
-  const currentLeft = `${clamp(((currentValue - min) / range) * 100, 0, 100)}%`;
 
   return (
-    <View className="-mt-3 mb-1">
-      <View className="relative h-5 justify-center">
+    <>
+      <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, top: 7, height: 22, justifyContent: 'center' }}>
         {markers.map((marker) => {
           const left = `${clamp(((marker.value - min) / range) * 100, 0, 100)}%`;
           return (
             <View key={`${marker.label}-${marker.value}`} style={{ position: 'absolute', left, top: 0, bottom: 0, marginLeft: -1, width: 2 }}>
-              <View style={{ flex: 1, backgroundColor: marker.color ?? theme.color, borderRadius: 999, opacity: 0.95 }} />
+              <View style={{ flex: 1, backgroundColor: marker.color ?? theme.color, borderRadius: 999, opacity: 0.98 }} />
             </View>
           );
         })}
-        <View style={{ position: 'absolute', left: currentLeft, top: 2, bottom: 2, marginLeft: -1, width: 2, backgroundColor: '#FFFFFF', borderRadius: 999 }} />
       </View>
-      <View className="relative mt-1 h-3">
+      <View pointerEvents="none" className="relative mt-1 h-3">
         {markers.map((marker) => {
           const leftPct = clamp(((marker.value - min) / range) * 100, 0, 100);
-          const anchorStyle = leftPct <= 10 ? { left: 0 } : leftPct >= 90 ? { right: 0 } : { left: `${leftPct}%`, transform: [{ translateX: -24 }] };
+          const anchorStyle = leftPct <= 12 ? { left: 0 } : leftPct >= 88 ? { right: 0 } : { left: `${leftPct}%`, transform: [{ translateX: -24 }] };
           return (
             <Text
               key={`${marker.label}-caption-${marker.value}`}
@@ -154,7 +152,7 @@ function SliderMarkers({ markers, min, max, currentValue, theme }: { markers: Sl
           );
         })}
       </View>
-    </View>
+    </>
   );
 }
 
@@ -218,7 +216,7 @@ function BoundTimeField({ valueSec, onChange, minSec, maxSec }: { valueSec: numb
   );
 }
 
-function LabeledSlider({ label, valueLabel, theme, children, input, markers, markerMin, markerMax, currentValue }: { label: string; valueLabel: string; theme: ComponentTheme; children: React.ReactNode; input: React.ReactNode; markers?: SliderMarker[]; markerMin?: number; markerMax?: number; currentValue?: number; }) {
+function LabeledSlider({ label, valueLabel, theme, children, input, markers, markerMin, markerMax }: { label: string; valueLabel: string; theme: ComponentTheme; children: React.ReactNode; input: React.ReactNode; markers?: SliderMarker[]; markerMin?: number; markerMax?: number; currentValue?: number; }) {
   return (
     <View className="mb-5">
       <View className="mb-2 flex-row items-center justify-between gap-3">
@@ -228,10 +226,12 @@ function LabeledSlider({ label, valueLabel, theme, children, input, markers, mar
         </View>
         {input}
       </View>
-      {children}
-      {markers && markerMin !== undefined && markerMax !== undefined && currentValue !== undefined ? (
-        <SliderMarkers markers={markers} min={markerMin} max={markerMax} currentValue={currentValue} theme={theme} />
-      ) : null}
+      <View className="relative justify-center">
+        {children}
+        {markers && markerMin !== undefined && markerMax !== undefined ? (
+          <SliderMarkers markers={markers} min={markerMin} max={markerMax} theme={theme} />
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -274,7 +274,7 @@ function SegmentedOption({ selected, label, onPress, theme }: { selected: boolea
   );
 }
 
-function AudioPanel() {
+function AudioPanel({ disableSwipe, enableSwipe }: { disableSwipe: () => void; enableSwipe: () => void; }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [positionSec, setPositionSec] = useState(0);
   const [durationSec, setDurationSec] = useState(0);
@@ -457,10 +457,14 @@ function AudioPanel() {
 
         <View className="flex-1">
           <SmartSlider
-            onSlidingStart={() => setIsSeeking(true)}
+            onSlidingStart={() => {
+              disableSwipe();
+              setIsSeeking(true);
+            }}
             onSlidingComplete={(value) => {
               const nextSec = Number(value) || 0;
               setIsSeeking(false);
+              enableSwipe();
               void seekTo(nextSec);
             }}
             onValueChange={(value) => setPositionSec(Number(value) || 0)}
@@ -470,7 +474,6 @@ function AudioPanel() {
             step={0.1}
             minimumTrackTintColor="#4A90D9"
             maximumTrackTintColor="rgba(255,255,255,0.16)"
-            thumbTintColor="#FFFFFF"
             webStyle={{ accentColor: '#4A90D9' }}
           />
           <View className="-mt-1 flex-row items-center justify-end">
@@ -591,7 +594,6 @@ export default function CalculatorScreen() {
   }, [walkAgeBracket, gender]);
   const walkMarkers = useMemo<SliderMarker[]>(() => ([
     { value: clamp(walkPassThreshold, 10 * 60, 30 * 60), label: `PASS ${formatMMSS(clamp(walkPassThreshold, 10 * 60, 30 * 60))}` },
-    { value: 10 * 60, label: 'BEST 10:00' },
   ]), [walkPassThreshold]);
 
   const circleSize = 110;
@@ -662,7 +664,7 @@ export default function CalculatorScreen() {
             </View>
           </View>
 
-          <AudioPanel />
+          <AudioPanel disableSwipe={disableSwipe} enableSwipe={enableSwipe} />
 
           <View onLayout={setSectionY('metrics')} className="mx-6 mt-6 rounded-2xl border p-5" style={{ backgroundColor: THEMES.whtR.soft, borderColor: THEMES.whtR.border }}>
             <Text className="mb-4 text-lg font-semibold text-white">Metrics</Text>
@@ -684,7 +686,7 @@ export default function CalculatorScreen() {
 
             <MetricRow label="WHtR" value={whtrValue.toFixed(2)} />
 
-            <LabeledSlider label="Waist" valueLabel={`${waistIn.toFixed(1)} in • score ${scores.waist.toFixed(1)}/20`} theme={THEMES.whtR} input={<BoundNumberField value={waistIn} onChange={setWaistIn} min={20} max={60} step={0.5} decimals={1} className="min-w-[64px] px-2.5" />} markers={waistMarkers} markerMin={20} markerMax={60} currentValue={waistIn}>
+            <LabeledSlider label="Waist" valueLabel={`${waistIn.toFixed(1)} in • score ${scores.waist.toFixed(1)}/20`} theme={THEMES.whtR} input={<BoundNumberField value={waistIn} onChange={setWaistIn} min={20} max={60} step={0.5} decimals={1} className="min-w-[64px] px-2.5" />} markers={waistMarkers} markerMin={20} markerMax={60}>
               <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={waistIn} onValueChange={(v) => setWaistIn(Number(v))} minimumValue={20} maximumValue={60} step={0.5} />
             </LabeledSlider>
 
@@ -701,7 +703,7 @@ export default function CalculatorScreen() {
               <SegmentedOption selected={strengthTest === 'hand_release_pushups'} label="Hand-release" onPress={() => setStrengthTest('hand_release_pushups')} theme={THEMES.strength} />
             </View>
 
-            <LabeledSlider label="Reps" valueLabel={`${pushupReps} reps`} theme={THEMES.strength} input={<BoundNumberField value={pushupReps} onChange={(v) => setPushupReps(Math.round(v))} min={0} max={100} step={1} />} markers={strengthMarkers} markerMin={0} markerMax={100} currentValue={pushupReps}>
+            <LabeledSlider label="Reps" valueLabel={`${pushupReps} reps`} theme={THEMES.strength} input={<BoundNumberField value={pushupReps} onChange={(v) => setPushupReps(Math.round(v))} min={0} max={100} step={1} />} markers={strengthMarkers} markerMin={0} markerMax={100}>
               <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={pushupReps} onValueChange={(v) => setPushupReps(Math.round(v as number))} minimumValue={0} maximumValue={100} step={1} />
             </LabeledSlider>
           </View>
@@ -716,11 +718,11 @@ export default function CalculatorScreen() {
             </View>
 
             {coreTest === 'plank' ? (
-              <LabeledSlider label="Time" valueLabel={formatMMSS(plankSec)} theme={THEMES.core} input={<BoundTimeField valueSec={plankSec} onChange={setPlankSec} minSec={0} maxSec={300} />} markers={coreMarkers} markerMin={0} markerMax={300} currentValue={plankSec}>
+              <LabeledSlider label="Time" valueLabel={formatMMSS(plankSec)} theme={THEMES.core} input={<BoundTimeField valueSec={plankSec} onChange={setPlankSec} minSec={0} maxSec={300} />} markers={coreMarkers} markerMin={0} markerMax={300}>
                 <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={plankSec} onValueChange={(v) => setPlankSec(Math.round(v as number))} minimumValue={0} maximumValue={300} step={1} />
               </LabeledSlider>
             ) : (
-              <LabeledSlider label="Reps" valueLabel={`${coreReps} reps`} theme={THEMES.core} input={<BoundNumberField value={coreReps} onChange={(v) => setCoreReps(Math.round(v))} min={0} max={100} step={1} />} markers={coreMarkers} markerMin={0} markerMax={100} currentValue={coreReps}>
+              <LabeledSlider label="Reps" valueLabel={`${coreReps} reps`} theme={THEMES.core} input={<BoundNumberField value={coreReps} onChange={(v) => setCoreReps(Math.round(v))} min={0} max={100} step={1} />} markers={coreMarkers} markerMin={0} markerMax={100}>
                 <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={coreReps} onValueChange={(v) => setCoreReps(Math.round(v as number))} minimumValue={0} maximumValue={100} step={1} />
               </LabeledSlider>
             )}
@@ -736,19 +738,19 @@ export default function CalculatorScreen() {
             </View>
 
             {cardioTest === 'run_2mile' && (
-              <LabeledSlider label="2-mile time" valueLabel={formatMMSS(runSec)} theme={THEMES.cardio} input={<BoundTimeField valueSec={runSec} onChange={setRunSec} minSec={8 * 60} maxSec={30 * 60} />} markers={runMarkers} markerMin={8 * 60} markerMax={30 * 60} currentValue={runSec}>
+              <LabeledSlider label="2-mile time" valueLabel={formatMMSS(runSec)} theme={THEMES.cardio} input={<BoundTimeField valueSec={runSec} onChange={setRunSec} minSec={8 * 60} maxSec={30 * 60} />} markers={runMarkers} markerMin={8 * 60} markerMax={30 * 60}>
                 <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={runSec} onValueChange={(v) => setRunSec(Math.round(v as number))} minimumValue={8 * 60} maximumValue={30 * 60} step={1} />
               </LabeledSlider>
             )}
 
             {cardioTest === 'walk_2k' && (
-              <LabeledSlider label="2K walk maximum time" valueLabel={`${formatMMSS(walkSec)} • pass/fail only`} theme={THEMES.cardio} input={<BoundTimeField valueSec={walkSec} onChange={setWalkSec} minSec={10 * 60} maxSec={30 * 60} />} markers={walkMarkers} markerMin={10 * 60} markerMax={30 * 60} currentValue={walkSec}>
+              <LabeledSlider label="2K walk maximum time" valueLabel={`${formatMMSS(walkSec)} • pass/fail only`} theme={THEMES.cardio} input={<BoundTimeField valueSec={walkSec} onChange={setWalkSec} minSec={10 * 60} maxSec={30 * 60} />} markers={walkMarkers} markerMin={10 * 60} markerMax={30 * 60}>
                 <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={walkSec} onValueChange={(v) => setWalkSec(Math.round(v as number))} minimumValue={10 * 60} maximumValue={30 * 60} step={1} />
               </LabeledSlider>
             )}
 
             {cardioTest === 'hamr_20m' && (
-              <LabeledSlider label="HAMR shuttles" valueLabel={`${hamrShuttles} shuttles`} theme={THEMES.cardio} input={<BoundNumberField value={hamrShuttles} onChange={(v) => setHamrShuttles(Math.round(v))} min={0} max={120} step={1} />} markers={hamrMarkers} markerMin={0} markerMax={120} currentValue={hamrShuttles}>
+              <LabeledSlider label="HAMR shuttles" valueLabel={`${hamrShuttles} shuttles`} theme={THEMES.cardio} input={<BoundNumberField value={hamrShuttles} onChange={(v) => setHamrShuttles(Math.round(v))} min={0} max={120} step={1} />} markers={hamrMarkers} markerMin={0} markerMax={120}>
                 <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={hamrShuttles} onValueChange={(v) => setHamrShuttles(Math.round(v as number))} minimumValue={0} maximumValue={120} step={1} />
               </LabeledSlider>
             )}
