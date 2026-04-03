@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "FitFlight",
+    "slug": "fitflight",
+    "scheme": "fitflight",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "web": {
+      "bundler": "metro",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "edgeToEdgeEnabled": true
+    },
+    "plugins": ["expo-router"],
+    "experiments": {
+      "baseUrl": "/FitFlight",
+      "typedRoutes": true
+    }
+  }
+}
