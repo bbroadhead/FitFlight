@@ -3,15 +3,21 @@ import { View, Text, Pressable, ScrollView, Alert, Platform } from 'react-native
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { ChevronLeft, Download, FileSpreadsheet, FileText, Users, Trophy, Activity, TrendingUp, Calendar, BarChart3, Dumbbell } from 'lucide-react-native';
+import { ChevronLeft, FileSpreadsheet, FileText, Users, Activity, TrendingUp, Calendar, BarChart3, Dumbbell } from 'lucide-react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Animated, { FadeInDown, useAnimatedStyle, useSharedValue, withSpring, withDelay } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import * as FileSystem from 'expo-file-system';
+import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import Svg, { Circle } from 'react-native-svg';
+import { format, startOfWeek, addDays } from 'date-fns';
 import { useMemberStore, useAuthStore, getDisplayName, type Flight, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
+import ExcelJS from 'exceljs';
 
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
+const WEEKLY_ATTENDANCE_TARGET = 5;
 
 // Workout type colors
 const WORKOUT_TYPE_COLORS: Record<WorkoutType, string> = {
@@ -26,6 +32,23 @@ const WORKOUT_TYPE_COLORS: Record<WorkoutType, string> = {
   Flexibility: '#14B8A6',
   Other: '#6B7280',
 };
+
+function RunningIcon({ size, color }: { size: number; color: string }) {
+  return <MaterialCommunityIcons name="run-fast" size={size} color={color} />;
+}
+
+async function downloadWebFile(filename: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+type OverviewCardKey = 'members' | 'workouts' | 'sessions' | 'pfra';
 
 function WorkoutTypeBar({
   type,
@@ -74,18 +97,47 @@ function WorkoutTypeBar({
 
 export default function AnalyticsScreen() {
   const router = useRouter();
-  const members = useMemberStore(s => s.members);
-  const ptSessions = useMemberStore(s => s.ptSessions);
+  const allMembers = useMemberStore(s => s.members);
+  const allPtSessions = useMemberStore(s => s.ptSessions);
   const user = useAuthStore(s => s.user);
   const [isExporting, setIsExporting] = useState(false);
+  const [expandedOverviewCard, setExpandedOverviewCard] = useState<OverviewCardKey | null>(null);
+  const userSquadron = user?.squadron ?? 'Hawks';
+  const members = useMemo(
+    () => allMembers.filter((member) => member.squadron === userSquadron),
+    [allMembers, userSquadron]
+  );
+  const ptSessions = useMemo(
+    () => allPtSessions.filter((session) => (session.squadron ?? 'Hawks') === userSquadron),
+    [allPtSessions, userSquadron]
+  );
 
   // Calculate analytics
   const analytics = useMemo(() => {
+    const currentWeekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
+    const currentWeekDates = new Set(
+      Array.from({ length: 7 }, (_, index) => format(addDays(currentWeekStart, index), 'yyyy-MM-dd'))
+    );
     const totalMembers = members.length;
-    const totalPTLs = members.filter(m => m.accountType === 'ptl').length;
+    const totalPFLs = members.filter(m => m.accountType === 'ptl').length;
     const totalSessions = ptSessions.length;
     const totalMinutes = members.reduce((acc, m) => acc + m.exerciseMinutes, 0);
     const totalMiles = members.reduce((acc, m) => acc + m.distanceRun, 0);
+    const currentWeekSessions = ptSessions.filter((session) => currentWeekDates.has(session.date));
+    const totalAttendanceMarksThisWeek = currentWeekSessions.reduce((acc, session) => acc + session.attendees.length, 0);
+    const membersMeetingWeeklyTarget = members.filter((member) => {
+      const weeklyAttendance = currentWeekSessions.reduce((count, session) => {
+        return session.attendees.includes(member.id) ? count + 1 : count;
+      }, 0);
+
+      return weeklyAttendance >= WEEKLY_ATTENDANCE_TARGET;
+    }).length;
+    const weeklyCompliancePercent = totalMembers > 0
+      ? Math.round((membersMeetingWeeklyTarget / totalMembers) * 100)
+      : 0;
+    const averageWeeklyAttendance = totalMembers > 0
+      ? totalAttendanceMarksThisWeek / totalMembers
+      : 0;
 
     // Flight breakdown
     const flightStats = FLIGHTS.map(flight => {
@@ -105,18 +157,9 @@ export default function AnalyticsScreen() {
       };
     });
 
-    // Top performers
-      const topPerformers = [...members]
-      .map(m => ({
-        ...m,
-        score: m.exerciseMinutes + Math.round(m.distanceRun * 10) + m.workouts.length * 25,
-      }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 5);
-
     // Fitness assessment stats
     const membersWithFA = members.filter(m => m.fitnessAssessments.length > 0);
-    const avgFAScore = membersWithFA.length > 0
+    const avgPFRAScore = membersWithFA.length > 0
       ? membersWithFA.reduce((acc, m) => {
           const latest = m.fitnessAssessments[m.fitnessAssessments.length - 1];
           return acc + (latest?.overallScore ?? 0);
@@ -144,82 +187,287 @@ export default function AnalyticsScreen() {
       .filter(item => item.count > 0)
       .sort((a, b) => b.count - a.count);
 
+    const memberWeeklySummaries = members
+      .map((member) => {
+        const weeklyAttendance = currentWeekSessions.reduce((count, session) => (
+          session.attendees.includes(member.id) ? count + 1 : count
+        ), 0);
+        const weeklyWorkouts = member.workouts.filter((workout) => currentWeekDates.has(workout.date));
+        const weeklyMinutes = weeklyWorkouts.reduce((count, workout) => count + workout.duration, 0);
+        const weeklyMiles = weeklyWorkouts.reduce((count, workout) => count + (workout.distance ?? 0), 0);
+
+        return {
+          id: member.id,
+          displayName: getDisplayName(member),
+          firstName: member.firstName,
+          lastName: member.lastName,
+          flight: member.flight,
+          attendance: weeklyAttendance,
+          workouts: weeklyWorkouts.length,
+          minutes: weeklyMinutes,
+          miles: Number(weeklyMiles.toFixed(1)),
+        };
+      })
+      .sort((left, right) =>
+        left.lastName.localeCompare(right.lastName) ||
+        left.firstName.localeCompare(right.firstName)
+      );
+
+    const workoutsByType = WORKOUT_TYPES
+      .map((type) => ({
+        type,
+        count: workoutTypeCounts[type],
+      }))
+      .filter((item) => item.count > 0)
+      .sort((left, right) => right.count - left.count);
+
+    const longestWorkout = members
+      .flatMap((member) => member.workouts.map((workout) => ({ member, workout })))
+      .sort((left, right) => right.workout.duration - left.workout.duration)[0] ?? null;
+
+    const pfraTimeline = Array.from({ length: 3 }, (_, index) => {
+      const date = new Date();
+      date.setMonth(date.getMonth() - (2 - index));
+      const year = date.getFullYear();
+      const month = date.getMonth();
+      const monthLabel = date.toLocaleString('en-US', { month: 'short' });
+
+      const monthScores = members.flatMap((member) =>
+        member.fitnessAssessments
+          .filter((assessment) => {
+            const assessmentDate = new Date(assessment.date);
+            return assessmentDate.getFullYear() === year && assessmentDate.getMonth() === month;
+          })
+          .map((assessment) => assessment.overallScore)
+      );
+
+      const average = monthScores.length > 0
+        ? monthScores.reduce((sum, score) => sum + score, 0) / monthScores.length
+        : 0;
+
+      return {
+        label: monthLabel,
+        average: Math.round(average * 10) / 10,
+        count: monthScores.length,
+      };
+    });
+
+    const maxPFRAAverage = Math.max(...pfraTimeline.map((entry) => entry.average), 100);
+
     return {
       totalMembers,
-      totalPTLs,
+      totalPFLs,
       totalSessions,
       totalMinutes,
       totalMiles,
+      totalAttendanceMarksThisWeek,
+      membersMeetingWeeklyTarget,
+      weeklyCompliancePercent,
+      averageWeeklyAttendance: Math.round(averageWeeklyAttendance * 10) / 10,
+      memberWeeklySummaries,
+      workoutsByType,
+      longestWorkout,
+      pfraTimeline,
+      maxPFRAAverage,
       flightStats,
-      topPerformers,
-      avgFAScore: Math.round(avgFAScore * 10) / 10,
+      avgPFRAScore: Math.round(avgPFRAScore * 10) / 10,
       membersWithFA: membersWithFA.length,
       workoutTypeBreakdown,
       totalWorkouts,
     };
   }, [members, ptSessions]);
 
-  const generateCSV = () => {
-    let csv = 'Rank,First Name,Last Name,Flight,Account Type,Exercise Minutes,Distance (mi),Workouts,PT Sessions Required,Latest FA Score\n';
+  const buildPdfHtml = () => {
+    const generatedAt = new Date().toLocaleString();
+    const flightRows = analytics.flightStats.map((flight) => `
+      <tr>
+        <td>${flight.flight}</td>
+        <td>${flight.memberCount}</td>
+        <td>${flight.sessions}</td>
+        <td>${flight.avgAttendance}</td>
+        <td>${flight.totalMinutes}</td>
+        <td>${flight.totalMiles.toFixed(1)}</td>
+      </tr>
+    `).join('');
 
-    members.forEach(m => {
-      const latestFA = m.fitnessAssessments[m.fitnessAssessments.length - 1];
-      csv += `${m.rank},${m.firstName},${m.lastName},${m.flight},${m.accountType},${m.exerciseMinutes},${m.distanceRun},${m.workouts.length},${m.requiredPTSessionsPerWeek},${latestFA?.overallScore ?? 'N/A'}\n`;
-    });
-
-    return csv;
+    return `
+      <html>
+        <head>
+          <style>
+            @page { size: letter; margin: 0.5in; }
+            * {
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
+            }
+            body { font-family: Arial, sans-serif; background: #0A1628; color: #fff; padding: 24px; }
+            h1, h2 { margin: 0 0 12px; }
+            .subtitle { color: #c0c0c0; margin-bottom: 24px; }
+            .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 24px; }
+            .card { background: #12243f; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 16px; }
+            .label { color: #c0c0c0; font-size: 12px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.08em; }
+            .value { font-size: 28px; font-weight: bold; }
+            table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+            th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+            th { color: #9fb3d1; font-size: 12px; text-transform: uppercase; }
+            .section { margin-top: 24px; }
+            .shell {
+              background: linear-gradient(135deg, #0A1628 0%, #001F5C 50%, #0A1628 100%);
+              border-radius: 24px;
+              padding: 24px;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="shell">
+            <h1>${userSquadron} Squadron Analytics</h1>
+            <div class="subtitle">Generated ${generatedAt}${user ? ` by ${getDisplayName(user)}` : ''}</div>
+            <div class="grid">
+              <div class="card"><div class="label">Members</div><div class="value">${analytics.totalMembers}</div></div>
+              <div class="card"><div class="label">Workouts</div><div class="value">${analytics.totalWorkouts}</div></div>
+              <div class="card"><div class="label">PT Sessions</div><div class="value">${analytics.totalSessions}</div></div>
+              <div class="card"><div class="label">Avg PFRA</div><div class="value">${analytics.avgPFRAScore}</div></div>
+              <div class="card"><div class="label">Attendance This Week</div><div class="value">${analytics.totalAttendanceMarksThisWeek}</div></div>
+              <div class="card"><div class="label">Members at 5/5</div><div class="value">${analytics.membersMeetingWeeklyTarget}/${analytics.totalMembers} (${analytics.weeklyCompliancePercent}%)</div></div>
+            </div>
+            <div class="section">
+              <h2>Flight Breakdown</h2>
+              <table>
+                <thead>
+                  <tr><th>Flight</th><th>Members</th><th>Sessions</th><th>Avg Attend</th><th>Minutes</th><th>Miles</th></tr>
+                </thead>
+                <tbody>${flightRows}</tbody>
+              </table>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
   };
 
-  const generateReport = () => {
-    const date = new Date().toLocaleDateString();
-    let report = `SQUADRON PT ANALYTICS REPORT\n`;
-    report += `Generated: ${date}\n`;
-    report += `Generated by: ${user ? getDisplayName(user) : 'Unknown'}\n\n`;
+  const buildWorkbook = async () => {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'FitFlight';
+    workbook.created = new Date();
 
-    report += `=== SQUADRON OVERVIEW ===\n`;
-    report += `Total Members: ${analytics.totalMembers}\n`;
-    report += `Total PTLs: ${analytics.totalPTLs}\n`;
-    report += `Total PT Sessions: ${analytics.totalSessions}\n`;
-    report += `Total Exercise Minutes: ${analytics.totalMinutes}\n`;
-    report += `Total Miles Run: ${analytics.totalMiles.toFixed(1)}\n`;
-    report += `Total Workouts Logged: ${analytics.totalWorkouts}\n`;
-    report += `Average FA Score: ${analytics.avgFAScore}\n`;
-    report += `Members with FA: ${analytics.membersWithFA}/${analytics.totalMembers}\n\n`;
+    const overviewSheet = workbook.addWorksheet('Overview');
+    overviewSheet.columns = [
+      { header: 'Metric', key: 'metric', width: 32 },
+      { header: 'Value', key: 'value', width: 22 },
+    ];
+    overviewSheet.addRows([
+      { metric: 'Squadron', value: userSquadron },
+      { metric: 'Total Members', value: analytics.totalMembers },
+      { metric: 'Total PFLs', value: analytics.totalPFLs },
+      { metric: 'Total Workouts', value: analytics.totalWorkouts },
+      { metric: 'Total PT Sessions', value: analytics.totalSessions },
+      { metric: 'Total Minutes', value: analytics.totalMinutes },
+      { metric: 'Total Miles', value: analytics.totalMiles },
+      { metric: 'Attendance Marks This Week', value: analytics.totalAttendanceMarksThisWeek },
+      { metric: 'Members at 5/5 This Week', value: `${analytics.membersMeetingWeeklyTarget}/${analytics.totalMembers}` },
+      { metric: 'Weekly Compliance %', value: analytics.weeklyCompliancePercent },
+      { metric: 'Average PFRA', value: analytics.avgPFRAScore },
+      { metric: 'Members With PFRA', value: analytics.membersWithFA },
+    ]);
 
-    report += `=== FLIGHT BREAKDOWN ===\n`;
-    analytics.flightStats.forEach(f => {
-      report += `\n${f.flight} Flight:\n`;
-      report += `  Members: ${f.memberCount}\n`;
-      report += `  Total Minutes: ${f.totalMinutes}\n`;
-      report += `  Total Miles: ${f.totalMiles.toFixed(1)}\n`;
-      report += `  Sessions: ${f.sessions}\n`;
-      report += `  Avg Attendance: ${f.avgAttendance}\n`;
+    const membersSheet = workbook.addWorksheet('Members');
+    membersSheet.columns = [
+      { header: 'Rank', key: 'rank', width: 12 },
+      { header: 'First Name', key: 'firstName', width: 18 },
+      { header: 'Last Name', key: 'lastName', width: 22 },
+      { header: 'Flight', key: 'flight', width: 12 },
+      { header: 'Role', key: 'role', width: 18 },
+      { header: 'Minutes', key: 'minutes', width: 12 },
+      { header: 'Miles', key: 'miles', width: 12 },
+      { header: 'Workouts', key: 'workouts', width: 12 },
+      { header: 'Attendance This Week', key: 'attendance', width: 18 },
+      { header: 'Latest PFRA', key: 'pfra', width: 14 },
+    ];
+    members.forEach((member) => {
+      const latestPFRA = member.fitnessAssessments[member.fitnessAssessments.length - 1];
+      const weeklySummary = analytics.memberWeeklySummaries.find((item) => item.id === member.id);
+      membersSheet.addRow({
+        rank: member.rank,
+        firstName: member.firstName,
+        lastName: member.lastName,
+        flight: member.flight,
+        role: member.accountType === 'ptl' ? 'PFL' : member.accountType,
+        minutes: member.exerciseMinutes,
+        miles: member.distanceRun,
+        workouts: member.workouts.length,
+        attendance: weeklySummary?.attendance ?? 0,
+        pfra: latestPFRA?.overallScore ?? '',
+      });
     });
 
-    report += `\n=== TOP 5 PERFORMERS ===\n`;
-    analytics.topPerformers.forEach((p, i) => {
-      report += `${i + 1}. ${getDisplayName(p)} - ${p.score} pts (${p.flight})\n`;
+    const flightsSheet = workbook.addWorksheet('Flights');
+    flightsSheet.columns = [
+      { header: 'Flight', key: 'flight', width: 12 },
+      { header: 'Members', key: 'memberCount', width: 12 },
+      { header: 'Sessions', key: 'sessions', width: 12 },
+      { header: 'Avg Attendance', key: 'avgAttendance', width: 16 },
+      { header: 'Minutes', key: 'totalMinutes', width: 12 },
+      { header: 'Miles', key: 'totalMiles', width: 12 },
+    ];
+    analytics.flightStats.forEach((flight) => flightsSheet.addRow(flight));
+
+    const workoutsSheet = workbook.addWorksheet('Workout Details');
+    workoutsSheet.columns = [
+      { header: 'Workout Type', key: 'type', width: 18 },
+      { header: 'Count', key: 'count', width: 12 },
+      { header: 'Share %', key: 'share', width: 12 },
+    ];
+    analytics.workoutTypeBreakdown.forEach((item) => {
+      workoutsSheet.addRow({
+        type: item.type,
+        count: item.count,
+        share: Number(item.percentage.toFixed(1)),
+      });
     });
 
-    return report;
+    const pfraSheet = workbook.addWorksheet('PFRA Trend');
+    pfraSheet.columns = [
+      { header: 'Month', key: 'label', width: 12 },
+      { header: 'Avg PFRA', key: 'average', width: 14 },
+      { header: 'Entries', key: 'count', width: 10 },
+    ];
+    analytics.pfraTimeline.forEach((entry) => pfraSheet.addRow(entry));
+
+    [overviewSheet, membersSheet, flightsSheet, workoutsSheet, pfraSheet].forEach((sheet) => {
+      sheet.getRow(1).font = { bold: true };
+      sheet.views = [{ state: 'frozen', ySplit: 1 }];
+    });
+
+    return workbook.xlsx.writeBuffer();
   };
 
-  const handleExportCSV = async () => {
+  const handleExportExcel = async () => {
     try {
       setIsExporting(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-      const csv = generateCSV();
-      const filename = `squadron_data_${new Date().toISOString().split('T')[0]}.csv`;
-      const filePath = `${FileSystem.documentDirectory}${filename}`;
+      const buffer = await buildWorkbook();
+      const filename = `squadron_analytics_${new Date().toISOString().split('T')[0]}.xlsx`;
 
-      await FileSystem.writeAsStringAsync(filePath, csv);
-
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(filePath, {
-          mimeType: 'text/csv',
-          dialogTitle: 'Export Squadron Data',
+      if (Platform.OS === 'web') {
+        await downloadWebFile(
+          filename,
+          new Blob([buffer], {
+            type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          })
+        );
+      } else {
+        const base64 = Buffer.from(buffer).toString('base64');
+        const filePath = `${FileSystem.documentDirectory}${filename}`;
+        await FileSystem.writeAsStringAsync(filePath, base64, {
+          encoding: FileSystem.EncodingType.Base64,
         });
+
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(filePath, {
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            dialogTitle: 'Export Squadron Analytics Excel',
+          });
+        }
       }
     } catch (error) {
       console.error('Export error:', error);
@@ -232,24 +480,42 @@ export default function AnalyticsScreen() {
     try {
       setIsExporting(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      const html = buildPdfHtml();
+      const filename = `squadron_analytics_${new Date().toISOString().split('T')[0]}.pdf`;
 
-      const report = generateReport();
-      const filename = `squadron_report_${new Date().toISOString().split('T')[0]}.txt`;
-      const filePath = `${FileSystem.documentDirectory}${filename}`;
-
-      await FileSystem.writeAsStringAsync(filePath, report);
-
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(filePath, {
-          mimeType: 'text/plain',
-          dialogTitle: 'Export Squadron Report',
+      if (Platform.OS === 'web') {
+        const printWindow = window.open('', '_blank');
+        if (printWindow) {
+          printWindow.document.write(html);
+          printWindow.document.close();
+          printWindow.focus();
+          setTimeout(() => printWindow.print(), 300);
+        }
+      } else {
+        const file = await Print.printToFileAsync({ html, base64: false });
+        const targetPath = `${FileSystem.documentDirectory}${filename}`;
+        await FileSystem.copyAsync({
+          from: file.uri,
+          to: targetPath,
         });
+
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(targetPath, {
+            mimeType: 'application/pdf',
+            dialogTitle: 'Export Squadron Analytics PDF',
+          });
+        }
       }
     } catch (error) {
       console.error('Export error:', error);
     } finally {
       setIsExporting(false);
     }
+  };
+
+  const toggleOverviewCard = (card: OverviewCardKey) => {
+    Haptics.selectionAsync();
+    setExpandedOverviewCard((current) => (current === card ? null : card));
   };
 
   return (
@@ -300,10 +566,13 @@ export default function AnalyticsScreen() {
               )}
             >
               <FileText size={20} color="#A855F7" />
-              <Text className="text-purple-400 font-semibold ml-2">Export Report</Text>
+              <View className="ml-2">
+                <Text className="text-purple-400 font-semibold">Export PDF</Text>
+                <Text className="text-purple-300/80 text-[11px]">Summaries</Text>
+              </View>
             </Pressable>
             <Pressable
-              onPress={handleExportCSV}
+              onPress={handleExportExcel}
               disabled={isExporting}
               className={cn(
                 "flex-1 flex-row items-center justify-center bg-af-accent/20 border border-af-accent/50 rounded-xl p-4 ml-2",
@@ -311,7 +580,10 @@ export default function AnalyticsScreen() {
               )}
             >
               <FileSpreadsheet size={20} color="#4A90D9" />
-              <Text className="text-af-accent font-semibold ml-2">Export CSV</Text>
+              <View className="ml-2">
+                <Text className="text-af-accent font-semibold">Export Excel</Text>
+                <Text className="text-af-accent/80 text-[11px]">Detailed Report</Text>
+              </View>
             </Pressable>
           </Animated.View>
 
@@ -321,36 +593,140 @@ export default function AnalyticsScreen() {
             className="mt-4 p-4 bg-white/5 rounded-2xl border border-white/10"
           >
             <Text className="text-white font-semibold text-lg mb-4">Squadron Overview</Text>
+            <Text className="text-af-silver text-xs mb-3">Tap to expand for additional details</Text>
             <View className="flex-row flex-wrap">
               <View className="w-1/2 p-2">
-                <View className="bg-white/5 rounded-xl p-3">
+                <Pressable onPress={() => toggleOverviewCard('members')} className="bg-white/5 rounded-xl p-3 border border-transparent active:border-white/10">
                   <Users size={20} color="#4A90D9" />
                   <Text className="text-white font-bold text-2xl mt-2">{analytics.totalMembers}</Text>
                   <Text className="text-af-silver text-xs">Total Members</Text>
-                </View>
+                </Pressable>
               </View>
               <View className="w-1/2 p-2">
-                <View className="bg-white/5 rounded-xl p-3">
+                <Pressable onPress={() => toggleOverviewCard('workouts')} className="bg-white/5 rounded-xl p-3 border border-transparent active:border-white/10">
                   <Dumbbell size={20} color="#A855F7" />
                   <Text className="text-white font-bold text-2xl mt-2">{analytics.totalWorkouts}</Text>
                   <Text className="text-af-silver text-xs">Total Workouts</Text>
-                </View>
+                </Pressable>
               </View>
               <View className="w-1/2 p-2">
-                <View className="bg-white/5 rounded-xl p-3">
+                <Pressable onPress={() => toggleOverviewCard('sessions')} className="bg-white/5 rounded-xl p-3 border border-transparent active:border-white/10">
                   <Calendar size={20} color="#22C55E" />
                   <Text className="text-white font-bold text-2xl mt-2">{analytics.totalSessions}</Text>
                   <Text className="text-af-silver text-xs">PT Sessions</Text>
-                </View>
+                </Pressable>
               </View>
               <View className="w-1/2 p-2">
-                <View className="bg-white/5 rounded-xl p-3">
+                <Pressable onPress={() => toggleOverviewCard('pfra')} className="bg-white/5 rounded-xl p-3 border border-transparent active:border-white/10">
                   <TrendingUp size={20} color="#F59E0B" />
-                  <Text className="text-white font-bold text-2xl mt-2">{analytics.avgFAScore}</Text>
-                  <Text className="text-af-silver text-xs">Avg FA Score</Text>
-                </View>
+                  <Text className="text-white font-bold text-2xl mt-2">{analytics.avgPFRAScore}</Text>
+                  <Text className="text-af-silver text-xs">Avg PFRA Score</Text>
+                </Pressable>
               </View>
             </View>
+            <View className="mt-3 pt-3 border-t border-white/10 flex-row items-center justify-between">
+              <Text className="text-af-silver text-xs">Attendance this week</Text>
+              <Text className="text-white font-semibold text-sm">
+                {analytics.totalAttendanceMarksThisWeek} check-ins
+              </Text>
+            </View>
+            <View className="mt-2 flex-row items-center justify-between">
+              <Text className="text-af-silver text-xs">Members at 5/5</Text>
+                <Text className="text-white font-semibold text-sm">
+                  {analytics.membersMeetingWeeklyTarget}/{analytics.totalMembers} ({analytics.weeklyCompliancePercent}%)
+                </Text>
+            </View>
+            {expandedOverviewCard === 'members' && (
+              <View className="mt-4 pt-4 border-t border-white/10">
+                <Text className="text-white font-semibold mb-3">Squadron Members This Week</Text>
+                {analytics.memberWeeklySummaries.map((member) => (
+                  <View key={member.id} className="flex-row items-center justify-between py-2 border-b border-white/5">
+                    <View className="flex-1 pr-3">
+                      <Text className="text-white font-medium">{member.displayName}</Text>
+                      <Text className="text-af-silver text-xs">{member.flight} Flight</Text>
+                    </View>
+                    <View className="items-end">
+                      <Text className="text-white text-sm">{member.attendance}/5 attendance</Text>
+                      <Text className="text-af-silver text-xs">
+                        {member.workouts} workouts, {member.minutes} min, {member.miles.toFixed(1)} mi
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
+            {expandedOverviewCard === 'workouts' && (
+              <View className="mt-4 pt-4 border-t border-white/10">
+                <Text className="text-white font-semibold mb-3">Workout Details</Text>
+                <View className="flex-row justify-between mb-3">
+                  <View>
+                    <Text className="text-af-silver text-xs">Workout Types Tracked</Text>
+                    <Text className="text-white font-semibold">{analytics.workoutsByType.length}</Text>
+                  </View>
+                  <View className="items-end">
+                    <Text className="text-af-silver text-xs">Longest Logged Workout</Text>
+                      <Text className="text-white font-semibold">
+                        {analytics.longestWorkout ? `${analytics.longestWorkout.workout.duration} min` : 'None yet'}
+                      </Text>
+                  </View>
+                </View>
+                {analytics.workoutsByType.map((item) => (
+                  <View key={item.type} className="flex-row items-center justify-between py-2 border-b border-white/5">
+                    <Text className="text-white">{item.type}</Text>
+                    <Text className="text-af-silver">{item.count}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+            {expandedOverviewCard === 'sessions' && (
+              <View className="mt-4 pt-4 border-t border-white/10">
+                <Text className="text-white font-semibold mb-3">PT Session Details</Text>
+                <View className="flex-row justify-between mb-3">
+                  <View>
+                    <Text className="text-af-silver text-xs">Attendance Marks This Week</Text>
+                    <Text className="text-white font-semibold">{analytics.totalAttendanceMarksThisWeek}</Text>
+                  </View>
+                  <View className="items-end">
+                    <Text className="text-af-silver text-xs">Avg Attendance Per Session</Text>
+                    <Text className="text-white font-semibold">
+                      {analytics.totalSessions > 0 ? (analytics.totalAttendanceMarksThisWeek / Math.max(analytics.totalSessions, 1)).toFixed(1) : '0.0'}
+                    </Text>
+                  </View>
+                </View>
+                {analytics.flightStats.map((flight) => (
+                  <View key={flight.flight} className="flex-row items-center justify-between py-2 border-b border-white/5">
+                    <View>
+                      <Text className="text-white">{flight.flight}</Text>
+                      <Text className="text-af-silver text-xs">{flight.sessions} sessions</Text>
+                    </View>
+                    <Text className="text-white font-semibold">{flight.avgAttendance} avg attend</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+            {expandedOverviewCard === 'pfra' && (
+              <View className="mt-4 pt-4 border-t border-white/10">
+                <Text className="text-white font-semibold mb-3">PFRA Trend: Last 3 Months</Text>
+                <View className="flex-row items-end justify-between h-36">
+                  {analytics.pfraTimeline.map((entry) => {
+                    const heightPercent = analytics.maxPFRAAverage > 0 ? (entry.average / analytics.maxPFRAAverage) * 100 : 0;
+                    return (
+                      <View key={entry.label} className="flex-1 items-center">
+                        <Text className="text-af-silver text-[11px] mb-2">{entry.average ? entry.average.toFixed(1) : '--'}</Text>
+                        <View className="h-24 w-12 justify-end">
+                          <View
+                            className="w-12 rounded-t-xl bg-af-accent/80 border border-af-accent/30"
+                            style={{ height: `${Math.max(heightPercent, entry.count > 0 ? 12 : 0)}%` }}
+                          />
+                        </View>
+                        <Text className="text-white text-xs font-medium mt-2">{entry.label}</Text>
+                        <Text className="text-af-silver text-[11px]">{entry.count} entries</Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              </View>
+            )}
           </Animated.View>
 
           {/* Activity Summary */}
@@ -377,18 +753,64 @@ export default function AnalyticsScreen() {
               </View>
               <View className="w-px bg-white/10" />
               <View className="items-center flex-1">
-                <Text className="text-white font-bold text-xl">
+                <RunningIcon size={20} color="#22C55E" />
+                <Text className="text-white font-bold text-xl mt-1">
                   {analytics.totalMiles.toFixed(0)}
                 </Text>
                 <Text className="text-af-silver text-xs">Miles</Text>
               </View>
               <View className="w-px bg-white/10" />
               <View className="items-center flex-1">
-                <Text className="text-white font-bold text-xl">
-                  {analytics.totalWorkouts}
-                </Text>
-                <Text className="text-af-silver text-xs">Workouts</Text>
+                {(() => {
+                  const circleSize = 54;
+                  const strokeWidth = 6;
+                  const radius = (circleSize - strokeWidth) / 2;
+                  const circumference = 2 * Math.PI * radius;
+                  const progress = analytics.weeklyCompliancePercent / 100;
+                  const dashOffset = circumference * (1 - progress);
+
+                  return (
+                    <View className="items-center -mt-2">
+                      <View style={{ width: circleSize, height: circleSize }} className="items-center justify-center">
+                        <Svg width={circleSize} height={circleSize} style={{ position: 'absolute' }}>
+                          <Circle
+                            cx={circleSize / 2}
+                            cy={circleSize / 2}
+                            r={radius}
+                            stroke="rgba(255,255,255,0.12)"
+                            strokeWidth={strokeWidth}
+                            fill="none"
+                          />
+                          <Circle
+                            cx={circleSize / 2}
+                            cy={circleSize / 2}
+                            r={radius}
+                            stroke={analytics.weeklyCompliancePercent >= 50 ? '#22C55E' : '#4A90D9'}
+                            strokeWidth={strokeWidth}
+                            fill="none"
+                            strokeDasharray={`${circumference} ${circumference}`}
+                            strokeDashoffset={dashOffset}
+                            strokeLinecap="round"
+                            rotation={-90}
+                            originX={circleSize / 2}
+                            originY={circleSize / 2}
+                          />
+                        </Svg>
+                        <Text className="text-white font-bold text-[11px]">
+                          {analytics.weeklyCompliancePercent}%
+                        </Text>
+                      </View>
+                      <Text className="text-af-silver text-xs mt-1 text-center">At 5/5</Text>
+                    </View>
+                  );
+                })()}
               </View>
+            </View>
+            <View className="mt-3 pt-3 border-t border-white/10 flex-row items-center justify-between">
+              <Text className="text-af-silver text-xs">Avg attendance per member this week</Text>
+              <Text className="text-white font-semibold text-sm">
+                {analytics.averageWeeklyAttendance}/{WEEKLY_ATTENDANCE_TARGET}
+              </Text>
             </View>
           </Animated.View>
 
@@ -451,35 +873,6 @@ export default function AnalyticsScreen() {
                     <Text className="text-white font-semibold">{flight.avgAttendance}</Text>
                   </View>
                 </View>
-              </View>
-            ))}
-          </Animated.View>
-
-          {/* Top Performers */}
-          <Animated.View
-            entering={FadeInDown.delay(350).springify()}
-            className="mt-4"
-          >
-            <Text className="text-white font-semibold text-lg mb-3">Top 5 Performers</Text>
-            {analytics.topPerformers.map((performer, index) => (
-              <View
-                key={performer.id}
-                className={cn(
-                  "flex-row items-center p-3 rounded-xl mb-2",
-                  index === 0 ? "bg-af-gold/20 border border-af-gold/50" :
-                  index === 1 ? "bg-af-silver/20 border border-af-silver/50" :
-                  index === 2 ? "bg-amber-900/20 border border-amber-700/50" :
-                  "bg-white/5 border border-white/10"
-                )}
-              >
-                <View className="w-8 h-8 bg-white/10 rounded-full items-center justify-center mr-3">
-                  <Text className="text-white font-bold">{index + 1}</Text>
-                </View>
-                <View className="flex-1">
-                  <Text className="text-white font-semibold">{getDisplayName(performer)}</Text>
-                  <Text className="text-af-silver text-xs">{performer.flight} Flight</Text>
-                </View>
-                <Text className="text-af-accent font-bold">{performer.score.toLocaleString()} pts</Text>
               </View>
             ))}
           </Animated.View>

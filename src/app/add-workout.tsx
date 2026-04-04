@@ -274,7 +274,7 @@ export default function AddWorkoutScreen() {
                   </Text>
                   <Text className="text-white/40 text-xs">
                     {isPrivate
-                      ? 'Only visible to PTLs, UFPM, and Owner'
+                      ? 'Only visible to PFLs, UFPM, and Owner'
                       : 'Visible to all squadron members'}
                   </Text>
                 </View>

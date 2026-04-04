@@ -144,7 +144,7 @@ export default function UploadFitnessTrackerScreen() {
           >
             <ChevronLeft size={24} color="#C0C0C0" />
           </Pressable>
-          <Text className="text-white text-xl font-bold">Fitness Assessment</Text>
+          <Text className="text-white text-xl font-bold">PFRA</Text>
         </Animated.View>
 
         <ScrollView
@@ -164,7 +164,7 @@ export default function UploadFitnessTrackerScreen() {
                   Upload myFSS Fitness Tracker
                 </Text>
                 <Text className="text-af-silver text-center text-sm mb-6">
-                  Upload your official PDF from myFSS and we'll extract your fitness assessment scores.
+                  Upload your official PDF from myFSS and we'll extract your PFRA scores.
                 </Text>
 
                 <Pressable

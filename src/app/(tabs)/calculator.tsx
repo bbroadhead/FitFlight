@@ -1,12 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, Pressable, ScrollView, TextInput, Platform, Linking, LayoutChangeEvent, useWindowDimensions } from 'react-native';
+import { View, Text, Pressable, ScrollView, TextInput, Platform, Linking, LayoutChangeEvent, useWindowDimensions, Modal } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import { Asset } from 'expo-asset';
+import * as FileSystem from 'expo-file-system';
+import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import Svg, { Circle } from 'react-native-svg';
+import { Buffer } from 'buffer';
+import { jsPDF } from 'jspdf';
 
 import SmartSlider from '@/components/SmartSlider';
 import {
@@ -49,6 +53,14 @@ type ComponentTheme = {
 
 type ThresholdRow = { points: number; thresholds: Record<string, Record<Gender, number>> };
 type SliderMarker = { value: number; label: string; color?: string };
+type HamrStageInfo = {
+  level: number;
+  shuttleInLevel: number;
+  shuttlesInLevel: number;
+  totalShuttles: number;
+  startSec: number;
+  endSec: number;
+};
 
 const THEMES: Record<'whtR' | 'cardio' | 'strength' | 'core', ComponentTheme> = {
   whtR: { color: '#14B8A6', soft: 'rgba(20,184,166,0.14)', border: 'rgba(20,184,166,0.38)', tint: 'rgba(20,184,166,0.22)' },
@@ -56,6 +68,19 @@ const THEMES: Record<'whtR' | 'cardio' | 'strength' | 'core', ComponentTheme> = 
   strength: { color: '#F59E0B', soft: 'rgba(245,158,11,0.14)', border: 'rgba(245,158,11,0.38)', tint: 'rgba(245,158,11,0.22)' },
   core: { color: '#8B5CF6', soft: 'rgba(139,92,246,0.14)', border: 'rgba(139,92,246,0.38)', tint: 'rgba(139,92,246,0.22)' },
 };
+
+const HAMR_LEVEL_SHUTTLES = [7, 8, 8, 9, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 13] as const;
+
+async function downloadWebBlob(filename: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -77,6 +102,60 @@ function formatMMSS(totalSeconds: number) {
   const mins = Math.floor(s / 60);
   const secs = s % 60;
   return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+function buildHamrTimeline() {
+  const stages: HamrStageInfo[] = [];
+  let totalShuttles = 0;
+  let elapsedSec = 0;
+
+  HAMR_LEVEL_SHUTTLES.forEach((shuttlesInLevel, index) => {
+    const level = index + 1;
+    const speedKmh = 8 + level * 0.5;
+    const shuttleDurationSec = 72 / speedKmh;
+
+    for (let shuttleInLevel = 1; shuttleInLevel <= shuttlesInLevel; shuttleInLevel += 1) {
+      const startSec = elapsedSec;
+      const endSec = startSec + shuttleDurationSec;
+      totalShuttles += 1;
+      stages.push({
+        level,
+        shuttleInLevel,
+        shuttlesInLevel,
+        totalShuttles,
+        startSec,
+        endSec,
+      });
+      elapsedSec = endSec;
+    }
+  });
+
+  return stages;
+}
+
+function getHamrStageForShuttleCount(stages: HamrStageInfo[], shuttleCount: number) {
+  if (shuttleCount <= 0) {
+    return null;
+  }
+
+  return stages.find((stage) => stage.totalShuttles === shuttleCount) ?? stages[stages.length - 1] ?? null;
+}
+
+function getHamrStageForPosition(stages: HamrStageInfo[], positionSec: number) {
+  if (stages.length === 0) {
+    return null;
+  }
+
+  const exactStage = stages.find((stage) => positionSec >= stage.startSec && positionSec < stage.endSec);
+  if (exactStage) {
+    return exactStage;
+  }
+
+  if (positionSec >= stages[stages.length - 1].endSec) {
+    return stages[stages.length - 1];
+  }
+
+  return stages[0];
 }
 
 function parseMMSS(input: string): number | null {
@@ -236,14 +315,17 @@ function LabeledSlider({ label, valueLabel, theme, children, input, markers, mar
   );
 }
 
-function ComponentScoreBar({ label, value, max, theme, isPassFail = false, onPress }: { label: string; value: number; max: number; theme: ComponentTheme; isPassFail?: boolean; onPress?: () => void; }) {
+function ComponentScoreBar({ label, value, max, theme, isPassFail = false, onPress, detail }: { label: string; value: number; max: number; theme: ComponentTheme; isPassFail?: boolean; onPress?: () => void; detail?: string; }) {
   const widthPct = (max > 0 ? `${Math.min(100, Math.max(0, (value / max) * 100))}%` : '0%') as unknown as `${number}%`;
   const labelText = isPassFail ? (value > 0 ? 'PASS' : 'FAIL') : `${value.toFixed(1)}/${max}`;
 
   return (
     <Pressable className="mb-2" onPress={onPress} disabled={!onPress}>
       <View pointerEvents="none">
-        <Text className="mb-1 text-[11px] font-semibold uppercase tracking-[0.4px] text-white/70">{label}</Text>
+        <View className="mb-1 flex-row items-start justify-between gap-3">
+          <Text className="text-[11px] font-semibold uppercase tracking-[0.4px] text-white/70">{label}</Text>
+          {detail ? <Text className="text-right text-[11px] text-white/75">{detail}</Text> : null}
+        </View>
         <View className="relative h-6 overflow-hidden rounded-full border border-white/10 bg-white/10">
           <View style={{ width: widthPct, backgroundColor: theme.color }} className="absolute left-0 top-0 h-full rounded-full" />
           <View className="absolute inset-0 items-center justify-center px-2">
@@ -274,7 +356,23 @@ function SegmentedOption({ selected, label, onPress, theme }: { selected: boolea
   );
 }
 
-function AudioPanel({ disableSwipe, enableSwipe, containerClassName = 'mx-6 mt-6 rounded-2xl border border-white/10 bg-white/5 p-4', containerStyle, bare = false, titleVisible = true }: { disableSwipe: () => void; enableSwipe: () => void; containerClassName?: string; containerStyle?: any; bare?: boolean; titleVisible?: boolean; }) {
+function AudioPanel({
+  disableSwipe,
+  enableSwipe,
+  hamrTimeline = [],
+  containerClassName = 'mx-6 mt-6 rounded-2xl border border-white/10 bg-white/5 p-4',
+  containerStyle,
+  bare = false,
+  titleVisible = true,
+}: {
+  disableSwipe: () => void;
+  enableSwipe: () => void;
+  hamrTimeline?: HamrStageInfo[];
+  containerClassName?: string;
+  containerStyle?: any;
+  bare?: boolean;
+  titleVisible?: boolean;
+}) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [positionSec, setPositionSec] = useState(0);
   const [durationSec, setDurationSec] = useState(0);
@@ -319,6 +417,7 @@ function AudioPanel({ disableSwipe, enableSwipe, containerClassName = 'mx-6 mt-6
   }, [audioModule]);
 
   const progressValue = durationSec > 0 ? clamp(positionSec, 0, durationSec) : 0;
+  const currentHamrStage = useMemo(() => getHamrStageForPosition(hamrTimeline, positionSec), [hamrTimeline, positionSec]);
 
   const handleDownload = async () => {
     try {
@@ -483,6 +582,22 @@ function AudioPanel({ disableSwipe, enableSwipe, containerClassName = 'mx-6 mt-6
           <Ionicons name="download-outline" size={16} color="#FFFFFF" />
         </Pressable>
       </View>
+      {currentHamrStage ? (
+        <View className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+          <View className="flex-row items-center justify-between gap-3">
+            <View className="flex-1">
+              <Text className="text-[11px] font-semibold uppercase tracking-[0.4px] text-white/60">Live HAMR Position</Text>
+              <Text className="mt-1 text-sm font-semibold text-white">
+                Level {currentHamrStage.level} • Shuttle {currentHamrStage.shuttleInLevel} of {currentHamrStage.shuttlesInLevel}
+              </Text>
+            </View>
+            <View className="items-end">
+              <Text className="text-[11px] font-semibold uppercase tracking-[0.4px] text-white/60">Total Shuttle</Text>
+              <Text className="mt-0.5 text-xl font-bold text-white">{currentHamrStage.totalShuttles}</Text>
+            </View>
+          </View>
+        </View>
+      ) : null}
     </>
   );
 
@@ -523,6 +638,9 @@ export default function CalculatorScreen() {
   const enableSwipe = () => tabSwipe?.setSwipeEnabled(true);
 
   const [audioCollapsed, setAudioCollapsed] = useState(true);
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [isSavingPdf, setIsSavingPdf] = useState(false);
+  const [pdfFileName, setPdfFileName] = useState('name-date-official');
   const [ageYears, setAgeYears] = useState(34);
   const [gender, setGender] = useState<Gender>('male');
 
@@ -613,6 +731,25 @@ export default function CalculatorScreen() {
   const walkMarkers = useMemo<SliderMarker[]>(() => ([
     { value: clamp(walkPassThreshold, 10 * 60, 30 * 60), label: `PASS ${formatMMSS(clamp(walkPassThreshold, 10 * 60, 30 * 60))}` },
   ]), [walkPassThreshold]);
+  const hamrTimeline = useMemo(() => buildHamrTimeline(), []);
+  const selectedHamrStage = useMemo(() => getHamrStageForShuttleCount(hamrTimeline, hamrShuttles), [hamrShuttles, hamrTimeline]);
+  const strengthRawValue = strengthTest === 'pushups' ? `${pushupReps} push-ups` : `${pushupReps} hand-release reps`;
+  const coreRawValue = coreTest === 'plank'
+    ? `${formatMMSS(plankSec)} plank`
+    : `${coreReps} ${coreTest === 'situps' ? 'sit-ups' : 'cross-leg reps'}`;
+  const cardioRawValue = cardioTest === 'run_2mile'
+    ? formatMMSS(runSec)
+    : cardioTest === 'walk_2k'
+      ? formatMMSS(walkSec)
+      : selectedHamrStage
+        ? `${hamrShuttles} shuttles • L${selectedHamrStage.level} S${selectedHamrStage.shuttleInLevel}`
+        : `${hamrShuttles} shuttles`;
+  const scoreSummaryRows = useMemo(() => ([
+    { label: 'WHtR', score: scores.waist, max: 20, theme: THEMES.whtR, detail: `${waistIn.toFixed(1)} in waist • ${heightIn.toFixed(1)} in height` },
+    { label: 'Strength', score: scores.strength, max: 15, theme: THEMES.strength, detail: strengthRawValue },
+    { label: 'Core', score: scores.core, max: 15, theme: THEMES.core, detail: coreRawValue },
+    { label: 'Cardio', score: cardioTest === 'walk_2k' ? (walkPass ? 50 : 0) : scores.cardio, max: 50, theme: THEMES.cardio, detail: cardioRawValue, isPassFail: cardioTest === 'walk_2k' },
+  ]), [cardioRawValue, cardioTest, coreRawValue, heightIn, scores.cardio, scores.core, scores.strength, scores.waist, strengthRawValue, walkPass, waistIn]);
 
   const circleSize = isWide ? 118 : 110;
   const strokeWidth = 9;
@@ -621,6 +758,271 @@ export default function CalculatorScreen() {
   const progress = officialTotal === null ? 0 : clamp(officialTotal / 100, 0, 1);
   const dashOffset = circumference * (1 - progress);
 
+  const buildCalculatorPdfHtml = () => `
+    <html>
+      <head>
+        <style>
+          @page { size: letter landscape; margin: 0.5in; }
+          * {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+            box-sizing: border-box;
+          }
+          body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #0A1628;
+            color: #fff;
+          }
+          .shell {
+            background: linear-gradient(135deg, #0A1628 0%, #001F5C 50%, #0A1628 100%);
+            min-height: 100vh;
+            padding: 24px;
+          }
+          .title {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 16px;
+            margin-bottom: 16px;
+          }
+          .headline { font-size: 28px; font-weight: 700; }
+          .subtle { color: #c0c0c0; font-size: 12px; }
+          .summary {
+            display: grid;
+            grid-template-columns: 180px 1fr;
+            gap: 18px;
+            margin-bottom: 18px;
+          }
+          .scoreCard, .detailCard {
+            background: rgba(16, 35, 62, 0.95);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 18px;
+            padding: 18px;
+          }
+          .scoreValue { font-size: 42px; font-weight: 700; margin: 8px 0 4px; }
+          .status {
+            display: inline-block;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(74,144,217,0.18);
+            color: ${status.color};
+            font-weight: 700;
+            font-size: 12px;
+            margin-top: 8px;
+          }
+          .scoreRow {
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px;
+            padding: 10px 12px;
+            margin-bottom: 10px;
+            background: rgba(255,255,255,0.04);
+          }
+          .scoreRowTop {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #c0c0c0;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            margin-bottom: 6px;
+          }
+          .scoreRowDetail {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            font-size: 13px;
+          }
+          .detailsGrid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 14px;
+          }
+          .detailTitle {
+            font-size: 14px;
+            font-weight: 700;
+            margin-bottom: 8px;
+          }
+          .detailLine {
+            color: #c0c0c0;
+            font-size: 12px;
+            margin-bottom: 4px;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="shell">
+          <div class="title">
+            <div>
+              <div class="headline">PFRA Calculator Results</div>
+              <div class="subtle">Saved as ${pdfFileName.trim() || 'calculator-results'}.pdf</div>
+              <div class="subtle">Age ${ageYears} • ${gender === 'male' ? 'Male' : 'Female'} • ${cardioTest === 'walk_2k' ? '2K Walk' : cardioTest === 'run_2mile' ? '2-mile Run' : '20m HAMR'}</div>
+            </div>
+            <div class="subtle">FitFlight</div>
+          </div>
+
+          <div class="summary">
+            <div class="scoreCard">
+              <div class="subtle">TOTAL SCORE</div>
+              <div class="scoreValue" style="color:${officialTotal === null ? '#FFFFFF' : status.color}">${officialTotal === null ? '--' : officialTotal.toFixed(1)}</div>
+              <div class="subtle">${officialTotal === null ? (walkPass ? 'Walk pass' : 'Walk fail') : 'out of 100'}</div>
+              <div class="status">${status.label}</div>
+            </div>
+
+            <div class="detailCard">
+              ${scoreSummaryRows.map((row) => `
+                <div class="scoreRow">
+                  <div class="scoreRowTop">
+                    <span>${row.label}</span>
+                    <span>${row.isPassFail ? (row.score > 0 ? 'PASS' : 'FAIL') : `${row.score.toFixed(1)}/${row.max}`}</span>
+                  </div>
+                  <div class="scoreRowDetail">
+                    <span>${row.detail ?? ''}</span>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+
+          <div class="detailsGrid">
+            <div class="detailCard">
+              <div class="detailTitle">Body Composition</div>
+              <div class="detailLine">Waist: ${waistIn.toFixed(1)} in</div>
+              <div class="detailLine">Height: ${heightIn.toFixed(1)} in</div>
+              <div class="detailLine">WHtR: ${whtrValue.toFixed(2)}</div>
+            </div>
+            <div class="detailCard">
+              <div class="detailTitle">Strength</div>
+              <div class="detailLine">Test: ${strengthTest === 'pushups' ? 'Push-ups' : 'Hand-release Push-ups'}</div>
+              <div class="detailLine">Result: ${pushupReps} reps</div>
+              <div class="detailLine">Score: ${scores.strength.toFixed(1)}</div>
+            </div>
+            <div class="detailCard">
+              <div class="detailTitle">Core</div>
+              <div class="detailLine">Test: ${coreTest === 'situps' ? 'Sit-ups' : coreTest === 'cross_leg_reverse_crunch' ? 'Cross-leg Reverse Crunch' : 'Plank'}</div>
+              <div class="detailLine">Result: ${coreTest === 'plank' ? formatMMSS(plankSec) : `${coreReps} reps`}</div>
+              <div class="detailLine">Score: ${scores.core.toFixed(1)}</div>
+            </div>
+            <div class="detailCard">
+              <div class="detailTitle">Cardio</div>
+              <div class="detailLine">Test: ${cardioTest === 'run_2mile' ? '2-mile Run' : cardioTest === 'walk_2k' ? '2K Walk' : '20m HAMR'}</div>
+              <div class="detailLine">Result: ${cardioRawValue}</div>
+              <div class="detailLine">${selectedHamrStage ? `HAMR Level ${selectedHamrStage.level}, Shuttle ${selectedHamrStage.shuttleInLevel} of ${selectedHamrStage.shuttlesInLevel}` : `Score: ${cardioTest === 'walk_2k' ? (walkPass ? 'PASS' : 'FAIL') : scores.cardio.toFixed(1)}`}</div>
+            </div>
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
+
+  const saveCalculatorPdfOnWeb = async (filename: string) => {
+    const pdf = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
+    pdf.setFillColor(10, 22, 40);
+    pdf.rect(0, 0, 792, 612, 'F');
+    pdf.setFillColor(16, 35, 62);
+    pdf.roundedRect(24, 24, 744, 564, 18, 18, 'F');
+
+    pdf.setTextColor(255, 255, 255);
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(24);
+    pdf.text('PFRA Calculator Results', 40, 56);
+
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(10);
+    pdf.setTextColor(192, 192, 192);
+    pdf.text(`Saved as ${filename}`, 40, 74);
+    pdf.text(`Age ${ageYears} • ${gender === 'male' ? 'Male' : 'Female'} • ${cardioTest === 'walk_2k' ? '2K Walk' : cardioTest === 'run_2mile' ? '2-mile Run' : '20m HAMR'}`, 40, 88);
+
+    pdf.setFillColor(18, 34, 58);
+    pdf.roundedRect(40, 110, 180, 92, 12, 12, 'F');
+    pdf.setTextColor(192, 192, 192);
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(10);
+    pdf.text('TOTAL SCORE', 54, 132);
+    pdf.setFontSize(32);
+    if (officialTotal === null) {
+      pdf.setTextColor(255, 255, 255);
+    } else if (status.color === '#22C55E') {
+      pdf.setTextColor(34, 197, 94);
+    } else if (status.color === '#EF4444') {
+      pdf.setTextColor(239, 68, 68);
+    } else {
+      pdf.setTextColor(74, 144, 217);
+    }
+    pdf.text(officialTotal === null ? '--' : officialTotal.toFixed(1), 54, 170);
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(11);
+    pdf.setTextColor(192, 192, 192);
+    pdf.text(officialTotal === null ? (walkPass ? 'Walk pass' : 'Walk fail') : 'out of 100', 54, 188);
+
+    scoreSummaryRows.forEach((row, index) => {
+      const boxY = 110 + index * 52;
+      pdf.setFillColor(18, 34, 58);
+      pdf.roundedRect(240, boxY, 510, 40, 10, 10, 'F');
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(10);
+      pdf.setTextColor(192, 192, 192);
+      pdf.text(row.label.toUpperCase(), 252, boxY + 14);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(255, 255, 255);
+      pdf.text(row.detail ?? '', 548, boxY + 14, { align: 'right', maxWidth: 190 });
+      pdf.setFont('helvetica', 'bold');
+      pdf.text(row.isPassFail ? (row.score > 0 ? 'PASS' : 'FAIL') : `${row.score.toFixed(1)}/${row.max}`, 252, boxY + 30);
+    });
+
+    const detailBlocks = [
+      ['Body Composition', [`Waist: ${waistIn.toFixed(1)} in`, `Height: ${heightIn.toFixed(1)} in`, `WHtR: ${whtrValue.toFixed(2)}`]],
+      ['Strength', [`Test: ${strengthTest === 'pushups' ? 'Push-ups' : 'Hand-release Push-ups'}`, `Result: ${pushupReps} reps`, `Score: ${scores.strength.toFixed(1)}`]],
+      ['Core', [`Test: ${coreTest === 'situps' ? 'Sit-ups' : coreTest === 'cross_leg_reverse_crunch' ? 'Cross-leg Reverse Crunch' : 'Plank'}`, `Result: ${coreTest === 'plank' ? formatMMSS(plankSec) : `${coreReps} reps`}`, `Score: ${scores.core.toFixed(1)}`]],
+      ['Cardio', [`Test: ${cardioTest === 'run_2mile' ? '2-mile Run' : cardioTest === 'walk_2k' ? '2K Walk' : '20m HAMR'}`, `Result: ${cardioRawValue}`, selectedHamrStage ? `Level ${selectedHamrStage.level}, Shuttle ${selectedHamrStage.shuttleInLevel} of ${selectedHamrStage.shuttlesInLevel}` : `Score: ${cardioTest === 'walk_2k' ? (walkPass ? 'PASS' : 'FAIL') : scores.cardio.toFixed(1)}`]],
+    ] as const;
+
+    detailBlocks.forEach(([title, lines], index) => {
+      const x = 40 + (index % 2) * 360;
+      const y = 330 + Math.floor(index / 2) * 108;
+      pdf.setFillColor(18, 34, 58);
+      pdf.roundedRect(x, y, 320, 90, 10, 10, 'F');
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(12);
+      pdf.setTextColor(255, 255, 255);
+      pdf.text(title, x + 14, y + 18);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(10);
+      pdf.setTextColor(192, 192, 192);
+      lines.forEach((line, lineIndex) => {
+        pdf.text(line, x + 14, y + 38 + lineIndex * 15, { maxWidth: 292 });
+      });
+    });
+
+    pdf.save(filename);
+  };
+
+  const saveCalculatorResults = async () => {
+    try {
+      setIsSavingPdf(true);
+      const fileStem = (pdfFileName.trim() || 'calculator-results')
+        .replace(/[<>:"/\\|?*\x00-\x1F]/g, '-')
+        .replace(/\s+/g, '-');
+      const html = buildCalculatorPdfHtml();
+      const filename = `${fileStem}.pdf`;
+
+      if (Platform.OS === 'web') {
+        await saveCalculatorPdfOnWeb(filename);
+      } else {
+        const file = await Print.printToFileAsync({ html, base64: false });
+        const fileUri = `${FileSystem.documentDirectory}${filename}`;
+        await FileSystem.copyAsync({ from: file.uri, to: fileUri });
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(fileUri, { mimeType: 'application/pdf', dialogTitle: 'Save Calculator Results PDF' });
+        }
+      }
+
+      setShowSaveModal(false);
+    } finally {
+      setIsSavingPdf(false);
+    }
+  };
+
   const renderAudioCard = (className = '', style?: any) => (
     <View className={className} style={style}>
       <View className="rounded-2xl border border-white/10 bg-white/5 p-4">
@@ -628,7 +1030,7 @@ export default function CalculatorScreen() {
           <Text className="text-lg font-semibold text-white">20m HAMR Audio</Text>
           <Ionicons name={audioCollapsed ? 'chevron-down' : 'chevron-up'} size={20} color="#FFFFFF" />
         </Pressable>
-        {!audioCollapsed ? <View className="mt-4"><AudioPanel disableSwipe={disableSwipe} enableSwipe={enableSwipe} bare titleVisible={false} /></View> : null}
+        {!audioCollapsed ? <View className="mt-4"><AudioPanel disableSwipe={disableSwipe} enableSwipe={enableSwipe} hamrTimeline={hamrTimeline} bare titleVisible={false} /></View> : null}
       </View>
     </View>
   );
@@ -711,9 +1113,27 @@ export default function CalculatorScreen() {
         </LabeledSlider>
       )}
       {cardioTest === 'hamr_20m' && (
-        <LabeledSlider label="HAMR shuttles" valueLabel={`${hamrShuttles} shuttles`} theme={THEMES.cardio} input={<BoundNumberField value={hamrShuttles} onChange={(v) => setHamrShuttles(Math.round(v))} min={0} max={120} step={1} />} markers={hamrMarkers} markerMin={0} markerMax={120}>
-          <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={hamrShuttles} onValueChange={(v) => setHamrShuttles(Math.round(v as number))} minimumValue={0} maximumValue={120} step={1} />
-        </LabeledSlider>
+        <>
+          <LabeledSlider label="HAMR shuttles" valueLabel={`${hamrShuttles} shuttles`} theme={THEMES.cardio} input={<BoundNumberField value={hamrShuttles} onChange={(v) => setHamrShuttles(Math.round(v))} min={0} max={120} step={1} />} markers={hamrMarkers} markerMin={0} markerMax={120}>
+            <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={hamrShuttles} onValueChange={(v) => setHamrShuttles(Math.round(v as number))} minimumValue={0} maximumValue={120} step={1} />
+          </LabeledSlider>
+          {selectedHamrStage ? (
+            <View className="rounded-xl border border-white/10 bg-white/5 px-3 py-3">
+              <View className="flex-row items-center justify-between gap-3">
+                <View className="flex-1">
+                  <Text className="text-[11px] font-semibold uppercase tracking-[0.4px] text-white/60">Selected HAMR Mark</Text>
+                  <Text className="mt-1 text-sm font-semibold text-white">
+                    Level {selectedHamrStage.level} • Shuttle {selectedHamrStage.shuttleInLevel} of {selectedHamrStage.shuttlesInLevel}
+                  </Text>
+                </View>
+                <View className="items-end">
+                  <Text className="text-[11px] font-semibold uppercase tracking-[0.4px] text-white/60">Total Shuttle</Text>
+                  <Text className="mt-0.5 text-xl font-bold text-white">{selectedHamrStage.totalShuttles}</Text>
+                </View>
+              </View>
+            </View>
+          ) : null}
+        </>
       )}
     </View>
   );
@@ -736,8 +1156,18 @@ export default function CalculatorScreen() {
           stickyHeaderIndices={isWide ? undefined : [1]}
         >
           <View style={{ width: '100%', maxWidth: contentMaxWidth, alignSelf: 'center' }} className="px-6 pt-4 pb-2">
-            <Text className="text-2xl font-bold text-white">PFRA Calculator</Text>
-            <Text className="mt-1 text-sm text-af-silver">Based on PFRA Scoring Charts released on 1 MAR 2026</Text>
+            <View className="flex-row items-start justify-between gap-4">
+              <View className="flex-1">
+                <Text className="text-2xl font-bold text-white">PFRA Calculator</Text>
+                <Text className="mt-1 text-sm text-af-silver">Based on PFRA Scoring Charts released on 1 MAR 2026</Text>
+              </View>
+              <Pressable
+                onPress={() => setShowSaveModal(true)}
+                className="rounded-xl border border-af-accent/50 bg-af-accent/15 px-4 py-2.5"
+              >
+                <Text className="font-semibold text-af-accent">Save Results</Text>
+              </Pressable>
+            </View>
           </View>
 
           {isWide ? (
@@ -779,10 +1209,9 @@ export default function CalculatorScreen() {
                       </View>
 
                       <View className="flex-1">
-                        <ComponentScoreBar label="WHtR" value={scores.waist} max={20} theme={THEMES.whtR} onPress={() => scrollToSection('bodycomp')} />
-                        <ComponentScoreBar label="Strength" value={scores.strength} max={15} theme={THEMES.strength} onPress={() => scrollToSection('strength')} />
-                        <ComponentScoreBar label="Core" value={scores.core} max={15} theme={THEMES.core} onPress={() => scrollToSection('core')} />
-                        <ComponentScoreBar label="Cardio" value={cardioTest === 'walk_2k' ? (walkPass ? 50 : 0) : scores.cardio} max={50} theme={THEMES.cardio} isPassFail={cardioTest === 'walk_2k'} onPress={() => scrollToSection('cardio')} />
+                        {scoreSummaryRows.map((row) => (
+                          <ComponentScoreBar key={row.label} label={row.label} value={row.score} max={row.max} theme={row.theme} isPassFail={row.isPassFail} detail={row.detail} onPress={() => scrollToSection(row.label === 'WHtR' ? 'bodycomp' : row.label === 'Strength' ? 'strength' : row.label === 'Core' ? 'core' : 'cardio')} />
+                        ))}
                       </View>
                     </View>
                   </View>
@@ -842,10 +1271,9 @@ export default function CalculatorScreen() {
                     </View>
 
                     <View className="flex-1">
-                      <ComponentScoreBar label="WHtR" value={scores.waist} max={20} theme={THEMES.whtR} onPress={() => scrollToSection('bodycomp')} />
-                      <ComponentScoreBar label="Strength" value={scores.strength} max={15} theme={THEMES.strength} onPress={() => scrollToSection('strength')} />
-                      <ComponentScoreBar label="Core" value={scores.core} max={15} theme={THEMES.core} onPress={() => scrollToSection('core')} />
-                      <ComponentScoreBar label="Cardio" value={cardioTest === 'walk_2k' ? (walkPass ? 50 : 0) : scores.cardio} max={50} theme={THEMES.cardio} isPassFail={cardioTest === 'walk_2k'} onPress={() => scrollToSection('cardio')} />
+                      {scoreSummaryRows.map((row) => (
+                        <ComponentScoreBar key={row.label} label={row.label} value={row.score} max={row.max} theme={row.theme} isPassFail={row.isPassFail} detail={row.detail} onPress={() => scrollToSection(row.label === 'WHtR' ? 'bodycomp' : row.label === 'Strength' ? 'strength' : row.label === 'Core' ? 'core' : 'cardio')} />
+                      ))}
                     </View>
                   </View>
                 </View>
@@ -863,6 +1291,39 @@ export default function CalculatorScreen() {
           )}
         </ScrollView>
       </SafeAreaView>
+
+      <Modal visible={showSaveModal} transparent animationType="fade">
+        <View className="flex-1 items-center justify-center bg-black/75 p-6">
+          <View className="w-full max-w-md rounded-3xl border border-white/15 bg-[#0F1F36] p-6">
+            <Text className="text-xl font-bold text-white">Save Calculator Results</Text>
+            <Text className="mt-2 text-sm text-af-silver">Name your 1-page PDF before it is saved.</Text>
+            <Text className="mt-1 text-xs text-white/55">Examples: `name-date-official` or `name-date-goal`</Text>
+            <TextInput
+              value={pdfFileName}
+              onChangeText={setPdfFileName}
+              autoCapitalize="none"
+              placeholder="name-date-official"
+              placeholderTextColor="rgba(255,255,255,0.35)"
+              className="mt-4 rounded-xl border border-white/15 bg-white/10 px-4 py-3 text-white"
+            />
+            <View className="mt-5 flex-row">
+              <Pressable
+                onPress={() => !isSavingPdf && setShowSaveModal(false)}
+                className="mr-2 flex-1 rounded-xl border border-white/15 bg-white/10 py-3"
+              >
+                <Text className="text-center font-semibold text-white">Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => void saveCalculatorResults()}
+                className="ml-2 flex-1 rounded-xl bg-af-accent py-3"
+                disabled={isSavingPdf}
+              >
+                <Text className="text-center font-semibold text-white">{isSavingPdf ? 'Saving...' : 'Save PDF'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }

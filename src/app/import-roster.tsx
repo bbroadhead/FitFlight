@@ -87,7 +87,7 @@ export default function ImportRosterScreen() {
   const [selectedColumn, setSelectedColumn] = useState<keyof ColumnMapping | null>(null);
   const [fileName, setFileName] = useState<string>('');
 
-  const userSquadron: Squadron = user?.squadron ?? '392 IS';
+  const userSquadron: Squadron = user?.squadron ?? 'Hawks';
 
   // Validate and normalize rank
   const normalizeRank = (input: string): string | null => {

@@ -6,7 +6,7 @@ import { useRouter } from 'expo-router';
 import { Shield, Trophy, Activity, Calendar, Target, ChevronRight, ChevronLeft, Check, Users, BarChart3 } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeInUp, useAnimatedStyle, useSharedValue, withSpring, interpolate } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import { useAuthStore } from '@/lib/store';
+import { useAuthStore, useMemberStore } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { Image } from 'react-native';
 
@@ -72,7 +72,7 @@ const TUTORIAL_SLIDES: TutorialSlide[] = [
     iconColor: '#A855F7',
     iconBg: 'bg-purple-500/30',
     title: 'PT Attendance',
-    description: 'PTLs can track attendance for scheduled PT sessions. Never miss a session again.',
+    description: 'PFLs can track attendance for scheduled PT sessions. Never miss a session again.',
     features: [
       'Schedule PT sessions',
       'Mark attendance with one tap',
@@ -84,11 +84,11 @@ const TUTORIAL_SLIDES: TutorialSlide[] = [
     icon: Target,
     iconColor: '#F59E0B',
     iconBg: 'bg-af-warning/30',
-    title: 'FA Calculator',
-    description: 'Calculate your Fitness Assessment score. Upload official FA results to track progress.',
+    title: 'PFRA Calculator',
+    description: 'Calculate your PFRA score. Upload official PFRA results to track progress.',
     features: [
       'Score calculation for all components',
-      'Track FA history over time',
+      'Track PFRA history over time',
       'Privacy controls for your scores',
     ],
   },
@@ -102,7 +102,7 @@ const TUTORIAL_SLIDES: TutorialSlide[] = [
     features: [
       'View the tutorial anytime in Settings',
       'Connect fitness apps in Profile',
-      'Contact your PTL for questions',
+      'Contact your PFL for questions',
     ],
   },
 ];
@@ -157,6 +157,8 @@ function SlideItem({ item, slideWidth }: { item: TutorialSlide; slideWidth: numb
 export default function WelcomeScreen() {
   const router = useRouter();
   const updateUser = useAuthStore(s => s.updateUser);
+  const user = useAuthStore(s => s.user);
+  const updateMember = useMemberStore(s => s.updateMember);
   const flatListRef = useRef<FlatList>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const { width: windowWidth } = useWindowDimensions();
@@ -199,12 +201,18 @@ export default function WelcomeScreen() {
   const handleComplete = () => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     updateUser({ hasSeenTutorial: true });
+    if (user) {
+      updateMember(user.id, { hasSeenTutorial: true });
+    }
     router.replace('/(tabs)');
   };
 
   const handleSkip = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     updateUser({ hasSeenTutorial: true });
+    if (user) {
+      updateMember(user.id, { hasSeenTutorial: true });
+    }
     router.replace('/(tabs)');
   };
 

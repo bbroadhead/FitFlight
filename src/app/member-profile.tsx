@@ -70,11 +70,15 @@ export default function MemberProfileScreen() {
   const router = useRouter();
   const members = useMemberStore(s => s.members);
   const currentUser = useAuthStore(s => s.user);
+  const currentUserSquadron = currentUser?.squadron ?? 'Hawks';
 
   const [showAchievementsModal, setShowAchievementsModal] = useState(false);
   const [achievementsSummaryExpanded, setAchievementsSummaryExpanded] = useState(false);
 
   const member = useMemo(() => members.find(m => m.id === id), [members, id]);
+  const canViewMember =
+    !!member &&
+    (!!currentUser && (member.id === currentUser.id || member.squadron === currentUserSquadron || currentUser.accountType === 'fitflight_creator'));
 
   // All hooks must be called before early returns
   const isOwnProfile = currentUser?.id === member?.id;
@@ -91,12 +95,14 @@ export default function MemberProfileScreen() {
 
   // Calculate leaderboard position
   const sortedMembers = useMemo(() => {
-    return [...members].sort((a, b) => {
+    return members
+      .filter((candidate) => candidate.squadron === (member?.squadron ?? currentUserSquadron))
+      .sort((a, b) => {
       const scoreA = a.exerciseMinutes + Math.round(a.distanceRun * 10) + a.workouts.length * 25;
       const scoreB = b.exerciseMinutes + Math.round(b.distanceRun * 10) + b.workouts.length * 25;
       return scoreB - scoreA;
     });
-  }, [members]);
+  }, [currentUserSquadron, member?.squadron, members]);
 
   // Calculate workout type breakdown
   const workoutTypeBreakdown = useMemo(() => {
@@ -121,10 +127,10 @@ export default function MemberProfileScreen() {
     return breakdown;
   }, [member?.workouts, member]);
 
-  if (!member) {
+  if (!member || !canViewMember) {
     return (
       <View className="flex-1 bg-af-navy items-center justify-center">
-        <Text className="text-white">Member not found</Text>
+        <Text className="text-white">{member ? 'You do not have access to this member profile' : 'Member not found'}</Text>
       </View>
     );
   }
@@ -145,7 +151,7 @@ export default function MemberProfileScreen() {
     switch (accountType) {
       case 'fitflight_creator': return 'FitFlight Creator';
       case 'ufpm': return 'UFPM';
-      case 'ptl': return 'PT Leader';
+      case 'ptl': return 'PFL';
       default: return 'Member';
     }
   };
@@ -425,13 +431,13 @@ export default function MemberProfileScreen() {
             </Animated.View>
           )}
 
-          {/* Fitness Assessment Section */}
+          {/* PFRA Section */}
           <Animated.View
             entering={FadeInDown.delay(250).springify()}
             className="mt-4"
           >
             <View className="flex-row items-center justify-between mb-3">
-              <Text className="text-white font-semibold text-lg">Fitness Assessment</Text>
+              <Text className="text-white font-semibold text-lg">PFRA</Text>
               {member.fitnessAssessments.some(fa => fa.isPrivate) && !isOwnProfile && (
                 <View className="flex-row items-center">
                   <Lock size={14} color="#C0C0C0" />
@@ -498,12 +504,12 @@ export default function MemberProfileScreen() {
             ) : canViewFitnessAssessments ? (
               <View className="bg-white/5 rounded-2xl border border-white/10 p-6 items-center">
                 <Shield size={32} color="#C0C0C0" />
-                <Text className="text-af-silver mt-2">No fitness assessments recorded</Text>
+                <Text className="text-af-silver mt-2">No PFRA records recorded</Text>
               </View>
             ) : (
               <View className="bg-white/5 rounded-2xl border border-white/10 p-6 items-center">
                 <Lock size={32} color="#C0C0C0" />
-                <Text className="text-af-silver mt-2">Fitness assessments are private</Text>
+                <Text className="text-af-silver mt-2">PFRA records are private</Text>
               </View>
             )}
           </Animated.View>

@@ -31,12 +31,13 @@ export default function ScheduleSessionScreen() {
   const [showEditModal, setShowEditModal] = useState(false);
 
   const canEdit = user ? canEditAttendance(user.accountType) : false;
+  const userSquadron = user?.squadron ?? 'Hawks';
 
   // Get upcoming sessions for user's flight
   const upcomingSessions = scheduledSessions
     .filter(s => {
       const sessionDate = new Date(s.date);
-      return sessionDate >= new Date() && (s.flight === user?.flight || canEdit);
+      return sessionDate >= new Date() && (s.squadron ?? 'Hawks') === userSquadron && (s.flight === user?.flight || canEdit);
     })
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
@@ -67,6 +68,7 @@ export default function ScheduleSessionScreen() {
       time: timeStr,
       description: description.trim(),
       flight: selectedFlight,
+      squadron: userSquadron,
       createdBy: user.id,
       attendees: [],
     };
@@ -86,6 +88,7 @@ export default function ScheduleSessionScreen() {
       time: format(selectedTime, 'HH:mm'),
       description: description.trim(),
       flight: selectedFlight,
+      squadron: userSquadron,
     });
 
     setShowEditModal(false);
@@ -131,7 +134,7 @@ export default function ScheduleSessionScreen() {
           </View>
           <View className="flex-1 items-center justify-center px-6">
             <Text className="text-af-silver text-center">
-              Only PTLs, UFPM, and FitFlight Creator can schedule PT sessions.
+              Only PFLs, UFPM, and FitFlight Creator can schedule PT sessions.
             </Text>
           </View>
         </SafeAreaView>

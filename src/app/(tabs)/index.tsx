@@ -51,7 +51,7 @@ export default function HomeScreen() {
 
   const userName = user ? getDisplayName(user) : 'Airman';
   const squadronMembers = useMemo(
-    () => members.filter(member => member.squadron === (user?.squadron ?? '392 IS')),
+    () => members.filter(member => member.squadron === (user?.squadron ?? 'Hawks')),
     [members, user?.squadron]
   );
   const rankedMembers = useMemo(
@@ -120,64 +120,66 @@ export default function HomeScreen() {
           <Animated.View entering={FadeInDown.delay(100).springify()} className="px-6 pt-4 pb-2">
             <Text className="text-af-silver text-sm">Welcome back,</Text>
             <Text className="text-white text-3xl font-bold mt-1">{userName}</Text>
-            <Text className="text-af-silver text-sm mt-2">
-              Use Home as your launch point for workouts, attendance, scoring, documents, and the leaderboard.
-            </Text>
           </Animated.View>
 
           <Animated.View
             entering={FadeInDown.delay(150).springify()}
-            className="mx-6 mt-4 p-5 bg-white/5 rounded-3xl border border-white/10"
+            className="mx-6 mt-4"
           >
-            <View className="flex-row items-center justify-between mb-4">
-              <Text className="text-white/60 text-xs uppercase tracking-wider">Leaderboard Snapshot</Text>
-              <Pressable onPress={openLeaderboard} className="flex-row items-center">
-                <Text className="text-af-accent text-xs font-semibold mr-1">Open</Text>
-                <ArrowRight size={14} color="#4A90D9" />
-              </Pressable>
-            </View>
-
-            <View className="bg-af-gold/10 border border-af-gold/20 rounded-2xl p-4">
-              <View className="flex-row items-center">
-                <View className="w-10 h-10 rounded-2xl bg-af-gold/20 items-center justify-center">
-                  <Crown size={20} color="#FFD700" />
-                </View>
-                <View className="ml-3 flex-1">
-                  <Text className="text-af-silver text-xs">Current Leader</Text>
-                  <Text className="text-white text-lg font-bold" numberOfLines={1}>
-                    {leader?.name ?? 'No leaderboard data yet'}
-                  </Text>
-                </View>
-                <View className="items-end">
-                  <Text className="text-af-gold text-xs font-semibold">Score</Text>
-                  <Text className="text-white text-lg font-bold">{leader?.totalScore ?? 0}</Text>
+            <Pressable
+              onPress={openLeaderboard}
+              className="bg-white/5 rounded-3xl border border-white/10 p-4 active:opacity-90"
+            >
+              <View className="flex-row items-center justify-between mb-3">
+                <Text className="text-white/60 text-xs uppercase tracking-wider">Leaderboard Snapshot</Text>
+                <View className="flex-row items-center">
+                  <Text className="text-af-accent text-xs font-semibold mr-1">Open</Text>
+                  <ArrowRight size={14} color="#4A90D9" />
                 </View>
               </View>
 
-              <View className="flex-row mt-4 pt-4 border-t border-white/10">
-                <View className="flex-1">
-                  <View className="flex-row items-center">
-                    <Medal size={14} color="#C0C0C0" />
-                    <Text className="text-af-silver text-xs ml-1">Runner-Up</Text>
+              <View className="bg-af-gold/10 border border-af-gold/20 rounded-2xl p-3">
+                <View className="flex-row items-center">
+                  <View className="w-9 h-9 rounded-2xl bg-af-gold/20 items-center justify-center">
+                    <Crown size={18} color="#FFD700" />
                   </View>
-                  <Text className="text-white font-semibold mt-2" numberOfLines={1}>
-                    {runnerUp?.name ?? 'N/A'}
-                  </Text>
-                  <Text className="text-af-silver text-xs mt-1">{runnerUp?.totalScore ?? 0} pts</Text>
+                  <View className="ml-3 flex-1">
+                    <Text className="text-af-silver text-[11px]">Current Leader</Text>
+                    <Text className="text-white text-base font-bold" numberOfLines={1}>
+                      {leader?.name ?? 'No leaderboard data yet'}
+                    </Text>
+                  </View>
+                  <View className="items-end">
+                    <Text className="text-af-gold text-[11px] font-semibold">Score</Text>
+                    <Text className="text-white text-base font-bold">{leader?.totalScore ?? 0}</Text>
+                  </View>
                 </View>
 
-                <View className="w-px bg-white/10 mx-4" />
-
-                <View className="flex-1">
-                  <View className="flex-row items-center">
-                    <Users size={14} color="#4A90D9" />
-                    <Text className="text-af-silver text-xs ml-1">Squadron Average</Text>
+                <View className="flex-row mt-3 pt-3 border-t border-white/10">
+                  <View className="flex-1">
+                    <View className="flex-row items-center">
+                      <Medal size={13} color="#C0C0C0" />
+                      <Text className="text-af-silver text-[11px] ml-1">Runner-Up</Text>
+                    </View>
+                    <Text className="text-white font-semibold mt-1.5" numberOfLines={1}>
+                      {runnerUp?.name ?? 'N/A'}
+                    </Text>
+                    <Text className="text-af-silver text-[11px] mt-1">{runnerUp?.totalScore ?? 0} pts</Text>
                   </View>
-                  <Text className="text-white font-semibold mt-2">{averageScore}</Text>
-                  <Text className="text-af-silver text-xs mt-1">{rankedMembers.length} ranked members</Text>
+
+                  <View className="w-px bg-white/10 mx-4" />
+
+                  <View className="flex-1">
+                    <View className="flex-row items-center">
+                      <Users size={13} color="#4A90D9" />
+                      <Text className="text-af-silver text-[11px] ml-1">Squadron Average</Text>
+                    </View>
+                    <Text className="text-white font-semibold mt-1.5">{averageScore}</Text>
+                    <Text className="text-af-silver text-[11px] mt-1">{rankedMembers.length} ranked members</Text>
+                  </View>
                 </View>
               </View>
-            </View>
+            </Pressable>
           </Animated.View>
 
           <Animated.View entering={FadeInDown.delay(200).springify()} className="mx-6 mt-6">

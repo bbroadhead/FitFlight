@@ -5,12 +5,29 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // Types
 export type Flight = 'Apex' | 'Bomber' | 'Cryptid' | 'Doom' | 'Ewok' | 'Foxhound' | 'ADF' | 'DET';
 export type AccountType = 'fitflight_creator' | 'ufpm' | 'ptl' | 'standard';
-export type Squadron = '392 IS';
+export type Squadron = 'Hawks' | 'Tigers';
 export type WorkoutType = 'Running' | 'Walking' | 'Cycling' | 'Strength' | 'HIIT' | 'Swimming' | 'Sports' | 'Cardio' | 'Flexibility' | 'Other';
 export type IntegrationService = 'apple_health' | 'strava' | 'garmin';
 
-export const SQUADRONS: Squadron[] = ['392 IS'];
+export const SQUADRONS: Squadron[] = ['Hawks', 'Tigers'];
 export const WORKOUT_TYPES: WorkoutType[] = ['Running', 'Walking', 'Cycling', 'Strength', 'HIIT', 'Swimming', 'Sports', 'Cardio', 'Flexibility', 'Other'];
+
+const DISPLAY_RANK_MAP: Record<string, string> = {
+  AB: 'AB',
+  AMN: 'Amn',
+  A1C: 'A1C',
+  SRA: 'SrA',
+  SSG: 'SSgt',
+  SSGT: 'SSgt',
+  TSG: 'TSgt',
+  TSGT: 'TSgt',
+  MSG: 'MSgt',
+  MSGT: 'MSgt',
+  SMS: 'SMSgt',
+  SMSGT: 'SMSgt',
+  CMS: 'CMSgt',
+  CMSGT: 'CMSgt',
+};
 
 // Shared Workout Submission (community workouts)
 export interface SharedWorkout {
@@ -84,6 +101,7 @@ export interface ScheduledPTSession {
   time: string; // Military time format HH:MM
   description: string;
   flight: Flight;
+  squadron: Squadron;
   createdBy: string;
   attendees: string[];
 }
@@ -110,12 +128,14 @@ export interface Member {
   linkedAttendanceId?: string; // Links to attendance record created before account
   monthlyPlacements: MonthlyPlacement[]; // Track top 3 placements
   trophyCount: number; // Number of times placed in top 3
+  hasSeenTutorial?: boolean;
 }
 
 export interface PTSession {
   id: string;
   date: string;
   flight: Flight;
+  squadron: Squadron;
   attendees: string[];
   createdBy: string;
 }
@@ -159,7 +179,12 @@ export interface User {
 
 // Helper to get display name
 export const getDisplayName = (user: { rank: string; firstName: string; lastName: string }) => {
-  return `${user.rank} ${user.firstName} ${user.lastName}`;
+  return `${formatRankDisplay(user.rank)} ${user.firstName} ${user.lastName}`;
+};
+
+export const formatRankDisplay = (rank: string) => {
+  const normalized = rank.trim().replace(/\./g, '').toUpperCase();
+  return DISPLAY_RANK_MAP[normalized] ?? rank.trim();
 };
 
 // Helper to calculate required PT sessions based on fitness score
@@ -190,9 +215,9 @@ export const ALL_ACHIEVEMENTS: Achievement[] = [
   { id: 'month_streak', name: 'Monthly Machine', description: 'Complete PT every week for a month', icon: 'zap', category: 'streak', isHard: true },
 
   // Fitness achievements
-  { id: 'excellent_fa', name: 'Excellent Rating', description: 'Score 90+ on a Fitness Assessment', icon: 'shield-check', category: 'fitness', isHard: false },
-  { id: 'perfect_fa', name: 'Perfect Score', description: 'Score 100 on a Fitness Assessment', icon: 'sparkles', category: 'fitness', isHard: true },
-  { id: 'improvement', name: 'Self Improvement', description: 'Improve your FA score by 10+ points', icon: 'trending-up', category: 'fitness', isHard: false },
+  { id: 'excellent_fa', name: 'Excellent Rating', description: 'Score 90+ on a PFRA', icon: 'shield-check', category: 'fitness', isHard: false },
+  { id: 'perfect_fa', name: 'Perfect Score', description: 'Score 100 on a PFRA', icon: 'sparkles', category: 'fitness', isHard: true },
+  { id: 'improvement', name: 'Self Improvement', description: 'Improve your PFRA score by 10+ points', icon: 'trending-up', category: 'fitness', isHard: false },
 
   // Additional achievements
   { id: '25_workouts', name: 'Quarter Century', description: 'Log 25 workouts', icon: 'target', category: 'milestone', isHard: false },
@@ -235,12 +260,14 @@ interface MemberState {
 
   // Member actions
   addMember: (member: Member) => void;
+  syncMembersFromRoster: (rosterMembers: Member[]) => void;
   removeMember: (id: string) => void;
   updateMember: (id: string, updates: Partial<Member>) => void;
   getMemberById: (id: string) => Member | undefined;
 
   // PT Session actions
   addPTSession: (session: PTSession) => void;
+  syncPTSessions: (sessions: PTSession[]) => void;
   updatePTSession: (id: string, updates: Partial<PTSession>) => void;
   deletePTSession: (id: string) => void;
   toggleAttendance: (sessionId: string, memberId: string) => void;
@@ -293,10 +320,10 @@ interface MemberState {
 const OWNER_ACCOUNT: Member = {
   id: 'owner_001',
   rank: 'SSgt',
-  firstName: 'Benjamin',
-  lastName: 'Broadhead',
+  firstName: 'BENJAMIN',
+  lastName: 'BROADHEAD',
   flight: 'Doom',
-  squadron: '392 IS',
+  squadron: 'Hawks',
   accountType: 'fitflight_creator',
   email: 'benjamin.broadhead.2@us.af.mil',
   exerciseMinutes: 0,
@@ -310,82 +337,80 @@ const OWNER_ACCOUNT: Member = {
   ptlPendingApproval: false,
   monthlyPlacements: [],
   trophyCount: 0,
+  hasSeenTutorial: false,
 };
 
-// Generate mock members with new structure
-const generateMockMembers = (): Member[] => {
-  const mockData = [
-    { rank: 'SSgt', firstName: 'Michael', lastName: 'Johnson', flight: 'Apex' as Flight, accountType: 'ptl' as AccountType },
-    { rank: 'A1C', firstName: 'Carlos', lastName: 'Martinez', flight: 'Apex' as Flight, accountType: 'standard' as AccountType },
-    { rank: 'SrA', firstName: 'James', lastName: 'Williams', flight: 'Bomber' as Flight, accountType: 'standard' as AccountType },
-    { rank: 'TSgt', firstName: 'Robert', lastName: 'Brown', flight: 'Bomber' as Flight, accountType: 'ptl' as AccountType },
-    { rank: 'A1C', firstName: 'David', lastName: 'Davis', flight: 'Cryptid' as Flight, accountType: 'standard' as AccountType },
-    { rank: 'SrA', firstName: 'Maria', lastName: 'Garcia', flight: 'Cryptid' as Flight, accountType: 'standard' as AccountType },
-    { rank: 'MSgt', firstName: 'William', lastName: 'Anderson', flight: 'Doom' as Flight, accountType: 'ptl' as AccountType },
-    { rank: 'A1C', firstName: 'Christopher', lastName: 'Taylor', flight: 'Doom' as Flight, accountType: 'standard' as AccountType },
-    { rank: 'SrA', firstName: 'Daniel', lastName: 'Thomas', flight: 'Ewok' as Flight, accountType: 'standard' as AccountType },
-    { rank: 'SSgt', firstName: 'Matthew', lastName: 'Jackson', flight: 'Ewok' as Flight, accountType: 'ptl' as AccountType },
-    { rank: 'A1C', firstName: 'Andrew', lastName: 'White', flight: 'Foxhound' as Flight, accountType: 'standard' as AccountType },
-    { rank: 'TSgt', firstName: 'Joshua', lastName: 'Harris', flight: 'Foxhound' as Flight, accountType: 'ptl' as AccountType },
-    { rank: 'SrA', firstName: 'Ryan', lastName: 'Clark', flight: 'ADF' as Flight, accountType: 'standard' as AccountType },
-    { rank: 'A1C', firstName: 'Brandon', lastName: 'Lewis', flight: 'ADF' as Flight, accountType: 'standard' as AccountType },
-    { rank: 'SSgt', firstName: 'Kevin', lastName: 'Robinson', flight: 'DET' as Flight, accountType: 'ptl' as AccountType },
-    { rank: 'SrA', firstName: 'Justin', lastName: 'Walker', flight: 'DET' as Flight, accountType: 'standard' as AccountType },
-  ];
+const INITIAL_MEMBERS = [OWNER_ACCOUNT];
 
-  return mockData.map((data, index) => ({
-    id: (index + 1).toString(),
-    ...data,
-    squadron: '392 IS' as Squadron,
-    email: `${data.lastName.toLowerCase()}@us.af.mil`,
-    exerciseMinutes: Math.floor(Math.random() * 300) + 200,
-    distanceRun: Math.floor(Math.random() * 40) + 10,
-    connectedApps: [] as string[],
-    fitnessAssessments: [] as FitnessAssessment[],
-    workouts: [] as Workout[],
-    achievements: [] as string[],
-    requiredPTSessionsPerWeek: 3,
-    isVerified: true,
-    ptlPendingApproval: false,
-    monthlyPlacements: [] as MonthlyPlacement[],
-    trophyCount: 0,
-  }));
-};
-
-// Generate PT sessions
-const generateMockSessions = (members: Member[]): PTSession[] => {
-  const sessions: PTSession[] = [];
-  const today = new Date();
-  const flights: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
-
-  for (let i = 0; i < 7; i++) {
-    const date = new Date(today);
-    date.setDate(today.getDate() - today.getDay() + i + 1);
-
-    if (i === 0 || i === 2 || i === 4) {
-      flights.forEach(flight => {
-        const flightMembers = members.filter(m => m.flight === flight);
-        const attendees = flightMembers
-          .filter(() => Math.random() > 0.2)
-          .map(m => m.id);
-
-        const ptl = flightMembers.find(m => m.accountType === 'ptl');
-
-        sessions.push({
-          id: `session-${flight}-${date.toISOString().split('T')[0]}`,
-          date: date.toISOString().split('T')[0],
-          flight,
-          attendees,
-          createdBy: ptl?.id || '1',
-        });
-      });
-    }
+const normalizeOwnerMember = (member: Member): Member => {
+  if (member.email.toLowerCase() !== OWNER_ACCOUNT.email.toLowerCase()) {
+    return member;
   }
 
-  return sessions;
+  return {
+    ...member,
+    rank: OWNER_ACCOUNT.rank,
+    firstName: OWNER_ACCOUNT.firstName,
+    lastName: OWNER_ACCOUNT.lastName,
+    accountType: OWNER_ACCOUNT.accountType,
+  };
 };
 
-const INITIAL_MEMBERS = [OWNER_ACCOUNT, ...generateMockMembers()];
+const isSameMember = (left: Member, right: Member) => {
+  if (left.email && right.email && left.email.toLowerCase() === right.email.toLowerCase()) {
+    return true;
+  }
+
+  return (
+    left.firstName.trim().toLowerCase() === right.firstName.trim().toLowerCase() &&
+    left.lastName.trim().toLowerCase() === right.lastName.trim().toLowerCase()
+  );
+};
+
+const hasLocalMemberData = (member: Member) => {
+  return (
+    member.workouts.length > 0 ||
+    member.fitnessAssessments.length > 0 ||
+    member.achievements.length > 0 ||
+    member.exerciseMinutes > 0 ||
+    member.distanceRun > 0 ||
+    member.connectedApps.length > 0 ||
+    member.monthlyPlacements.length > 0 ||
+    member.trophyCount > 0 ||
+    Boolean(member.linkedAttendanceId) ||
+    Boolean(member.profilePicture) ||
+    member.accountType !== 'standard' ||
+    member.isVerified ||
+    member.hasSeenTutorial
+  );
+};
+
+const mergeMember = (base: Member, existing?: Member): Member => {
+  if (!existing) {
+    return base;
+  }
+
+  return {
+    ...base,
+    id: existing.id || base.id,
+    email: existing.email || base.email,
+    accountType: existing.accountType !== 'standard' ? existing.accountType : base.accountType,
+    profilePicture: existing.profilePicture ?? base.profilePicture,
+    exerciseMinutes: existing.exerciseMinutes,
+    distanceRun: existing.distanceRun,
+    connectedApps: existing.connectedApps,
+    fitnessAssessments: existing.fitnessAssessments,
+    workouts: existing.workouts,
+    achievements: existing.achievements,
+    requiredPTSessionsPerWeek: existing.requiredPTSessionsPerWeek,
+    isVerified: existing.isVerified,
+    ptlPendingApproval: existing.ptlPendingApproval,
+    linkedAttendanceId: existing.linkedAttendanceId,
+    monthlyPlacements: existing.monthlyPlacements,
+    trophyCount: existing.trophyCount,
+    hasSeenTutorial: existing.hasSeenTutorial ?? base.hasSeenTutorial,
+  };
+};
 
 const getWorkoutDedupKey = (workout: Workout) => {
   if (workout.externalId) {
@@ -476,7 +501,7 @@ export const useMemberStore = create<MemberState>()(
   persist(
     (set, get) => ({
       members: INITIAL_MEMBERS,
-      ptSessions: generateMockSessions(INITIAL_MEMBERS),
+      ptSessions: [],
       scheduledSessions: [],
       attendanceRecords: [],
       notifications: [],
@@ -486,15 +511,63 @@ export const useMemberStore = create<MemberState>()(
 
       // Member actions
       addMember: (member) => set((state) => ({
-        members: [...state.members, member]
+        members: [...state.members, normalizeOwnerMember(member)]
       })),
+
+      syncMembersFromRoster: (rosterMembers) => set((state) => {
+        const owner = normalizeOwnerMember(
+          state.members.find((member) => member.accountType === 'fitflight_creator') ?? OWNER_ACCOUNT
+        );
+        const remainingLocalMembers = state.members.filter((member) => member.id !== owner.id);
+        const matchedLocalIds = new Set<string>();
+
+        const mergedRosterMembers = rosterMembers.map((rosterMember) => {
+          const existing = remainingLocalMembers.find((member) => isSameMember(member, rosterMember));
+          if (existing) {
+            matchedLocalIds.add(existing.id);
+          }
+
+          return mergeMember(rosterMember, existing);
+        });
+
+        const preservedLocalOnlyMembers = remainingLocalMembers.filter((member) => {
+          if (matchedLocalIds.has(member.id)) {
+            return false;
+          }
+
+          return hasLocalMemberData(member);
+        });
+
+        const nextMembers = [owner, ...mergedRosterMembers, ...preservedLocalOnlyMembers.map(normalizeOwnerMember)];
+        const validMemberIds = new Set(nextMembers.map((member) => member.id));
+
+        return {
+          members: nextMembers,
+          ptSessions: state.ptSessions.map((session) => ({
+            ...session,
+            squadron: session.squadron ?? 'Hawks',
+            attendees: session.attendees.filter((memberId) => validMemberIds.has(memberId)),
+            createdBy: validMemberIds.has(session.createdBy) ? session.createdBy : owner.id,
+          })),
+          scheduledSessions: state.scheduledSessions.map((session) => ({
+            ...session,
+            squadron: session.squadron ?? 'Hawks',
+            attendees: session.attendees.filter((memberId) => validMemberIds.has(memberId)),
+            createdBy: validMemberIds.has(session.createdBy) ? session.createdBy : owner.id,
+          })),
+          ufpmId:
+            state.ufpmId && validMemberIds.has(state.ufpmId)
+              ? state.ufpmId
+              : nextMembers.find((member) => member.accountType === 'ufpm')?.id ?? null,
+        };
+      }),
 
       removeMember: (id) => set((state) => ({
         members: state.members.filter(m => m.id !== id)
       })),
 
       updateMember: (id, updates) => set((state) => ({
-        members: state.members.map(m => m.id === id ? { ...m, ...updates } : m)
+        members: state.members.map(m => m.id === id ? normalizeOwnerMember({ ...m, ...updates }) : m)
       })),
 
       getMemberById: (id) => get().members.find(m => m.id === id),
@@ -502,6 +575,14 @@ export const useMemberStore = create<MemberState>()(
       // PT Session actions
       addPTSession: (session) => set((state) => ({
         ptSessions: [...state.ptSessions, session]
+      })),
+
+      syncPTSessions: (sessions) => set(() => ({
+        ptSessions: sessions.map((session) => ({
+          ...session,
+          squadron: session.squadron ?? 'Hawks',
+          attendees: [...new Set(session.attendees)],
+        })),
       })),
 
       updatePTSession: (id, updates) => set((state) => ({
@@ -624,7 +705,7 @@ export const useMemberStore = create<MemberState>()(
           accountType: m.id === memberId
             ? 'ufpm' as AccountType
             : m.accountType === 'ufpm'
-              ? 'standard' as AccountType
+              ? 'ptl' as AccountType
               : m.accountType,
         })),
       })),

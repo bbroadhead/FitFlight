@@ -7,12 +7,30 @@ import { useRouter, Redirect } from 'expo-router';
 import { Shield, User, Mail, Lock, ChevronRight, Users, AlertCircle, Building2 } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import { useAuthStore, useMemberStore, type AccountType, type Flight, type Squadron, type User as UserType, getDisplayName, SQUADRONS } from '@/lib/store';
+import { useAuthStore, useMemberStore, type AccountType, type Flight, type Member, type Squadron, type User as UserType, getDisplayName, SQUADRONS } from '@/lib/store';
 import { cn } from '@/lib/cn';
-import { clearUrlHashSession, getUserForAccessToken, readSessionFromUrlHash, signInWithPassword, signUpWithPassword } from '@/lib/supabaseAuth';
+import { clearUrlHashSession, getUserForAccessToken, readSessionFromUrlHash, requestPasswordReset, signInWithPassword, signUpWithPassword } from '@/lib/supabaseAuth';
+import { createRosterMember, ensureMemberRole, fetchRoleForEmail, fetchRosterMembers } from '@/lib/supabaseData';
 
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
 const RANKS = ['AB', 'Amn', 'A1C', 'SrA', 'SSgt', 'TSgt', 'MSgt', 'SMSgt', 'CMSgt'];
+
+function normalizeSpecialMemberName(firstName: string, lastName: string) {
+  const normalizedFirstName = firstName.trim().toLowerCase();
+  const normalizedLastName = lastName.trim().toLowerCase();
+
+  if (normalizedFirstName === 'benjamin' && normalizedLastName === 'broadhead') {
+    return {
+      firstName: 'BENJAMIN',
+      lastName: 'BROADHEAD',
+    };
+  }
+
+  return {
+    firstName: firstName.trim(),
+    lastName: lastName.trim(),
+  };
+}
 
 function getInitialAccountType(firstName: string, lastName: string): AccountType {
   const normalizedFirstName = firstName.trim().toLowerCase();
@@ -25,6 +43,30 @@ function getInitialAccountType(firstName: string, lastName: string): AccountType
   return 'standard';
 }
 
+function findMatchingMember<T extends Pick<Member, 'id' | 'email' | 'firstName' | 'lastName'>>(
+  members: T[],
+  options: { email?: string; firstName?: string; lastName?: string }
+): T | null {
+  const normalizedEmail = options.email?.trim().toLowerCase();
+  if (normalizedEmail) {
+    const emailMatch = members.find((member) => member.email.trim().toLowerCase() === normalizedEmail);
+    if (emailMatch) {
+      return emailMatch;
+    }
+  }
+
+  const normalizedFirstName = options.firstName?.trim().toLowerCase();
+  const normalizedLastName = options.lastName?.trim().toLowerCase();
+  if (!normalizedFirstName || !normalizedLastName) {
+    return null;
+  }
+
+  return members.find((member) =>
+    member.firstName.trim().toLowerCase() === normalizedFirstName &&
+    member.lastName.trim().toLowerCase() === normalizedLastName
+  ) ?? null;
+}
+
 export default function LoginScreen() {
   const router = useRouter();
   const login = useAuthStore(s => s.login);
@@ -33,6 +75,7 @@ export default function LoginScreen() {
   const hasCheckedAuth = useAuthStore(s => s.hasCheckedAuth);
   const members = useMemberStore(s => s.members);
   const addMember = useMemberStore(s => s.addMember);
+  const updateMember = useMemberStore(s => s.updateMember);
   const addNotification = useMemberStore(s => s.addNotification);
   const attendanceRecords = useMemberStore(s => s.attendanceRecords);
 
@@ -42,13 +85,16 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [selectedFlight, setSelectedFlight] = useState<Flight>('Apex');
-  const [selectedSquadron, setSelectedSquadron] = useState<Squadron>('392 IS');
+  const [selectedSquadron, setSelectedSquadron] = useState<Squadron>('Hawks');
   const [selectedRank, setSelectedRank] = useState('A1C');
   const [wantsPTL, setWantsPTL] = useState(false);
   const [stayLoggedIn, setStayLoggedIn] = useState(true);
   const [error, setError] = useState('');
   const [showLinkModal, setShowLinkModal] = useState(false);
   const [showVerificationModal, setShowVerificationModal] = useState(false);
+  const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false);
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetMessage, setResetMessage] = useState('');
   const [matchingAttendance, setMatchingAttendance] = useState<typeof attendanceRecords[0] | null>(null);
 
   const validateEmail = (emailToValidate: string): boolean => {
@@ -61,41 +107,100 @@ export default function LoginScreen() {
       return;
     }
 
+    if (sessionFromHash.type === 'recovery') {
+      if (typeof window !== 'undefined') {
+        const appUrl = process.env.EXPO_PUBLIC_APP_URL?.replace(/\/+$/, '') ?? '';
+        const fallbackBase = `${window.location.origin}${window.location.pathname.replace(/\/login$/, '').replace(/\/$/, '')}`;
+        const baseUrl = appUrl || fallbackBase;
+        window.location.replace(`${baseUrl}/reset-password${window.location.hash}`);
+        return;
+      }
+
+      router.replace('/reset-password');
+      return;
+    }
+
     const finalizeEmailConfirmation = async () => {
       try {
         const authUser = await getUserForAccessToken(sessionFromHash.accessToken);
         const metadata = authUser.user_metadata ?? {};
         const normalizedEmail = (authUser.email ?? email).toLowerCase();
-        const existingMember = members.find((member) => member.email.toLowerCase() === normalizedEmail);
-
-        const member = existingMember ?? {
-          id: authUser.id,
-          rank: typeof metadata.rank === 'string' ? metadata.rank : 'A1C',
-          firstName: typeof metadata.firstName === 'string' ? metadata.firstName : 'Airman',
-          lastName: typeof metadata.lastName === 'string' ? metadata.lastName : 'Member',
-          flight: (typeof metadata.flight === 'string' ? metadata.flight : 'Apex') as Flight,
-          squadron: (typeof metadata.squadron === 'string' ? metadata.squadron : '392 IS') as Squadron,
-          accountType: getInitialAccountType(
-            typeof metadata.firstName === 'string' ? metadata.firstName : 'Airman',
-            typeof metadata.lastName === 'string' ? metadata.lastName : 'Member'
-          ),
+        const roleRecord = await fetchRoleForEmail(normalizedEmail, sessionFromHash.accessToken).catch(() => null);
+        const rosterMembers = await fetchRosterMembers(sessionFromHash.accessToken).catch(() => []);
+        const localExistingMember = findMatchingMember(members, {
           email: normalizedEmail,
-          exerciseMinutes: 0,
-          distanceRun: 0,
-          connectedApps: [] as string[],
-          fitnessAssessments: [],
-          workouts: [],
-          achievements: [] as string[],
-          requiredPTSessionsPerWeek: 3,
-          isVerified: true,
-          ptlPendingApproval: false,
-          monthlyPlacements: [],
-          trophyCount: 0,
-        };
+          firstName: typeof metadata.firstName === 'string' ? metadata.firstName : '',
+          lastName: typeof metadata.lastName === 'string' ? metadata.lastName : '',
+        });
+        const rosterExistingMember = findMatchingMember(rosterMembers, {
+          email: normalizedEmail,
+          firstName: typeof metadata.firstName === 'string' ? metadata.firstName : '',
+          lastName: typeof metadata.lastName === 'string' ? metadata.lastName : '',
+        });
+        const existingMember = localExistingMember ?? rosterExistingMember;
+        const normalizedSpecialName = normalizeSpecialMemberName(
+          typeof metadata.firstName === 'string' ? metadata.firstName : existingMember?.firstName ?? 'Airman',
+          typeof metadata.lastName === 'string' ? metadata.lastName : existingMember?.lastName ?? 'Member'
+        );
+
+        const member = existingMember
+          ? {
+              ...existingMember,
+              firstName: normalizedSpecialName.firstName,
+              lastName: normalizedSpecialName.lastName,
+              email: normalizedEmail,
+              isVerified: true,
+            }
+          : {
+              id: authUser.id,
+              rank: typeof metadata.rank === 'string' ? metadata.rank : 'A1C',
+              firstName: normalizedSpecialName.firstName,
+              lastName: normalizedSpecialName.lastName,
+              flight: (typeof metadata.flight === 'string' ? metadata.flight : 'Apex') as Flight,
+              squadron: (typeof metadata.squadron === 'string' ? metadata.squadron : 'Hawks') as Squadron,
+              accountType: roleRecord?.app_role ?? getInitialAccountType(
+                typeof metadata.firstName === 'string' ? metadata.firstName : 'Airman',
+                typeof metadata.lastName === 'string' ? metadata.lastName : 'Member'
+              ),
+              email: normalizedEmail,
+              exerciseMinutes: 0,
+              distanceRun: 0,
+              connectedApps: [] as string[],
+              fitnessAssessments: [],
+              workouts: [],
+              achievements: [] as string[],
+              requiredPTSessionsPerWeek: 3,
+              isVerified: true,
+              ptlPendingApproval: false,
+              monthlyPlacements: [],
+              trophyCount: 0,
+              hasSeenTutorial: false,
+            };
 
         if (!existingMember) {
           addMember(member);
+          await createRosterMember(member, sessionFromHash.accessToken).catch(() => undefined);
+        } else if (!localExistingMember) {
+          addMember({
+            ...existingMember,
+            email: normalizedEmail,
+            isVerified: true,
+          });
+        } else {
+          updateMember(existingMember.id, {
+            email: normalizedEmail,
+            rank: member.rank,
+            firstName: member.firstName,
+            lastName: member.lastName,
+            flight: member.flight,
+            squadron: member.squadron,
+            accountType: member.accountType,
+            isVerified: true,
+            ptlPendingApproval: member.ptlPendingApproval,
+          });
         }
+
+        await ensureMemberRole(normalizedEmail, member.accountType, sessionFromHash.accessToken).catch(() => undefined);
 
         setSessionTokens({
           accessToken: sessionFromHash.accessToken,
@@ -114,11 +219,11 @@ export default function LoginScreen() {
           isVerified: true,
           ptlPendingApproval: member.ptlPendingApproval,
           fitnessAssessmentsPrivate: false,
-          hasSeenTutorial: false,
+          hasSeenTutorial: member.hasSeenTutorial ?? false,
         }, { rememberSession: true });
 
         clearUrlHashSession();
-        router.replace('/welcome');
+        router.replace(member.hasSeenTutorial ? '/(tabs)' : '/welcome');
       } catch (confirmationError) {
         clearUrlHashSession();
         setError(
@@ -130,7 +235,7 @@ export default function LoginScreen() {
     };
 
     void finalizeEmailConfirmation();
-  }, [addMember, email, login, members, router, setSessionTokens]);
+  }, [addMember, email, login, members, router, setSessionTokens, updateMember]);
 
   const handleSignIn = () => {
     const run = async () => {
@@ -144,36 +249,84 @@ export default function LoginScreen() {
 
       const response = await signInWithPassword(email.toLowerCase(), password);
       const metadata = response.user.user_metadata ?? {};
-      const existingMember = members.find(m => m.email.toLowerCase() === email.toLowerCase());
+      const normalizedEmail = email.toLowerCase();
+      const roleRecord = await fetchRoleForEmail(normalizedEmail, response.access_token).catch(() => null);
+      const rosterMembers = await fetchRosterMembers(response.access_token).catch(() => []);
+      const localExistingMember = findMatchingMember(members, {
+        email: normalizedEmail,
+        firstName: typeof metadata.firstName === 'string' ? metadata.firstName : '',
+        lastName: typeof metadata.lastName === 'string' ? metadata.lastName : '',
+      });
+      const rosterExistingMember = findMatchingMember(rosterMembers, {
+        email: normalizedEmail,
+        firstName: typeof metadata.firstName === 'string' ? metadata.firstName : '',
+        lastName: typeof metadata.lastName === 'string' ? metadata.lastName : '',
+      });
+      const existingMember = localExistingMember ?? rosterExistingMember;
+      const normalizedSpecialName = normalizeSpecialMemberName(
+        typeof metadata.firstName === 'string' ? metadata.firstName : existingMember?.firstName ?? 'Airman',
+        typeof metadata.lastName === 'string' ? metadata.lastName : existingMember?.lastName ?? 'Member'
+      );
 
-      const member = existingMember ?? {
-        id: response.user.id,
-        rank: typeof metadata.rank === 'string' ? metadata.rank : selectedRank,
-        firstName: typeof metadata.firstName === 'string' ? metadata.firstName : 'Airman',
-        lastName: typeof metadata.lastName === 'string' ? metadata.lastName : 'Member',
-        flight: (typeof metadata.flight === 'string' ? metadata.flight : selectedFlight) as Flight,
+      const member = existingMember
+        ? {
+            ...existingMember,
+            firstName: normalizedSpecialName.firstName,
+            lastName: normalizedSpecialName.lastName,
+            email: normalizedEmail,
+            accountType: roleRecord?.app_role ?? existingMember.accountType,
+            isVerified: true,
+          }
+        : {
+            id: response.user.id,
+            rank: typeof metadata.rank === 'string' ? metadata.rank : selectedRank,
+            firstName: normalizedSpecialName.firstName,
+            lastName: normalizedSpecialName.lastName,
+            flight: (typeof metadata.flight === 'string' ? metadata.flight : selectedFlight) as Flight,
         squadron: (typeof metadata.squadron === 'string' ? metadata.squadron : selectedSquadron) as Squadron,
-        accountType: getInitialAccountType(
-          typeof metadata.firstName === 'string' ? metadata.firstName : 'Airman',
-          typeof metadata.lastName === 'string' ? metadata.lastName : 'Member'
-        ),
-        email: email.toLowerCase(),
-        exerciseMinutes: 0,
-        distanceRun: 0,
-        connectedApps: [] as string[],
-        fitnessAssessments: [],
-        workouts: [],
-        achievements: [] as string[],
-        requiredPTSessionsPerWeek: 3,
-        isVerified: true,
-        ptlPendingApproval: false,
-        monthlyPlacements: [],
-        trophyCount: 0,
-      };
+            accountType: roleRecord?.app_role ?? getInitialAccountType(
+              typeof metadata.firstName === 'string' ? metadata.firstName : 'Airman',
+              typeof metadata.lastName === 'string' ? metadata.lastName : 'Member'
+            ),
+            email: normalizedEmail,
+            exerciseMinutes: 0,
+            distanceRun: 0,
+            connectedApps: [] as string[],
+            fitnessAssessments: [],
+            workouts: [],
+            achievements: [] as string[],
+            requiredPTSessionsPerWeek: 3,
+            isVerified: true,
+            ptlPendingApproval: false,
+            monthlyPlacements: [],
+            trophyCount: 0,
+            hasSeenTutorial: false,
+          };
 
       if (!existingMember) {
         addMember(member);
+        await createRosterMember(member, response.access_token).catch(() => undefined);
+      } else if (!localExistingMember) {
+        addMember({
+          ...existingMember,
+          email: member.email,
+          isVerified: true,
+        });
+      } else {
+        updateMember(existingMember.id, {
+          email: member.email,
+          rank: member.rank,
+          firstName: member.firstName,
+          lastName: member.lastName,
+          flight: member.flight,
+          squadron: member.squadron,
+          accountType: member.accountType,
+          isVerified: true,
+          ptlPendingApproval: member.ptlPendingApproval,
+        });
       }
+
+      await ensureMemberRole(normalizedEmail, member.accountType, response.access_token).catch(() => undefined);
 
       const user: UserType = {
         id: member.id,
@@ -187,6 +340,7 @@ export default function LoginScreen() {
         isVerified: member.isVerified,
         ptlPendingApproval: member.ptlPendingApproval,
         fitnessAssessmentsPrivate: false,
+        hasSeenTutorial: member.hasSeenTutorial ?? false,
       };
 
       setSessionTokens({
@@ -194,7 +348,7 @@ export default function LoginScreen() {
         refreshToken: response.refresh_token,
       });
       login(user, { rememberSession: stayLoggedIn });
-      router.replace('/(tabs)');
+      router.replace((member.hasSeenTutorial ?? false) ? '/(tabs)' : '/welcome');
     };
 
     run().catch((error) => {
@@ -202,7 +356,10 @@ export default function LoginScreen() {
     });
   };
 
-  const completeSignUp = async (linkedAttendanceId: string | null) => {
+  const completeSignUp = async (
+    linkedAttendanceId: string | null,
+    existingMemberOverride: typeof members[number] | null
+  ) => {
     const result = await signUpWithPassword({
       email: email.toLowerCase(),
       password,
@@ -222,6 +379,7 @@ export default function LoginScreen() {
     }
 
     createAccount(
+      existingMemberOverride,
       linkedAttendanceId,
       result.session.access_token,
       result.session.refresh_token,
@@ -252,6 +410,11 @@ export default function LoginScreen() {
       r => r.firstName.toLowerCase() === firstName.toLowerCase() &&
            r.lastName.toLowerCase() === lastName.toLowerCase()
     );
+    const existingMember = findMatchingMember(members, {
+      email: email.toLowerCase(),
+      firstName,
+      lastName,
+    });
 
     if (matching) {
       setMatchingAttendance(matching);
@@ -259,26 +422,28 @@ export default function LoginScreen() {
       return;
     }
 
-    completeSignUp(null).catch((error) => {
+    completeSignUp(null, existingMember).catch((error) => {
       setError(error instanceof Error ? error.message : 'Unable to create account.');
     });
   };
 
   const createAccount = (
+    existingMemberOverride: typeof members[number] | null,
     linkedAttendanceId: string | null,
     accessToken?: string,
     refreshToken?: string,
     authUserId?: string
   ) => {
-    const newMemberId = authUserId ?? Date.now().toString();
+    const newMemberId = existingMemberOverride?.id ?? authUserId ?? Date.now().toString();
     const accountType = getInitialAccountType(firstName, lastName);
+    const normalizedSpecialName = normalizeSpecialMemberName(firstName, lastName);
 
     // Create the member
     const newMember = {
       id: newMemberId,
       rank: selectedRank,
-      firstName: firstName.trim(),
-      lastName: lastName.trim(),
+      firstName: normalizedSpecialName.firstName,
+      lastName: normalizedSpecialName.lastName,
       flight: selectedFlight,
       squadron: selectedSquadron,
       accountType,
@@ -295,17 +460,36 @@ export default function LoginScreen() {
       linkedAttendanceId: linkedAttendanceId ?? undefined,
       monthlyPlacements: [],
       trophyCount: 0,
+      hasSeenTutorial: false,
     };
 
-    addMember(newMember);
+    if (existingMemberOverride) {
+      updateMember(existingMemberOverride.id, {
+        rank: newMember.rank,
+        firstName: newMember.firstName,
+        lastName: newMember.lastName,
+        flight: newMember.flight,
+        squadron: newMember.squadron,
+        accountType: accountType === 'standard' ? existingMemberOverride.accountType : accountType,
+        email: newMember.email,
+        isVerified: true,
+        ptlPendingApproval: wantsPTL,
+        linkedAttendanceId: linkedAttendanceId ?? existingMemberOverride.linkedAttendanceId,
+      });
+    } else {
+      addMember(newMember);
+      if (accessToken) {
+        void createRosterMember(newMember, accessToken).catch(() => undefined);
+      }
+    }
 
-    // If requesting PTL, notify owner and UFPM
+    // If requesting PFL, notify owner and UFPM
     if (wantsPTL) {
       addNotification({
         type: 'ptl_request',
-        title: 'PTL Request',
-        message: `${selectedRank} ${firstName} ${lastName} signed up as a PTL. Open the app to authorize or reject.`,
-        data: { memberId: newMemberId },
+        title: 'PFL Request',
+        message: `${selectedRank} ${firstName} ${lastName} signed up as a PFL. Open the app to authorize or reject.`,
+      data: { memberId: newMemberId },
       });
     }
 
@@ -313,8 +497,8 @@ export default function LoginScreen() {
     const user: UserType = {
       id: newMemberId,
       rank: selectedRank,
-      firstName: firstName.trim(),
-      lastName: lastName.trim(),
+      firstName: normalizedSpecialName.firstName,
+      lastName: normalizedSpecialName.lastName,
       flight: selectedFlight,
       squadron: selectedSquadron,
       accountType,
@@ -340,6 +524,36 @@ export default function LoginScreen() {
     } else {
       handleSignIn();
     }
+  };
+
+  const handleForgotPassword = () => {
+    const run = async () => {
+      setError('');
+      setResetMessage('');
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+      const normalizedEmail = resetEmail.trim().toLowerCase();
+      if (!normalizedEmail) {
+        setError('Please enter your email address.');
+        return;
+      }
+
+      if (!validateEmail(normalizedEmail)) {
+        setError('Password reset is only available for @us.af.mil email addresses.');
+        return;
+      }
+
+      await requestPasswordReset(normalizedEmail);
+      setResetMessage(`We sent a password reset link to ${normalizedEmail}.`);
+    };
+
+    run().catch((forgotPasswordError) => {
+      setError(
+        forgotPasswordError instanceof Error
+          ? forgotPasswordError.message
+          : 'Unable to send password reset email.'
+      );
+    });
   };
 
   // Redirect if already authenticated
@@ -563,7 +777,7 @@ export default function LoginScreen() {
                     </View>
                   </View>
 
-                  {/* PTL Toggle */}
+                  {/* PFL Toggle */}
                   <Pressable
                     onPress={() => { setWantsPTL(!wantsPTL); Haptics.selectionAsync(); }}
                     className={cn(
@@ -577,7 +791,7 @@ export default function LoginScreen() {
                         <Text className={cn(
                           "font-medium",
                           wantsPTL ? "text-af-gold" : "text-white/70"
-                        )}>Request PTL Status</Text>
+                        )}>Request PFL Status</Text>
                         <Text className="text-white/40 text-xs">Requires approval from Owner/UFPM</Text>
                       </View>
                     </View>
@@ -639,6 +853,21 @@ export default function LoginScreen() {
                 </Text>
                 <ChevronRight size={20} color="white" />
               </Pressable>
+
+              {!isSignUp ? (
+                <Pressable
+                  onPress={() => {
+                    setResetEmail(email.trim().toLowerCase());
+                    setResetMessage('');
+                    setError('');
+                    setShowForgotPasswordModal(true);
+                    Haptics.selectionAsync();
+                  }}
+                  className="mt-4 self-center"
+                >
+                  <Text className="text-af-silver font-medium">Forgot Password?</Text>
+                </Pressable>
+              ) : null}
             </Animated.View>
           </ScrollView>
         </KeyboardAvoidingView>
@@ -656,7 +885,12 @@ export default function LoginScreen() {
             <View className="flex-row space-x-3">
               <Pressable
                 onPress={() => {
-                  completeSignUp(null).catch((error) => {
+                  const existingMember = findMatchingMember(members, {
+                    email: email.toLowerCase(),
+                    firstName,
+                    lastName,
+                  });
+                  completeSignUp(null, existingMember).catch((error) => {
                     setError(error instanceof Error ? error.message : 'Unable to create account.');
                   });
                 }}
@@ -666,7 +900,12 @@ export default function LoginScreen() {
               </Pressable>
               <Pressable
                 onPress={() => {
-                  completeSignUp(matchingAttendance?.id ?? null).catch((error) => {
+                  const existingMember = findMatchingMember(members, {
+                    email: email.toLowerCase(),
+                    firstName,
+                    lastName,
+                  });
+                  completeSignUp(matchingAttendance?.id ?? null, existingMember).catch((error) => {
                     setError(error instanceof Error ? error.message : 'Unable to create account.');
                   });
                 }}
@@ -692,6 +931,52 @@ export default function LoginScreen() {
             >
               <Text className="text-white text-center font-semibold">OK</Text>
             </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showForgotPasswordModal} transparent animationType="fade">
+        <View className="flex-1 bg-black/80 items-center justify-center p-6">
+          <View className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20">
+            <Text className="text-white text-xl font-bold mb-4">Reset Password</Text>
+            <Text className="text-af-silver mb-4">
+              Enter your email address and we will send you a link to reset your password.
+            </Text>
+            <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10 mb-4">
+              <Mail size={20} color="#C0C0C0" />
+              <TextInput
+                placeholder="you@us.af.mil"
+                placeholderTextColor="#ffffff40"
+                value={resetEmail}
+                onChangeText={setResetEmail}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                className="flex-1 ml-3 text-white text-base"
+              />
+            </View>
+            {resetMessage ? (
+              <View className="bg-emerald-500/20 border border-emerald-400/40 rounded-xl px-4 py-3 mb-4">
+                <Text className="text-emerald-200">{resetMessage}</Text>
+              </View>
+            ) : null}
+            <View className="flex-row">
+              <Pressable
+                onPress={() => {
+                  setShowForgotPasswordModal(false);
+                  setResetMessage('');
+                  setError('');
+                }}
+                className="flex-1 bg-white/10 py-3 rounded-xl mr-2"
+              >
+                <Text className="text-white text-center font-semibold">Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={handleForgotPassword}
+                className="flex-1 bg-af-accent py-3 rounded-xl ml-2"
+              >
+                <Text className="text-white text-center font-semibold">Send Link</Text>
+              </Pressable>
+            </View>
           </View>
         </View>
       </Modal>

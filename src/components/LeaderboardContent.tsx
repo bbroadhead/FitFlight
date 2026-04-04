@@ -255,7 +255,7 @@ export function LeaderboardContent({
   const user = useAuthStore(s => s.user);
 
   const userName = user ? getDisplayName(user) : 'Airman';
-  const userSquadron = user?.squadron ?? '392 IS';
+  const userSquadron = user?.squadron ?? 'Hawks';
 
   const squadronMembers = useMemo(() => {
     return members.filter(m => m.squadron === userSquadron);
@@ -369,7 +369,6 @@ export function LeaderboardContent({
 
           <View className="flex-row items-center justify-between">
             <View className="flex-1 mr-3">
-              <Text className="text-af-silver text-sm">Welcome back,</Text>
               <Text className="text-white text-xl font-bold" numberOfLines={1}>{userName}</Text>
             </View>
             <View className="flex-row items-center bg-af-gold/20 px-3 py-2 rounded-full flex-shrink-0">

@@ -60,3 +60,26 @@ The rest of the app data is still local browser state today:
 - achievements
 
 That means secure auth is now in place at the entry point, but cross-user shared app data still needs a full migration to Supabase tables plus row-level security and mutation APIs before attendance, workouts, and profiles truly stay in sync for everyone.
+
+## Role-backed roster security
+
+To harden roster writes in Supabase, also run:
+
+- `supabase/sql/member_roles_rls.sql`
+
+That script:
+
+- creates `public.member_roles`
+- enables RLS on `member_roles` and `roster`
+- allows all authenticated users to read the roster
+- allows only `fitflight_creator`, `ufpm`, or `ptl` to add/edit/delete roster rows
+- allows only `fitflight_creator` or `ufpm` to change role assignments in `member_roles`
+- seeds:
+  - `benjamin.broadhead.2@us.af.mil` as `fitflight_creator`
+  - `jacob.de.la.rosa@us.af.mil` as `ufpm`
+
+After you run that SQL, the app will use Supabase-backed roles to decide:
+
+- who can manage roster members
+- who can assign UFPM
+- which authenticated user should have Owner / UFPM / PTL permissions

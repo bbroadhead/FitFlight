@@ -7,15 +7,16 @@ import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { format, startOfWeek, addDays, subWeeks, addWeeks, isSameDay } from 'date-fns';
-import { useMemberStore, useAuthStore, type Flight, canEditAttendance, getDisplayName } from '@/lib/store';
+import { useMemberStore, useAuthStore, type Flight, canEditAttendance, formatRankDisplay } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { useTabSwipe } from '@/contexts/TabSwipeContext';
+import { fetchAttendanceSessions, setAttendanceStatus } from '@/lib/supabaseData';
 
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
 const WEEKLY_PROGRESS_TARGET = 5;
-const NAME_COLUMN_WIDTH = 148;
-const PROGRESS_COLUMN_WIDTH = 64;
-const DAY_COLUMN_WIDTH = 64;
+const NAME_COLUMN_WIDTH = 120;
+const PROGRESS_COLUMN_WIDTH = 56;
+const DAY_COLUMN_WIDTH = 60;
 const ATTENDANCE_FILTER_STORAGE_KEY = 'fitflight-attendance-filter';
 
 export default function AttendanceScreen() {
@@ -24,33 +25,45 @@ export default function AttendanceScreen() {
   const [currentScrollX, setCurrentScrollX] = useState(0);
   const { setSwipeEnabled } = useTabSwipe();
   const headerScrollRef = useRef<ScrollView | null>(null);
+  const flightScrollRef = useRef<ScrollView | null>(null);
   const rowScrollRefs = useRef<Record<string, ScrollView | null>>({});
   const syncingSourceRef = useRef<string | null>(null);
   const currentScrollXRef = useRef(0);
   const dragStartScrollXRef = useRef(0);
+  const flightScrollXRef = useRef(0);
+  const flightDragStartScrollXRef = useRef(0);
   const [tableViewportWidth, setTableViewportWidth] = useState(0);
+  const [flightViewportWidth, setFlightViewportWidth] = useState(0);
 
   const members = useMemberStore(s => s.members);
   const ptSessions = useMemberStore(s => s.ptSessions);
-  const toggleAttendance = useMemberStore(s => s.toggleAttendance);
-  const addPTSession = useMemberStore(s => s.addPTSession);
+  const syncPTSessions = useMemberStore(s => s.syncPTSessions);
   const user = useAuthStore(s => s.user);
+  const accessToken = useAuthStore(s => s.accessToken);
 
   const canEdit = user ? canEditAttendance(user.accountType) : false;
+  const userSquadron = user?.squadron ?? 'Hawks';
 
   const weekDays = useMemo(() => {
     return Array.from({ length: 7 }, (_, i) => addDays(currentWeekStart, i));
   }, [currentWeekStart]);
+  const flightStripWidth = useMemo(() => {
+    const allWidth = 68;
+    const flightWidth = 94;
+    return allWidth + FLIGHTS.length * flightWidth;
+  }, []);
   const dayColumnsWidth = weekDays.length * DAY_COLUMN_WIDTH;
   const horizontalOverflow = Math.max(dayColumnsWidth - tableViewportWidth, 0);
+  const flightHorizontalOverflow = Math.max(flightStripWidth - flightViewportWidth, 0);
   const edgeThreshold = 2;
   const showLeftIndicator = horizontalOverflow > 0 && currentScrollX > edgeThreshold;
   const showRightIndicator = horizontalOverflow > 0 && currentScrollX < horizontalOverflow - edgeThreshold;
 
   const flightMembers = useMemo(() => {
+    const squadronMembers = members.filter((member) => member.squadron === userSquadron);
     const filteredMembers = selectedFlight === 'all'
-      ? [...members]
-      : members.filter(m => m.flight === selectedFlight);
+      ? [...squadronMembers]
+      : squadronMembers.filter(m => m.flight === selectedFlight);
 
     return filteredMembers.sort((a, b) => {
       const lastNameCompare = a.lastName.localeCompare(b.lastName);
@@ -64,41 +77,61 @@ export default function AttendanceScreen() {
 
   const getAttendanceDisplayName = useCallback((memberId: string) => {
     const member = members.find(m => m.id === memberId);
-    if (!member) return '';
+    if (!member) {
+      return { rank: '', name: '' };
+    }
 
     const firstInitial = member.firstName.trim().charAt(0);
-    return `${member.rank} ${member.lastName}, ${firstInitial}`;
+    return {
+      rank: formatRankDisplay(member.rank),
+      name: `${member.lastName.toUpperCase()}, ${firstInitial.toUpperCase()}`,
+    };
   }, [members]);
 
-  const getSession = (date: Date, flight: Flight) => {
+  const getSession = (date: Date, flight: Flight, squadron: typeof userSquadron = userSquadron) => {
     const dateStr = format(date, 'yyyy-MM-dd');
-    return ptSessions.find(s => s.date === dateStr && s.flight === flight);
+    return ptSessions.find(s => s.date === dateStr && s.flight === flight && (s.squadron ?? 'Hawks') === squadron);
   };
 
-  const isAttending = (date: Date, memberId: string, flight: Flight) => {
-    const session = getSession(date, flight);
+  const isAttending = (date: Date, memberId: string, flight: Flight, squadron: typeof userSquadron = userSquadron) => {
+    const session = getSession(date, flight, squadron);
     return session?.attendees.includes(memberId) ?? false;
   };
 
-  const handleToggleAttendance = (date: Date, memberId: string, flight: Flight) => {
+  const loadAttendanceFromBackend = useCallback(async () => {
+    if (!accessToken) {
+      return;
+    }
+
+    const sessions = await fetchAttendanceSessions(accessToken);
+    syncPTSessions(sessions);
+  }, [accessToken, syncPTSessions]);
+
+  const handleToggleAttendance = async (date: Date, memberId: string, flight: Flight, squadron: typeof userSquadron = userSquadron) => {
     if (!canEdit) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
     const dateStr = format(date, 'yyyy-MM-dd');
-    let session = getSession(date, flight);
+    const attending = isAttending(date, memberId, flight, squadron);
 
-    if (!session) {
-      // Create session if it doesn't exist
-      const newSession = {
-        id: `session-${flight}-${dateStr}`,
+    if (!accessToken || !user) {
+      return;
+    }
+
+    try {
+      const updatedSessions = await setAttendanceStatus({
         date: dateStr,
         flight,
-        attendees: [memberId],
-        createdBy: user?.id ?? '',
-      };
-      addPTSession(newSession);
-    } else {
-      toggleAttendance(session.id, memberId);
+        squadron,
+        memberId,
+        createdBy: user.id,
+        isAttending: !attending,
+        accessToken,
+      });
+
+      syncPTSessions(updatedSessions);
+    } catch (error) {
+      console.error('Unable to update attendance in Supabase.', error);
     }
   };
 
@@ -113,9 +146,9 @@ export default function AttendanceScreen() {
     if (selectedFlight === 'all') return 0;
 
     const memberSessions = ptSessions.filter(
-      s => s.flight === selectedFlight && s.attendees.includes(memberId)
+      s => (s.squadron ?? 'Hawks') === userSquadron && s.flight === selectedFlight && s.attendees.includes(memberId)
     );
-    const totalSessions = ptSessions.filter(s => s.flight === selectedFlight).length;
+    const totalSessions = ptSessions.filter(s => (s.squadron ?? 'Hawks') === userSquadron && s.flight === selectedFlight).length;
     if (totalSessions === 0) return 0;
     return Math.round((memberSessions.length / totalSessions) * 100);
   };
@@ -127,7 +160,7 @@ export default function AttendanceScreen() {
 
     let count = 0;
     weekDays.forEach(day => {
-      if (isAttending(day, memberId, member.flight)) count++;
+      if (isAttending(day, memberId, member.flight, member.squadron)) count++;
     });
     return count;
   };
@@ -137,6 +170,21 @@ export default function AttendanceScreen() {
       setSwipeEnabled(true);
     };
   }, [setSwipeEnabled]);
+
+  useEffect(() => {
+    if (!accessToken) {
+      return;
+    }
+
+    void loadAttendanceFromBackend();
+    const interval = setInterval(() => {
+      void loadAttendanceFromBackend();
+    }, 15000);
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, [accessToken, loadAttendanceFromBackend]);
 
   useEffect(() => {
     let isMounted = true;
@@ -205,6 +253,10 @@ export default function AttendanceScreen() {
     setTableViewportWidth(width);
   }, []);
 
+  const handleFlightStripLayout = useCallback((event: LayoutChangeEvent) => {
+    setFlightViewportWidth(event.nativeEvent.layout.width);
+  }, []);
+
   const registerRowScrollRef = useCallback((memberId: string, ref: ScrollView | null) => {
     rowScrollRefs.current[memberId] = ref;
     if (ref && currentScrollXRef.current > 0) {
@@ -223,18 +275,50 @@ export default function AttendanceScreen() {
 
     const movingTowardLeft = dx > 0;
     const movingTowardRight = dx < 0;
-    const canScrollLeft = currentScrollXRef.current > edgeThreshold;
-    const canScrollRight = currentScrollXRef.current < horizontalOverflow - edgeThreshold;
+    const atLeftEdge = currentScrollXRef.current <= edgeThreshold;
+    const atRightEdge = currentScrollXRef.current >= horizontalOverflow - edgeThreshold;
 
-    return (movingTowardLeft && canScrollLeft) || (movingTowardRight && canScrollRight);
+    if ((movingTowardLeft && atLeftEdge) || (movingTowardRight && atRightEdge)) {
+      return false;
+    }
+
+    return true;
   }, [edgeThreshold, horizontalOverflow]);
+
+  const syncFlightScroll = useCallback((x: number) => {
+    const nextX = Math.max(0, Math.min(x, flightHorizontalOverflow));
+    flightScrollXRef.current = nextX;
+    flightScrollRef.current?.scrollTo({ x: nextX, animated: false });
+  }, [flightHorizontalOverflow]);
+
+  const canCaptureFlightDrag = useCallback((dx: number, dy: number) => {
+    if (flightHorizontalOverflow <= 0) {
+      return false;
+    }
+
+    if (Math.abs(dx) < 6 || Math.abs(dx) <= Math.abs(dy)) {
+      return false;
+    }
+
+    const movingTowardLeft = dx > 0;
+    const movingTowardRight = dx < 0;
+    const atLeftEdge = flightScrollXRef.current <= edgeThreshold;
+    const atRightEdge = flightScrollXRef.current >= flightHorizontalOverflow - edgeThreshold;
+
+    if ((movingTowardLeft && atLeftEdge) || (movingTowardRight && atRightEdge)) {
+      return false;
+    }
+
+    return true;
+  }, [edgeThreshold, flightHorizontalOverflow]);
 
   const attendancePanResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => false,
+    onMoveShouldSetPanResponderCapture: (_, gestureState) => canCaptureHorizontalDrag(gestureState.dx, gestureState.dy),
     onMoveShouldSetPanResponder: (_, gestureState) => canCaptureHorizontalDrag(gestureState.dx, gestureState.dy),
     onPanResponderGrant: () => {
       dragStartScrollXRef.current = currentScrollXRef.current;
-      updateSwipeState(currentScrollXRef.current);
+      setSwipeEnabled(false);
     },
     onPanResponderMove: (_, gestureState) => {
       const nextX = Math.max(
@@ -251,6 +335,37 @@ export default function AttendanceScreen() {
       updateSwipeState(currentScrollXRef.current);
     },
   }), [canCaptureHorizontalDrag, horizontalOverflow, syncHorizontalScroll, updateSwipeState]);
+
+  const flightPanResponder = useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => false,
+    onMoveShouldSetPanResponderCapture: (_, gestureState) => canCaptureFlightDrag(gestureState.dx, gestureState.dy),
+    onMoveShouldSetPanResponder: (_, gestureState) => canCaptureFlightDrag(gestureState.dx, gestureState.dy),
+    onPanResponderGrant: () => {
+      flightDragStartScrollXRef.current = flightScrollXRef.current;
+      setSwipeEnabled(false);
+    },
+    onPanResponderMove: (_, gestureState) => {
+      const nextX = Math.max(
+        0,
+        Math.min(flightDragStartScrollXRef.current - gestureState.dx, flightHorizontalOverflow)
+      );
+      syncFlightScroll(nextX);
+    },
+    onPanResponderRelease: () => {
+      const epsilon = 2;
+      const atBoundary = flightHorizontalOverflow <= 0 ||
+        flightScrollXRef.current <= epsilon ||
+        flightScrollXRef.current >= flightHorizontalOverflow - epsilon;
+      setSwipeEnabled(atBoundary);
+    },
+    onPanResponderTerminate: () => {
+      const epsilon = 2;
+      const atBoundary = flightHorizontalOverflow <= 0 ||
+        flightScrollXRef.current <= epsilon ||
+        flightScrollXRef.current >= flightHorizontalOverflow - epsilon;
+      setSwipeEnabled(atBoundary);
+    },
+  }), [canCaptureFlightDrag, flightHorizontalOverflow, setSwipeEnabled, syncFlightScroll]);
 
   return (
     <View className="flex-1">
@@ -305,8 +420,11 @@ export default function AttendanceScreen() {
           entering={FadeInDown.delay(200).springify()}
           className="px-6 mb-4"
         >
+          <View onLayout={handleFlightStripLayout} {...flightPanResponder.panHandlers}>
           <ScrollView
+            ref={flightScrollRef}
             horizontal
+            scrollEnabled={false}
             showsHorizontalScrollIndicator={false}
             style={{ flexGrow: 0 }}
           >
@@ -351,6 +469,7 @@ export default function AttendanceScreen() {
               ))}
             </View>
           </ScrollView>
+          </View>
         </Animated.View>
 
         {/* Attendance Table Header */}
@@ -364,6 +483,7 @@ export default function AttendanceScreen() {
                 ref={headerScrollRef}
                 horizontal
                 bounces={false}
+                scrollEnabled={false}
                 showsHorizontalScrollIndicator={false}
                 scrollEventThrottle={16}
                 onScroll={(event) => handleHorizontalScroll(event, 'header')}
@@ -374,7 +494,7 @@ export default function AttendanceScreen() {
                 <View className="flex-row" style={{ width: dayColumnsWidth }}>
                   {weekDays.map((day) => (
                     <View key={day.toISOString()} style={{ width: DAY_COLUMN_WIDTH }} className="items-center">
-                      <Text className="text-af-silver text-xs">{format(day, 'EEE')}</Text>
+                    <Text className="text-af-silver text-xs">{format(day, 'EEE')}</Text>
                       <Text className="text-white font-bold">{format(day, 'd')}</Text>
                     </View>
                   ))}
@@ -428,7 +548,8 @@ export default function AttendanceScreen() {
               >
                 <View className="flex-row items-center">
                   <View style={{ width: NAME_COLUMN_WIDTH, paddingRight: 8 }}>
-                    <Text className="text-white font-medium">{displayName}</Text>
+                    <Text className="text-af-silver text-[11px]" numberOfLines={1}>{displayName.rank}</Text>
+                    <Text className="text-white font-medium mt-0.5" numberOfLines={1}>{displayName.name}</Text>
                     <Text className="text-af-silver text-xs">{weeklyAttendance}/{WEEKLY_PROGRESS_TARGET} sessions</Text>
                   </View>
 
@@ -437,6 +558,7 @@ export default function AttendanceScreen() {
                       ref={(ref) => registerRowScrollRef(member.id, ref)}
                       horizontal
                       bounces={false}
+                      scrollEnabled={false}
                       showsHorizontalScrollIndicator={false}
                       scrollEventThrottle={16}
                       onScroll={(event) => handleHorizontalScroll(event, member.id)}
@@ -446,11 +568,11 @@ export default function AttendanceScreen() {
                     >
                       <View className="flex-row" style={{ width: dayColumnsWidth }}>
                         {weekDays.map((day) => {
-                          const attending = isAttending(day, member.id, member.flight);
+                          const attending = isAttending(day, member.id, member.flight, member.squadron);
                           return (
                             <Pressable
                               key={day.toISOString()}
-                              onPress={() => handleToggleAttendance(day, member.id, member.flight)}
+                              onPress={() => handleToggleAttendance(day, member.id, member.flight, member.squadron)}
                               disabled={!canEdit}
                               style={{ width: DAY_COLUMN_WIDTH }}
                               className="items-center"
@@ -528,7 +650,7 @@ export default function AttendanceScreen() {
           <View className="px-6 pb-4">
             <View className="bg-af-warning/10 border border-af-warning/30 rounded-xl p-4">
               <Text className="text-af-warning text-sm text-center">
-                Only PTLs, UFPM, and Owner can modify attendance records
+                Only PFLs, UFPM, and Owner can modify attendance records
               </Text>
             </View>
           </View>

@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { View, Text, Pressable, ScrollView, TextInput, Modal, Image, Platform } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { User, Shield, LogOut, LogIn, UserPlus, Trash2, Users, Activity, Watch, X, Check, Bell, Crown, Settings, Plus, Camera, FileText, Calendar, Building2, AlertTriangle, Upload, Dumbbell, ImageIcon, HelpCircle, Mail, ChevronDown, ChevronUp } from 'lucide-react-native';
+import { User, Shield, LogOut, LogIn, UserPlus, Trash2, Users, Activity, Watch, X, Check, Bell, Crown, Settings, Plus, Camera, FileText, Calendar, Building2, AlertTriangle, Upload, Dumbbell, ImageIcon, HelpCircle, Mail, ChevronDown, ChevronUp, Pencil, Search, Star } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
@@ -12,6 +12,7 @@ import { useAuthStore, useMemberStore, type Flight, type Member, type AccountTyp
 import { cn } from '@/lib/cn';
 import { canUseStravaSync, disconnectStrava, getStravaSetupError, mapImportedWorkouts, startStravaConnect, syncStravaWorkouts } from '@/lib/strava';
 import { signOutFromSupabase } from '@/lib/supabaseAuth';
+import { assignUFPMRole, createRosterMember, deleteRosterMember, ensureMemberRole, updateRosterMember } from '@/lib/supabaseData';
 
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
 const RANKS = ['AB', 'Amn', 'A1C', 'SrA', 'SSgt', 'TSgt', 'MSgt', 'SMSgt', 'CMSgt'];
@@ -45,6 +46,8 @@ export default function ProfileScreen() {
   const [showProfilePictureModal, setShowProfilePictureModal] = useState(false);
   const [showDisconnectModal, setShowDisconnectModal] = useState(false);
   const [showDeveloperContact, setShowDeveloperContact] = useState(false);
+  const [showUFPMModal, setShowUFPMModal] = useState(false);
+  const [showUFPMConfirmModal, setShowUFPMConfirmModal] = useState(false);
   const [integrationToDisconnect, setIntegrationToDisconnect] = useState<IntegrationService | null>(null);
   const [stravaBusyAction, setStravaBusyAction] = useState<'connect' | 'sync' | 'disconnect' | null>(null);
   const [stravaMessage, setStravaMessage] = useState<string | null>(null);
@@ -55,6 +58,11 @@ export default function ProfileScreen() {
   const [newMemberRank, setNewMemberRank] = useState('A1C');
   const [newMemberFlight, setNewMemberFlight] = useState<Flight>('Apex');
   const [newMemberEmail, setNewMemberEmail] = useState('');
+  const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
+  const [memberActionError, setMemberActionError] = useState('');
+  const [memberSearchQuery, setMemberSearchQuery] = useState('');
+  const [ufpmSearchQuery, setUFPMSearchQuery] = useState('');
+  const [selectedUFPMMemberId, setSelectedUFPMMemberId] = useState<string | null>(null);
 
   const isAuthenticated = useAuthStore(s => s.isAuthenticated);
   const updateUser = useAuthStore(s => s.updateUser);
@@ -64,10 +72,49 @@ export default function ProfileScreen() {
   const userAccountType = user?.accountType ?? 'standard';
   const canManage = canManagePTL(userAccountType);
   const hasAdminAccess = isAdmin(userAccountType);
+  const canManageMembers = canEditAttendance(userAccountType);
   const isOwnerReviewer = user?.email?.toLowerCase() === OWNER_EMAIL;
 
   const unreadNotifications = notifications.filter(n => !n.read);
   const ptlRequests = notifications.filter(n => n.type === 'ptl_request' && !n.read);
+  const currentUFPM = members.find((member) => member.accountType === 'ufpm') ?? null;
+  const normalizedMemberSearch = memberSearchQuery.trim().toLowerCase();
+  const normalizedUFPMSearch = ufpmSearchQuery.trim().toLowerCase();
+  const memberSquadron = user?.squadron ?? 'Hawks';
+
+  const filteredMembers = useMemo(() => {
+    const sortedMembers = members
+      .filter((member) => member.squadron === memberSquadron)
+      .sort((left, right) => {
+      const leftName = `${left.lastName} ${left.firstName}`;
+      const rightName = `${right.lastName} ${right.firstName}`;
+      return leftName.localeCompare(rightName);
+    });
+
+    if (!normalizedMemberSearch) {
+      return sortedMembers;
+    }
+
+    return sortedMembers.filter((member) => {
+      const haystack = `${member.rank} ${member.firstName} ${member.lastName} ${member.flight} ${member.email}`.toLowerCase();
+      return haystack.includes(normalizedMemberSearch);
+    });
+  }, [memberSquadron, members, normalizedMemberSearch]);
+
+  const ufpmCandidates = useMemo(() => {
+    const candidates = members
+      .filter((member) => member.squadron === memberSquadron && member.accountType !== 'fitflight_creator')
+      .sort((left, right) => `${left.lastName} ${left.firstName}`.localeCompare(`${right.lastName} ${right.firstName}`));
+
+    if (!normalizedUFPMSearch) {
+      return candidates;
+    }
+
+    return candidates.filter((member) => {
+      const haystack = `${member.rank} ${member.firstName} ${member.lastName} ${member.flight} ${member.email}`.toLowerCase();
+      return haystack.includes(normalizedUFPMSearch);
+    });
+  }, [memberSquadron, members, normalizedUFPMSearch]);
 
   const handleLogout = () => {
     const run = async () => {
@@ -86,41 +133,94 @@ export default function ProfileScreen() {
     void run();
   };
 
-  const handleAddMember = () => {
-    if (!newMemberFirstName.trim() || !newMemberLastName.trim()) return;
+  const handleSaveMember = () => {
+    const run = async () => {
+      if (!newMemberFirstName.trim() || !newMemberLastName.trim()) return;
+      setMemberActionError('');
 
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-    const newMember: Member = {
-      id: Date.now().toString(),
-      rank: newMemberRank,
-      firstName: newMemberFirstName.trim(),
-      lastName: newMemberLastName.trim(),
-      flight: newMemberFlight,
-      squadron: '392 IS',
-      accountType: 'standard',
-      email: newMemberEmail || `${newMemberLastName.toLowerCase()}@us.af.mil`,
-      exerciseMinutes: 0,
-      distanceRun: 0,
-      connectedApps: [],
-      fitnessAssessments: [],
-      workouts: [],
-      achievements: [],
-      requiredPTSessionsPerWeek: 3,
-      isVerified: false,
-      ptlPendingApproval: false,
-      monthlyPlacements: [],
-      trophyCount: 0,
+      const previousMember = editingMemberId
+        ? members.find((member) => member.id === editingMemberId)
+        : null;
+
+      if (!accessToken) {
+        setMemberActionError('You must be signed in to sync roster changes to Supabase.');
+        return;
+      }
+
+      const newMember: Member = {
+        id: editingMemberId ?? Date.now().toString(),
+        rank: newMemberRank,
+        firstName: newMemberFirstName.trim(),
+        lastName: newMemberLastName.trim(),
+        flight: newMemberFlight,
+        squadron: previousMember?.squadron ?? 'Hawks',
+        accountType: previousMember?.accountType ?? 'standard',
+        email: (newMemberEmail || `${newMemberLastName.toLowerCase()}.${newMemberFirstName.toLowerCase()}@us.af.mil`).toLowerCase(),
+        exerciseMinutes: previousMember?.exerciseMinutes ?? 0,
+        distanceRun: previousMember?.distanceRun ?? 0,
+        connectedApps: previousMember?.connectedApps ?? [],
+        fitnessAssessments: previousMember?.fitnessAssessments ?? [],
+        workouts: previousMember?.workouts ?? [],
+        achievements: previousMember?.achievements ?? [],
+        requiredPTSessionsPerWeek: previousMember?.requiredPTSessionsPerWeek ?? 3,
+        isVerified: previousMember?.isVerified ?? false,
+        ptlPendingApproval: previousMember?.ptlPendingApproval ?? false,
+        linkedAttendanceId: previousMember?.linkedAttendanceId,
+        monthlyPlacements: previousMember?.monthlyPlacements ?? [],
+        trophyCount: previousMember?.trophyCount ?? 0,
+        hasSeenTutorial: previousMember?.hasSeenTutorial ?? false,
+        profilePicture: previousMember?.profilePicture,
+      };
+
+      if (editingMemberId) {
+        if (!previousMember) {
+          setMemberActionError('Unable to find that member to update.');
+          return;
+        }
+
+        await updateRosterMember(previousMember, newMember, accessToken);
+
+        updateMember(editingMemberId, newMember);
+      } else {
+        await createRosterMember(newMember, accessToken);
+
+        addMember(newMember);
+      }
+
+      setShowAddModal(false);
+      resetForm();
     };
 
-    addMember(newMember);
-    setShowAddModal(false);
-    resetForm();
+    run().catch((error) => {
+      setMemberActionError(error instanceof Error ? error.message : 'Unable to save member.');
+    });
   };
 
   const handleRemoveMember = (id: string) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    removeMember(id);
+    const run = async () => {
+      const memberToRemove = members.find((member) => member.id === id);
+      if (!memberToRemove) {
+        return;
+      }
+
+      if (!accessToken) {
+        setMemberActionError('You must be signed in to sync roster changes to Supabase.');
+        return;
+      }
+
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+      setMemberActionError('');
+
+      await deleteRosterMember(memberToRemove, accessToken);
+
+      removeMember(id);
+    };
+
+    run().catch((error) => {
+      setMemberActionError(error instanceof Error ? error.message : 'Unable to remove member.');
+    });
   };
 
   const resetForm = () => {
@@ -129,6 +229,85 @@ export default function ProfileScreen() {
     setNewMemberRank('A1C');
     setNewMemberFlight('Apex');
     setNewMemberEmail('');
+    setEditingMemberId(null);
+    setMemberActionError('');
+  };
+
+  const openAddMemberModal = () => {
+    resetForm();
+    setShowAddModal(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+
+  const openEditMemberModal = (member: Member) => {
+    setShowManageModal(false);
+    setEditingMemberId(member.id);
+    setNewMemberFirstName(member.firstName);
+    setNewMemberLastName(member.lastName);
+    setNewMemberRank(member.rank);
+    setNewMemberFlight(member.flight);
+    setNewMemberEmail(member.email);
+    setMemberActionError('');
+    setShowAddModal(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+
+  const openUFPMPicker = () => {
+    setUFPMSearchQuery('');
+    setSelectedUFPMMemberId(null);
+    setShowUFPMModal(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+
+  const handleConfirmUFPM = () => {
+    const run = async () => {
+      if (!selectedUFPMMemberId) {
+        return;
+      }
+
+      if (!accessToken) {
+        setMemberActionError('You must be signed in to change the UFPM role.');
+        return;
+      }
+
+      const selectedMember = members.find((member) => member.id === selectedUFPMMemberId);
+      if (!selectedMember) {
+        setMemberActionError('Unable to find the selected member.');
+        return;
+      }
+
+      const outgoingUFPMId = currentUFPM?.id ?? null;
+      const isCurrentUserLosingUFPM = outgoingUFPMId === user?.id && selectedUFPMMemberId !== user?.id;
+      const isCurrentUserGainingUFPM = selectedUFPMMemberId === user?.id;
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      await ensureMemberRole(selectedMember.email, selectedMember.accountType, accessToken).catch(() => undefined);
+      await assignUFPMRole(selectedMember.email, accessToken);
+      setUFPM(selectedUFPMMemberId);
+
+      if (isCurrentUserGainingUFPM) {
+        updateUser({ accountType: 'ufpm' });
+      }
+
+      setShowUFPMConfirmModal(false);
+      setShowUFPMModal(false);
+      setSelectedUFPMMemberId(null);
+
+      if (isCurrentUserLosingUFPM) {
+        if (accessToken) {
+          try {
+            await signOutFromSupabase(accessToken);
+          } catch {
+            // Still clear the local session below.
+          }
+        }
+
+        logout();
+        router.replace('/login');
+      }
+    };
+
+    void run();
   };
 
   const handlePTLRequest = (memberId: string, approve: boolean) => {
@@ -402,7 +581,7 @@ export default function ProfileScreen() {
     switch (accountType) {
       case 'fitflight_creator': return 'FitFlight Creator';
       case 'ufpm': return 'UFPM';
-      case 'ptl': return 'PT Leader';
+      case 'ptl': return 'PFL';
       default: return 'Member';
     }
   };
@@ -574,7 +753,7 @@ export default function ProfileScreen() {
                 className="flex-1 bg-af-success/20 border border-af-success/50 rounded-xl p-4 mx-1 items-center"
               >
                 <FileText size={24} color="#22C55E" />
-                <Text className="text-white font-semibold mt-2 text-sm">Upload FA</Text>
+                <Text className="text-white font-semibold mt-2 text-sm">Upload PFRA</Text>
               </Pressable>
               {canEditAttendance(userAccountType) && (
                 <Pressable
@@ -720,7 +899,7 @@ export default function ProfileScreen() {
               <Text className="text-white font-semibold text-lg mb-3">Admin Actions</Text>
 
               <Pressable
-                onPress={() => { setShowAddModal(true); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
+                onPress={openAddMemberModal}
                 className="flex-row items-center bg-af-accent/20 border border-af-accent/50 rounded-xl p-4 mb-3"
               >
                 <UserPlus size={24} color="#4A90D9" />
@@ -789,21 +968,31 @@ export default function ProfileScreen() {
             </Animated.View>
           )}
 
-          {/* PTL Actions (for PTLs only, not admins) */}
+          {/* PFL Actions (for PFLs only, not admins) */}
           {canEditAttendance(userAccountType) && !hasAdminAccess && (
             <Animated.View
               entering={FadeInDown.delay(300).springify()}
               className="mx-6 mt-6"
             >
-              <Text className="text-white font-semibold text-lg mb-3">PTL Actions</Text>
+              <Text className="text-white font-semibold text-lg mb-3">PFL Actions</Text>
               <Pressable
-                onPress={() => { setShowAddModal(true); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
-                className="flex-row items-center bg-af-accent/20 border border-af-accent/50 rounded-xl p-4"
+                onPress={openAddMemberModal}
+                className="flex-row items-center bg-af-accent/20 border border-af-accent/50 rounded-xl p-4 mb-3"
               >
                 <UserPlus size={24} color="#4A90D9" />
                 <View className="ml-3 flex-1">
-                  <Text className="text-white font-semibold">Add to PT Attendance</Text>
-                  <Text className="text-af-silver text-xs">Add name for tracking (no account)</Text>
+                  <Text className="text-white font-semibold">Add Member</Text>
+                  <Text className="text-af-silver text-xs">Add someone to the roster and attendance</Text>
+                </View>
+              </Pressable>
+              <Pressable
+                onPress={() => { setShowManageModal(true); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
+                className="flex-row items-center bg-white/5 border border-white/10 rounded-xl p-4"
+              >
+                <Users size={24} color="#C0C0C0" />
+                <View className="ml-3 flex-1">
+                  <Text className="text-white font-semibold">Manage Members</Text>
+                  <Text className="text-af-silver text-xs">Edit or remove roster members</Text>
                 </View>
               </Pressable>
             </Animated.View>
@@ -874,7 +1063,7 @@ export default function ProfileScreen() {
                 <Pressable
                   onPress={() => {
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    setSelectedSquadron(user?.squadron ?? '392 IS');
+                    setSelectedSquadron(user?.squadron ?? 'Hawks');
                     setShowChangeSquadronModal(true);
                   }}
                   className="flex-row items-center justify-center bg-white/10 border border-white/20 rounded-xl p-4 mb-3"
@@ -910,7 +1099,7 @@ export default function ProfileScreen() {
         <View className="flex-1 bg-black/80 justify-end">
           <View className="bg-af-navy rounded-t-3xl p-6 pb-12">
             <View className="flex-row items-center justify-between mb-6">
-              <Text className="text-white text-xl font-bold">Add to PT Attendance</Text>
+              <Text className="text-white text-xl font-bold">{editingMemberId ? 'Edit Member' : 'Add Member'}</Text>
               <Pressable
                 onPress={() => { setShowAddModal(false); resetForm(); }}
                 className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
@@ -996,16 +1185,35 @@ export default function ProfileScreen() {
                 </ScrollView>
               </View>
 
+              {/* Email */}
+              <View className="mb-4">
+                <Text className="text-white/60 text-sm mb-2">Email</Text>
+                <TextInput
+                  value={newMemberEmail}
+                  onChangeText={setNewMemberEmail}
+                  placeholder="name@us.af.mil"
+                  placeholderTextColor="#ffffff40"
+                  autoCapitalize="none"
+                  className="bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10"
+                />
+              </View>
+
+              {memberActionError ? (
+                <View className="bg-red-500/20 border border-red-500/40 rounded-xl px-4 py-3 mb-4">
+                  <Text className="text-red-300">{memberActionError}</Text>
+                </View>
+              ) : null}
+
               <Text className="text-white/40 text-xs mb-4">
-                This adds the person to PT attendance tracking only. They can create an account later and link to these records.
+                This updates the shared roster used by FitFlight and keeps attendance/account binding aligned.
               </Text>
 
-              {/* Add Button */}
+              {/* Save Button */}
               <Pressable
-                onPress={handleAddMember}
+                onPress={handleSaveMember}
                 className="bg-af-accent py-4 rounded-xl mt-2"
               >
-                <Text className="text-white font-bold text-center">Add to Attendance</Text>
+                <Text className="text-white font-bold text-center">{editingMemberId ? 'Save Changes' : 'Add Member'}</Text>
               </Pressable>
             </ScrollView>
           </View>
@@ -1026,8 +1234,51 @@ export default function ProfileScreen() {
               </Pressable>
             </View>
 
+            {memberActionError ? (
+              <View className="bg-red-500/20 border border-red-500/40 rounded-xl px-4 py-3 mb-4">
+                <Text className="text-red-300">{memberActionError}</Text>
+              </View>
+            ) : null}
+
+            <View className="bg-white/5 border border-white/10 rounded-2xl p-4 mb-4">
+              <View className="flex-row items-center justify-between">
+                <View>
+                  <Text className="text-white font-semibold">Roster Controls</Text>
+                  <Text className="text-af-silver text-xs mt-1">
+                    {filteredMembers.length} shown of {members.length} members
+                  </Text>
+                </View>
+                {canManage && (
+                  <Pressable
+                    onPress={openUFPMPicker}
+                    className="flex-row items-center bg-af-gold/20 border border-af-gold/40 rounded-full px-3 py-2"
+                  >
+                    <Star size={14} color="#FFD700" />
+                    <Text className="text-af-gold text-xs font-semibold ml-2">Assign UFPM</Text>
+                  </Pressable>
+                )}
+              </View>
+              {currentUFPM && (
+                <View className="mt-3 bg-af-gold/10 border border-af-gold/30 rounded-xl px-3 py-2">
+                  <Text className="text-af-gold text-xs uppercase tracking-wider">Current UFPM</Text>
+                  <Text className="text-white font-semibold mt-1">{getDisplayName(currentUFPM)}</Text>
+                </View>
+              )}
+              <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10 mt-4">
+                <Search size={18} color="#C0C0C0" />
+                <TextInput
+                  value={memberSearchQuery}
+                  onChangeText={setMemberSearchQuery}
+                  placeholder="Search members"
+                  placeholderTextColor="#ffffff40"
+                  autoCapitalize="none"
+                  className="flex-1 ml-3 text-white"
+                />
+              </View>
+            </View>
+
             <ScrollView showsVerticalScrollIndicator={false}>
-              {members.map((member) => {
+              {filteredMembers.map((member) => {
                 const memberDisplayName = getDisplayName(member);
                 const memberColors = getAccountTypeColor(member.accountType);
                 const isPTL = member.accountType === 'ptl';
@@ -1036,49 +1287,154 @@ export default function ProfileScreen() {
                 return (
                   <View
                     key={member.id}
-                    className="flex-row items-center justify-between py-3 border-b border-white/5"
+                    className="bg-white/5 border border-white/10 rounded-2xl p-4 mb-3"
                   >
-                    <View className="flex-1">
-                      <Text className="text-white font-medium">{memberDisplayName}</Text>
-                      <Text className="text-af-silver text-xs">{member.flight} Flight</Text>
-                    </View>
-                    <View className={cn("px-2 py-1 rounded-full mr-3", memberColors.bg)}>
-                      <Text className={cn("text-xs", memberColors.text)}>
-                        {getAccountTypeLabel(member.accountType)}
-                      </Text>
-                    </View>
+                    <View className="flex-row items-start justify-between">
+                      <View className="flex-1 pr-3">
+                        <Text className="text-white font-semibold">{memberDisplayName}</Text>
+                        <Text className="text-af-silver text-xs mt-1">{member.email}</Text>
+                        <View className="flex-row items-center mt-3">
+                          <View className="bg-white/10 rounded-full px-2 py-1 mr-2">
+                            <Text className="text-af-silver text-xs">{member.flight} Flight</Text>
+                          </View>
+                          <View className={cn("px-2 py-1 rounded-full", memberColors.bg)}>
+                            <Text className={cn("text-xs", memberColors.text)}>
+                              {getAccountTypeLabel(member.accountType)}
+                            </Text>
+                          </View>
+                        </View>
+                      </View>
 
-                    {/* Actions based on permissions */}
-                    {!isOwner && canManage && (
-                      <View className="flex-row items-center">
-                        {isPTL && (
+                      {!isOwner && canManageMembers && (
+                        <View className="flex-row items-center">
                           <Pressable
-                            onPress={() => handleRevokePTL(member.id)}
-                            className="bg-af-warning/20 px-2 py-1 rounded-full mr-2"
+                            onPress={() => openEditMemberModal(member)}
+                            className="w-9 h-9 bg-white/10 rounded-full items-center justify-center mr-2"
                           >
-                            <Text className="text-af-warning text-xs">Revoke PTL</Text>
+                            <Pencil size={15} color="#C0C0C0" />
                           </Pressable>
-                        )}
-                        {userAccountType === 'fitflight_creator' && member.accountType !== 'ufpm' && (
                           <Pressable
-                            onPress={() => handleSetUFPM(member.id)}
-                            className="bg-af-gold/20 px-2 py-1 rounded-full mr-2"
+                            onPress={() => handleRemoveMember(member.id)}
+                            className="w-9 h-9 bg-af-danger/20 rounded-full items-center justify-center"
                           >
-                            <Text className="text-af-gold text-xs">Make UFPM</Text>
+                            <Trash2 size={16} color="#EF4444" />
                           </Pressable>
-                        )}
+                        </View>
+                      )}
+                    </View>
+                    {isPTL && canManage && (
+                      <View className="mt-3 pt-3 border-t border-white/10">
                         <Pressable
-                          onPress={() => handleRemoveMember(member.id)}
-                          className="w-8 h-8 bg-af-danger/20 rounded-full items-center justify-center"
+                          onPress={() => handleRevokePTL(member.id)}
+                          className="self-start bg-af-warning/20 px-3 py-2 rounded-full"
                         >
-                          <Trash2 size={16} color="#EF4444" />
+                          <Text className="text-af-warning text-xs font-semibold">Revoke PFL</Text>
                         </Pressable>
                       </View>
                     )}
                   </View>
                 );
               })}
+              {filteredMembers.length === 0 && (
+                <View className="bg-white/5 border border-white/10 rounded-2xl p-6 items-center">
+                  <Users size={28} color="#C0C0C0" />
+                  <Text className="text-white font-semibold mt-3">No members found</Text>
+                  <Text className="text-af-silver text-sm mt-1 text-center">
+                    Try a different search term or clear the filter.
+                  </Text>
+                </View>
+              )}
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showUFPMModal} transparent animationType="slide">
+        <View className="flex-1 bg-black/80 justify-end">
+          <View className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[80%]">
+            <View className="flex-row items-center justify-between mb-6">
+              <Text className="text-white text-xl font-bold">Select UFPM</Text>
+              <Pressable
+                onPress={() => {
+                  setShowUFPMModal(false);
+                  setUFPMSearchQuery('');
+                  setSelectedUFPMMemberId(null);
+                }}
+                className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+              >
+                <X size={20} color="#C0C0C0" />
+              </Pressable>
+            </View>
+
+            <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10 mb-4">
+              <Search size={18} color="#C0C0C0" />
+              <TextInput
+                value={ufpmSearchQuery}
+                onChangeText={setUFPMSearchQuery}
+                placeholder="Search members"
+                placeholderTextColor="#ffffff40"
+                autoCapitalize="none"
+                className="flex-1 ml-3 text-white"
+              />
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {ufpmCandidates.map((member) => (
+                <Pressable
+                  key={member.id}
+                  onPress={() => {
+                    setSelectedUFPMMemberId(member.id);
+                    setShowUFPMConfirmModal(true);
+                  }}
+                  className="bg-white/5 border border-white/10 rounded-2xl p-4 mb-3"
+                >
+                  <Text className="text-white font-semibold">{getDisplayName(member)}</Text>
+                  <Text className="text-af-silver text-xs mt-1">{member.email}</Text>
+                  <View className="flex-row items-center mt-3">
+                    <View className="bg-white/10 rounded-full px-2 py-1 mr-2">
+                      <Text className="text-af-silver text-xs">{member.flight} Flight</Text>
+                    </View>
+                    {member.accountType === 'ufpm' && (
+                      <View className="bg-af-gold/20 rounded-full px-2 py-1">
+                        <Text className="text-af-gold text-xs">Current UFPM</Text>
+                      </View>
+                    )}
+                  </View>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showUFPMConfirmModal} transparent animationType="fade">
+        <View className="flex-1 bg-black/80 items-center justify-center p-6">
+          <View className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20">
+            <Text className="text-white text-xl font-bold mb-4">Confirm UFPM Change</Text>
+            <Text className="text-af-silver mb-3">
+              {selectedUFPMMemberId
+                ? `Make ${getDisplayName(members.find((member) => member.id === selectedUFPMMemberId) ?? { rank: '', firstName: '', lastName: '' })} the UFPM?`
+                : 'Select a member first.'}
+            </Text>
+            <View className="bg-af-warning/20 border border-af-warning/40 rounded-xl p-4 mb-6">
+              <Text className="text-af-warning text-sm">
+                This action cannot be undone in the app. You would need to manually assign a different UFPM later if you want to change it.
+              </Text>
+            </View>
+            <View className="flex-row">
+              <Pressable
+                onPress={() => setShowUFPMConfirmModal(false)}
+                className="flex-1 bg-white/10 py-3 rounded-xl mr-2"
+              >
+                <Text className="text-white text-center font-semibold">Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={handleConfirmUFPM}
+                className="flex-1 bg-af-gold py-3 rounded-xl ml-2"
+              >
+                <Text className="text-af-navy text-center font-semibold">Confirm</Text>
+              </Pressable>
+            </View>
           </View>
         </View>
       </Modal>
@@ -1133,11 +1489,11 @@ export default function ProfileScreen() {
         </View>
       </Modal>
 
-      {/* PTL Request Review Modal */}
+      {/* PFL Request Review Modal */}
       <Modal visible={showPTLRequestModal} transparent animationType="fade">
         <View className="flex-1 bg-black/80 items-center justify-center p-6">
           <View className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20">
-            <Text className="text-white text-xl font-bold mb-4">PTL Request</Text>
+            <Text className="text-white text-xl font-bold mb-4">PFL Request</Text>
 
             {selectedPTLRequest && (() => {
               const requestingMember = members.find(m => m.id === selectedPTLRequest);
@@ -1154,7 +1510,7 @@ export default function ProfileScreen() {
                   </View>
 
                   <Text className="text-af-silver mb-6">
-                    This person has requested PTL status. Do you want to authorize them as a Physical Training Leader?
+                    This person has requested PFL status. Do you want to authorize them as a Physical Fitness Leader?
                   </Text>
 
                   <View className="flex-row space-x-3">
@@ -1194,14 +1550,14 @@ export default function ProfileScreen() {
           <View className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20">
             <Text className="text-white text-xl font-bold mb-4">Change Squadron</Text>
 
-            {/* Warning for PTLs */}
+            {/* Warning for PFLs */}
             {user?.accountType === 'ptl' && (
               <View className="flex-row items-start bg-af-warning/20 border border-af-warning/50 rounded-xl p-4 mb-4">
                 <AlertTriangle size={20} color="#F59E0B" />
                 <View className="flex-1 ml-3">
                   <Text className="text-af-warning font-semibold">Warning</Text>
                   <Text className="text-af-warning/80 text-sm">
-                    Changing squadrons will remove your PTL status. You'll need to request PTL authorization again in your new squadron.
+                    Changing squadrons will remove your PFL status. You'll need to request PFL authorization again in your new squadron.
                   </Text>
                 </View>
               </View>
