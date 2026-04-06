@@ -1131,6 +1131,11 @@ export default function ProfileScreen() {
   const handleOpenInstallHelp = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && isIos && !isStandalonePwa) {
+      window.location.assign('/FitFlight/install.html');
+      return;
+    }
+
     if (installPromptEvent && !isIos) {
       void handleInstallToHomeScreen();
       return;
