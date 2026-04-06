@@ -659,24 +659,8 @@ export default function AttendanceScreen() {
                       ref={(ref) => registerRowScrollRef(member.id, ref)}
                       horizontal
                       bounces={false}
-                      scrollEnabled={horizontalOverflow > 0}
+                      scrollEnabled={false}
                       showsHorizontalScrollIndicator={false}
-                      scrollEventThrottle={16}
-                      onScroll={(event) => handleHorizontalScroll(event, member.id)}
-                      onTouchStart={() => {
-                        markAttendanceInteraction(true);
-                        updateSwipeState(currentScrollXRef.current);
-                      }}
-                      onScrollBeginDrag={() => markAttendanceInteraction(true)}
-                      onScrollEndDrag={(event) => {
-                        markAttendanceInteraction(false);
-                        updateSwipeState(event.nativeEvent.contentOffset.x);
-                      }}
-                      onMomentumScrollBegin={() => markAttendanceInteraction(true)}
-                      onMomentumScrollEnd={(event) => {
-                        markAttendanceInteraction(false);
-                        updateSwipeState(event.nativeEvent.contentOffset.x);
-                      }}
                     >
                       <View className="flex-row" style={{ width: dayColumnsWidth }}>
                         {weekDays.map((day) => {
