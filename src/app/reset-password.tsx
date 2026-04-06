@@ -181,7 +181,7 @@ export default function ResetPasswordScreen() {
 
               {isFirstLoginPasswordChange ? (
                 <Pressable
-                  onPress={() => router.replace(authUser?.hasLoggedIntoApp ? '/(tabs)' : '/welcome')}
+              onPress={() => router.replace(authUser?.hasLoggedIntoApp ? '/' : '/welcome')}
                   className="bg-white/10 py-4 rounded-xl items-center justify-center active:opacity-80"
                 >
                   <Text className="text-white font-semibold">Continue to FitFlight</Text>

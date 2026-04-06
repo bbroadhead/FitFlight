@@ -84,7 +84,7 @@ export default function StravaCallbackScreen() {
         );
 
         window.setTimeout(() => {
-          router.replace('/(tabs)/profile');
+      router.replace('/profile');
         }, 1200);
       } catch (error) {
         if (!isMounted) {
@@ -127,7 +127,7 @@ export default function StravaCallbackScreen() {
 
             {status !== 'working' && (
               <Pressable
-                onPress={() => router.replace('/(tabs)/profile')}
+            onPress={() => router.replace('/profile')}
                 className="mt-6 rounded-xl bg-white/10 px-5 py-3"
               >
                 <Text className="text-white font-semibold">Back to Account</Text>

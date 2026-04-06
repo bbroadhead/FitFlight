@@ -214,7 +214,7 @@ export default function WelcomeScreen() {
           ).catch(() => undefined);
         }
       }
-      router.replace('/(tabs)');
+    router.replace('/');
     };
 
     void run();
@@ -234,7 +234,7 @@ export default function WelcomeScreen() {
           ).catch(() => undefined);
         }
       }
-      router.replace('/(tabs)');
+                router.replace('/');
     };
 
     void run();

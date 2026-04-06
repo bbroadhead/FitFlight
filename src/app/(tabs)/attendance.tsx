@@ -34,6 +34,8 @@ export default function AttendanceScreen() {
   const flightScrollXRef = useRef(0);
   const attendanceInteractionRef = useRef(false);
   const attendanceInteractionResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const weekTouchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const weekDragActivatedRef = useRef(false);
 
   const members = useMemberStore((state) => state.members);
   const ptSessions = useMemberStore((state) => state.ptSessions);
@@ -138,7 +140,7 @@ export default function AttendanceScreen() {
     attendanceInteractionResetRef.current = setTimeout(() => {
       attendanceInteractionRef.current = false;
       attendanceInteractionResetRef.current = null;
-    }, 120);
+    }, 40);
   }, []);
 
   const loadAttendanceFromBackend = useCallback(async () => {
@@ -290,6 +292,7 @@ export default function AttendanceScreen() {
                 }}
                 onTouchStart={() => setSwipeEnabled(false)}
                 onTouchEnd={() => setSwipeEnabled(true)}
+                onTouchCancel={() => setSwipeEnabled(true)}
                 onScrollBeginDrag={() => setSwipeEnabled(false)}
                 onScrollEndDrag={() => setSwipeEnabled(true)}
                 onMomentumScrollEnd={() => setSwipeEnabled(true)}
@@ -416,6 +419,43 @@ export default function AttendanceScreen() {
                   showsHorizontalScrollIndicator={false}
                   scrollEventThrottle={16}
                   onScroll={handleAttendanceScroll}
+                  onTouchStart={(event) => {
+                    weekTouchStartRef.current = {
+                      x: event.nativeEvent.pageX,
+                      y: event.nativeEvent.pageY,
+                    };
+                    weekDragActivatedRef.current = false;
+                    setSwipeEnabled(false);
+                  }}
+                  onTouchMove={(event) => {
+                    const start = weekTouchStartRef.current;
+                    if (!start || weekDragActivatedRef.current) {
+                      return;
+                    }
+
+                    const dx = Math.abs(event.nativeEvent.pageX - start.x);
+                    const dy = Math.abs(event.nativeEvent.pageY - start.y);
+                    if (dx > 6 || dy > 6) {
+                      weekDragActivatedRef.current = true;
+                      markAttendanceInteraction(true);
+                    }
+                  }}
+                  onTouchEnd={() => {
+                    weekTouchStartRef.current = null;
+                    setSwipeEnabled(true);
+                    if (weekDragActivatedRef.current) {
+                      weekDragActivatedRef.current = false;
+                      markAttendanceInteraction(false);
+                    }
+                  }}
+                  onTouchCancel={() => {
+                    weekTouchStartRef.current = null;
+                    setSwipeEnabled(true);
+                    if (weekDragActivatedRef.current) {
+                      weekDragActivatedRef.current = false;
+                      markAttendanceInteraction(false);
+                    }
+                  }}
                   onScrollBeginDrag={() => {
                     markAttendanceInteraction(true);
                     setSwipeEnabled(false);
@@ -423,10 +463,12 @@ export default function AttendanceScreen() {
                   onScrollEndDrag={() => {
                     markAttendanceInteraction(false);
                     setSwipeEnabled(true);
+                    weekDragActivatedRef.current = false;
                   }}
                   onMomentumScrollEnd={() => {
                     markAttendanceInteraction(false);
                     setSwipeEnabled(true);
+                    weekDragActivatedRef.current = false;
                   }}
                 >
                   <View style={{ width: dayColumnsWidth }}>

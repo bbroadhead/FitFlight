@@ -76,7 +76,7 @@ export default function HomeScreen() {
     ? Math.round(rankedMembers.reduce((sum, member) => sum + member.totalScore, 0) / rankedMembers.length)
     : 0;
 
-  const navigate = (path: '/(tabs)/workouts' | '/(tabs)/attendance' | '/(tabs)/calculator' | '/(tabs)/profile' | '/resources') => {
+  const navigate = (path: '/workouts' | '/attendance' | '/calculator' | '/profile' | '/resources') => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.push(path);
   };
@@ -204,7 +204,7 @@ export default function HomeScreen() {
                   color="#A855F7"
                   bgClass="bg-purple-500/10"
                   borderClass="border-purple-500/30"
-                  onPress={() => navigate('/(tabs)/workouts')}
+                  onPress={() => navigate('/workouts')}
                 />
               </View>
               <View className="w-1/2 px-1.5 mb-3">
@@ -214,7 +214,7 @@ export default function HomeScreen() {
                   color="#22C55E"
                   bgClass="bg-af-success/10"
                   borderClass="border-af-success/30"
-                  onPress={() => navigate('/(tabs)/attendance')}
+                  onPress={() => navigate('/attendance')}
                 />
               </View>
               <View className="w-1/2 px-1.5 mb-3">
@@ -224,7 +224,7 @@ export default function HomeScreen() {
                   color="#F59E0B"
                   bgClass="bg-af-warning/10"
                   borderClass="border-af-warning/30"
-                  onPress={() => navigate('/(tabs)/calculator')}
+                  onPress={() => navigate('/calculator')}
                 />
               </View>
               <View className="w-1/2 px-1.5 mb-3">
@@ -244,7 +244,7 @@ export default function HomeScreen() {
                   color="#C0C0C0"
                   bgClass="bg-white/5"
                   borderClass="border-white/10"
-                  onPress={() => navigate('/(tabs)/profile')}
+                  onPress={() => navigate('/profile')}
                 />
               </View>
             </View>
