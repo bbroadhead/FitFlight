@@ -374,19 +374,15 @@ export default function AttendanceScreen() {
 
           <View onLayout={handleTableLayout}>
             <View className="flex-row rounded-2xl border border-white/10 bg-white/5 overflow-hidden">
-              <View style={{ width: NAME_COLUMN_WIDTH + PROGRESS_COLUMN_WIDTH }} className="border-r border-white/10">
+              <View style={{ width: NAME_COLUMN_WIDTH }} className="border-r border-white/10">
                 <View className="flex-row items-center px-3" style={{ height: HEADER_HEIGHT }}>
-                  <View style={{ width: NAME_COLUMN_WIDTH }}>
+                  <View style={{ width: NAME_COLUMN_WIDTH - 24 }}>
                     <Text className="text-af-silver text-xs uppercase tracking-[0.4px]">Member</Text>
-                  </View>
-                  <View style={{ width: PROGRESS_COLUMN_WIDTH }} className="items-center">
-                    <Text className="text-af-silver text-xs uppercase tracking-[0.4px]">Progress</Text>
                   </View>
                 </View>
 
                 {flightMembers.map((member, index) => {
                   const weeklyAttendance = getWeeklyAttendance(member.id);
-                  const progressPercent = Math.min((weeklyAttendance / WEEKLY_PROGRESS_TARGET) * 100, 100);
                   const displayName = getAttendanceDisplayName(member.id);
 
                   return (
@@ -405,23 +401,8 @@ export default function AttendanceScreen() {
                       >
                         <Text className="text-af-silver text-[11px]" numberOfLines={1}>{displayName.rank}</Text>
                         <Text className="text-white font-medium mt-0.5" numberOfLines={1}>{displayName.name}</Text>
-                        <Text className="text-af-silver text-xs mt-1">{weeklyAttendance}/{WEEKLY_PROGRESS_TARGET} sessions</Text>
+                          <Text className="text-af-silver text-xs mt-1">{weeklyAttendance}/{WEEKLY_PROGRESS_TARGET} sessions</Text>
                       </Pressable>
-
-                      <View style={{ width: PROGRESS_COLUMN_WIDTH }} className="items-center">
-                        <View className="w-10 h-10 items-center justify-center">
-                          <View className="w-8 h-8 rounded-full border-2 border-white/20 items-center justify-center overflow-hidden bg-black/10">
-                            <View
-                              className={cn(
-                                'absolute bottom-0 left-0 right-0',
-                                progressPercent >= 100 ? 'bg-af-success' : 'bg-af-accent'
-                              )}
-                              style={{ height: `${progressPercent}%` }}
-                            />
-                            <Text className="text-white text-xs font-bold z-10">{weeklyAttendance}</Text>
-                          </View>
-                        </View>
-                      </View>
                     </Animated.View>
                   );
                 })}
@@ -435,14 +416,6 @@ export default function AttendanceScreen() {
                   showsHorizontalScrollIndicator={false}
                   scrollEventThrottle={16}
                   onScroll={handleAttendanceScroll}
-                  onTouchStart={() => {
-                    markAttendanceInteraction(true);
-                    setSwipeEnabled(false);
-                  }}
-                  onTouchEnd={() => {
-                    markAttendanceInteraction(false);
-                    setSwipeEnabled(true);
-                  }}
                   onScrollBeginDrag={() => {
                     markAttendanceInteraction(true);
                     setSwipeEnabled(false);
@@ -522,6 +495,39 @@ export default function AttendanceScreen() {
                     <ChevronRight size={16} color="#C0C0C0" />
                   </View>
                 )}
+              </View>
+
+              <View style={{ width: PROGRESS_COLUMN_WIDTH }} className="border-l border-white/10">
+                <View className="items-center justify-center px-1" style={{ height: HEADER_HEIGHT }}>
+                  <Text className="text-af-silver text-xs uppercase tracking-[0.4px] text-center">Progress</Text>
+                </View>
+
+                {flightMembers.map((member, index) => {
+                  const weeklyAttendance = getWeeklyAttendance(member.id);
+                  const progressPercent = Math.min((weeklyAttendance / WEEKLY_PROGRESS_TARGET) * 100, 100);
+
+                  return (
+                    <Animated.View
+                      key={`progress-${member.id}`}
+                      entering={FadeInUp.delay(250 + index * 50).springify()}
+                      className="items-center justify-center border-t border-white/5"
+                      style={{ height: ROW_HEIGHT }}
+                    >
+                      <View className="w-10 h-10 items-center justify-center">
+                        <View className="w-8 h-8 rounded-full border-2 border-white/20 items-center justify-center overflow-hidden bg-black/10">
+                          <View
+                            className={cn(
+                              'absolute bottom-0 left-0 right-0',
+                              progressPercent >= 100 ? 'bg-af-success' : 'bg-af-accent'
+                            )}
+                            style={{ height: `${progressPercent}%` }}
+                          />
+                          <Text className="text-white text-xs font-bold z-10">{weeklyAttendance}</Text>
+                        </View>
+                      </View>
+                    </Animated.View>
+                  );
+                })}
               </View>
             </View>
           </View>

@@ -80,7 +80,7 @@ function getPostLoginRoute(member: Pick<Member, 'mustChangePassword' | 'hasLogge
     return '/reset-password?mode=first-login';
   }
 
-  return member.hasLoggedIntoApp ? '/(tabs)' : '/welcome';
+  return member.hasLoggedIntoApp ? '/' : '/welcome';
 }
 
 export default function LoginScreen() {
@@ -594,7 +594,7 @@ export default function LoginScreen() {
 
   // Redirect if already authenticated
   if (isAuthenticated && hasCheckedAuth) {
-    return <Redirect href="/(tabs)" />;
+    return <Redirect href="/" />;
   }
 
   // Show loading while checking auth
