@@ -4,6 +4,7 @@
     "slug": "fitflight",
     "scheme": "fitflight",
     "version": "1.0.0",
+    "icon": "./assets/images/TotalFlight_Icon_Resized.png",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -12,10 +13,15 @@
       "favicon": "./assets/images/favicon.png"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "icon": "./assets/images/TotalFlight_Icon_Resized.png"
     },
     "android": {
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/TotalFlight_Icon_Resized.png",
+        "backgroundColor": "#001F5C"
+      }
     },
     "plugins": ["expo-router"],
     "experiments": {
