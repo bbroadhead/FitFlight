@@ -2,7 +2,7 @@
   "name": "FitFlight",
   "short_name": "FitFlight",
   "description": "Squadron fitness tracking, PFRA tools, attendance, and analytics.",
-  "start_url": "install.html",
+  "start_url": ".",
   "scope": "/FitFlight/",
   "display": "standalone",
   "orientation": "portrait",

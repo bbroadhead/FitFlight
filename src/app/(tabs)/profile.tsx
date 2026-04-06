@@ -1132,7 +1132,8 @@ export default function ProfileScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
     if (Platform.OS === 'web' && typeof window !== 'undefined' && isIos && !isStandalonePwa) {
-      window.location.assign('/FitFlight/install.html');
+      window.sessionStorage.setItem('fitflight_show_install_help', '1');
+      window.location.assign('/FitFlight/');
       return;
     }
 

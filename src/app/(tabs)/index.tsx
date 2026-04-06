@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { ScrollView, Text, View, Pressable } from 'react-native';
+import { ScrollView, Text, View, Pressable, Modal, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -47,6 +47,7 @@ export default function HomeScreen() {
   const router = useRouter();
   const navigation = useNavigation<NavigationProp<ParamListBase>>();
   const [showingLeaderboard, setShowingLeaderboard] = useState(false);
+  const [showInstallHelp, setShowInstallHelp] = useState(false);
   const user = useAuthStore(s => s.user);
   const members = useMemberStore(s => s.members);
 
@@ -100,6 +101,17 @@ export default function HomeScreen() {
     return unsubscribe;
   }, [navigation]);
 
+  React.useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') {
+      return;
+    }
+
+    if (window.sessionStorage.getItem('fitflight_show_install_help') === '1') {
+      window.sessionStorage.removeItem('fitflight_show_install_help');
+      setShowInstallHelp(true);
+    }
+  }, []);
+
   if (showingLeaderboard) {
     return <LeaderboardContent showBackButton onBack={closeLeaderboard} />;
   }
@@ -114,6 +126,33 @@ export default function HomeScreen() {
       />
 
       <SafeAreaView edges={['top']} className="flex-1">
+        <Modal
+          visible={showInstallHelp}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowInstallHelp(false)}
+        >
+          <View className="flex-1 bg-black/70 justify-center px-6">
+            <View className="rounded-3xl border border-white/10 bg-af-navy p-6">
+              <Text className="text-white text-xl font-bold">Add to Home Screen</Text>
+              <Text className="text-af-silver text-sm mt-3">You are on the correct FitFlight home page now.</Text>
+              <Text className="text-af-silver text-sm mt-3">1. Tap Safari&apos;s Share button.</Text>
+              <Text className="text-af-silver text-sm mt-1">2. Scroll down and tap Add to Home Screen.</Text>
+              <Text className="text-af-silver text-sm mt-1">3. Tap Add.</Text>
+              <Text className="text-af-silver text-sm mt-4">Adding from this page should create the home screen shortcut with the correct launch path.</Text>
+              <Pressable
+                onPress={() => {
+                  Haptics.selectionAsync();
+                  setShowInstallHelp(false);
+                }}
+                className="mt-5 self-end rounded-full border border-af-accent/40 bg-af-accent/20 px-4 py-2"
+              >
+                <Text className="text-white font-semibold">Got it</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+
         <ScrollView
           className="flex-1"
           contentContainerStyle={{ paddingBottom: 120 }}
