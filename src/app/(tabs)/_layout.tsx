@@ -4,7 +4,8 @@ import { createMaterialTopTabNavigator } from "@react-navigation/material-top-ta
 import { Ionicons } from "@expo/vector-icons";
 import { TabSwipeProvider, useTabSwipe } from "@/contexts/TabSwipeContext";
 import { useAuthStore, useMemberStore } from "@/lib/store";
-import { fetchAttendanceSessions, fetchRosterMembers } from "@/lib/supabaseData";
+import { fetchApprovedManualWorkouts, fetchAttendanceSessions, fetchRosterMembers, fetchSharedWorkouts } from "@/lib/supabaseData";
+import { getMonthKey } from "@/lib/monthlyStats";
 
 const { Navigator } = createMaterialTopTabNavigator();
 const Tabs = withLayoutContext(Navigator);
@@ -18,6 +19,9 @@ function TabsInner() {
   const updateUser = useAuthStore((state) => state.updateUser);
   const syncMembersFromRoster = useMemberStore((state) => state.syncMembersFromRoster);
   const syncPTSessions = useMemberStore((state) => state.syncPTSessions);
+  const syncSharedWorkouts = useMemberStore((state) => state.syncSharedWorkouts);
+  const syncApprovedManualWorkouts = useMemberStore((state) => state.syncApprovedManualWorkouts);
+  const pruneOldWorkoutMedia = useMemberStore((state) => state.pruneOldWorkoutMedia);
 
   useEffect(() => {
     if (!isAuthenticated || !hasCheckedAuth) {
@@ -28,9 +32,13 @@ function TabsInner() {
 
     const syncRoster = async () => {
       try {
-        const [rosterMembers, attendanceSessions] = await Promise.all([
-          fetchRosterMembers(accessToken ?? undefined),
+        pruneOldWorkoutMedia(getMonthKey());
+        const squadron = user?.squadron ?? 'Hawks';
+        const [rosterMembers, attendanceSessions, sharedWorkouts, approvedManualWorkouts] = await Promise.all([
+          fetchRosterMembers(accessToken ?? undefined, squadron),
           fetchAttendanceSessions(accessToken ?? undefined).catch(() => []),
+          fetchSharedWorkouts(accessToken ?? undefined, squadron).catch(() => []),
+          fetchApprovedManualWorkouts(accessToken ?? undefined, squadron).catch(() => []),
         ]);
         if (isCancelled) {
           return;
@@ -38,6 +46,8 @@ function TabsInner() {
 
         syncMembersFromRoster(rosterMembers);
         syncPTSessions(attendanceSessions);
+        syncSharedWorkouts(sharedWorkouts);
+        syncApprovedManualWorkouts(approvedManualWorkouts);
 
         if (user) {
           const matchingMember = rosterMembers.find((member) => {
@@ -59,6 +69,7 @@ function TabsInner() {
               flight: matchingMember.flight,
               squadron: matchingMember.squadron,
               accountType: matchingMember.accountType,
+              profilePicture: matchingMember.profilePicture,
             });
           }
         }
@@ -72,7 +83,7 @@ function TabsInner() {
     return () => {
       isCancelled = true;
     };
-  }, [accessToken, hasCheckedAuth, isAuthenticated, syncMembersFromRoster, syncPTSessions, updateUser, user]);
+  }, [accessToken, hasCheckedAuth, isAuthenticated, pruneOldWorkoutMedia, syncApprovedManualWorkouts, syncMembersFromRoster, syncPTSessions, syncSharedWorkouts, updateUser, user]);
 
   if (hasCheckedAuth && !isAuthenticated) {
     return <Redirect href="/login" />;
@@ -151,7 +162,7 @@ function TabsInner() {
       <Tabs.Screen
         name="profile"
         options={{
-          title: "Profile",
+          title: "Account",
           tabBarIcon: ({ color }: { color: string }) => (
             <Ionicons name="person-outline" size={22} color={color} />
           ),

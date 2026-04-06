@@ -3,122 +3,131 @@ import { View, Text, Pressable, ScrollView, TextInput, Modal } from 'react-nativ
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { ChevronLeft, Upload, FileText, Check, X, AlertCircle, TrendingUp, TrendingDown } from 'lucide-react-native';
+import { ChevronLeft, Check, X, TrendingDown, TrendingUp } from 'lucide-react-native';
 import Animated, { FadeInDown, ZoomIn } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import * as DocumentPicker from 'expo-document-picker';
-import { useMemberStore, useAuthStore, type FitnessAssessment, calculateRequiredPTSessions, getDisplayName } from '@/lib/store';
 import { cn } from '@/lib/cn';
+import { useAuthStore, useMemberStore, type FitnessAssessment } from '@/lib/store';
+import { type Gender } from '@/lib/pfraScoring2026';
+
+type CardioTest = 'run_2mile' | 'hamr_20m' | 'walk_2k';
+type StrengthTest = 'pushups' | 'hand_release_pushups';
+type CoreTest = 'situps' | 'cross_leg_reverse_crunch' | 'plank';
+
+const SEGMENT = "flex-1 rounded-xl px-3 py-3 items-center justify-center";
+
+function ExemptToggle({ checked, onPress }: { checked: boolean; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} className="flex-row items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1.5">
+      <View className="h-4 w-4 items-center justify-center rounded border border-white/40 bg-white/5">
+        {checked ? <Check size={12} color="#FFFFFF" /> : null}
+      </View>
+      <Text className="text-xs font-semibold uppercase tracking-[0.4px] text-white/75">Exempt</Text>
+    </Pressable>
+  );
+}
 
 export default function UploadFitnessTrackerScreen() {
   const router = useRouter();
-  const user = useAuthStore(s => s.user);
-  const members = useMemberStore(s => s.members);
-  const addFitnessAssessment = useMemberStore(s => s.addFitnessAssessment);
-  const awardAchievement = useMemberStore(s => s.awardAchievement);
+  const user = useAuthStore((s) => s.user);
+  const members = useMemberStore((s) => s.members);
+  const updateMember = useMemberStore((s) => s.updateMember);
+  const awardAchievement = useMemberStore((s) => s.awardAchievement);
 
-  const [isProcessing, setIsProcessing] = useState(false);
   const [showConfirmation, setShowConfirmation] = useState(false);
-  const [showManualEntry, setShowManualEntry] = useState(false);
-
-  // Manual entry state
   const [overallScore, setOverallScore] = useState('');
-  const [cardioScore, setCardioScore] = useState('');
-  const [cardioTime, setCardioTime] = useState('');
-  const [pushupScore, setPushupScore] = useState('');
-  const [pushupReps, setPushupReps] = useState('');
-  const [situpScore, setSitupScore] = useState('');
-  const [situpReps, setSitupReps] = useState('');
+  const [gender, setGender] = useState<Gender>('male');
+  const [ageYears, setAgeYears] = useState('34');
   const [waistScore, setWaistScore] = useState('');
-  const [waistInches, setWaistInches] = useState('');
+  const [waistValue, setWaistValue] = useState('');
+  const [waistExempt, setWaistExempt] = useState(false);
 
-  const currentMember = user ? members.find(m => m.id === user.id) : null;
+  const [cardioTest, setCardioTest] = useState<CardioTest>('run_2mile');
+  const [cardioScore, setCardioScore] = useState('');
+  const [cardioValue, setCardioValue] = useState('');
+  const [cardioExempt, setCardioExempt] = useState(false);
+
+  const [strengthTest, setStrengthTest] = useState<StrengthTest>('pushups');
+  const [strengthScore, setStrengthScore] = useState('');
+  const [strengthValue, setStrengthValue] = useState('');
+  const [strengthExempt, setStrengthExempt] = useState(false);
+
+  const [coreTest, setCoreTest] = useState<CoreTest>('situps');
+  const [coreScore, setCoreScore] = useState('');
+  const [coreValue, setCoreValue] = useState('');
+  const [coreExempt, setCoreExempt] = useState(false);
+
+  const currentMember = user ? members.find((m) => m.id === user.id) : null;
   const previousAssessment = currentMember?.fitnessAssessments[currentMember.fitnessAssessments.length - 1];
 
-  const pickDocument = async () => {
-    try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: 'application/pdf',
-        copyToCacheDirectory: true,
-      });
+  const scoreChange = previousAssessment && overallScore
+    ? parseInt(overallScore, 10) - previousAssessment.overallScore
+    : null;
 
-      if (result.canceled) return;
+  const cardioLabel = cardioTest === 'run_2mile' ? 'Time (mm:ss)' : cardioTest === 'hamr_20m' ? 'Shuttles' : 'Walk Time (mm:ss)';
+  const strengthLabel = strengthTest === 'pushups' ? 'Reps' : 'Reps';
+  const coreLabel = coreTest === 'plank' ? 'Time (mm:ss)' : 'Reps';
 
-      setIsProcessing(true);
-      // Simulate PDF processing
-      await new Promise(resolve => setTimeout(resolve, 2000));
-
-      // Mock extracted data - in production, this would parse the PDF
-      // For now, show manual entry with some pre-filled values
-      setOverallScore('87');
-      setCardioScore('45');
-      setCardioTime('11:30');
-      setPushupScore('18');
-      setPushupReps('48');
-      setSitupScore('18');
-      setSitupReps('52');
-      setWaistScore('6');
-      setWaistInches('33');
-
-      setIsProcessing(false);
-      setShowConfirmation(true);
-    } catch (error) {
-      console.error('Document picker error:', error);
-      setIsProcessing(false);
-    }
-  };
+  const canSubmit = Boolean(
+    overallScore &&
+    (cardioExempt || (cardioScore && cardioValue)) &&
+    (strengthExempt || (strengthScore && strengthValue)) &&
+    (coreExempt || (coreScore && coreValue)) &&
+    (waistExempt || (waistScore && waistValue))
+  );
 
   const handleSubmit = () => {
-    if (!user || !overallScore) return;
+    if (!user || !overallScore || !currentMember) return;
 
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-    const score = parseInt(overallScore);
+    const score = parseFloat(overallScore) || 0;
     const assessment: FitnessAssessment = {
-      id: Date.now().toString(),
+      id: `pfra-${Date.now()}`,
       date: new Date().toISOString().split('T')[0],
       overallScore: score,
       components: {
-        cardio: {
-          score: parseInt(cardioScore) || 0,
-          time: cardioTime || undefined,
-        },
+        cardio: cardioTest === 'hamr_20m'
+          ? { score: parseFloat(cardioScore) || 0, laps: parseInt(cardioValue, 10) || 0, test: '20m HAMR', exempt: cardioExempt }
+          : { score: parseFloat(cardioScore) || 0, time: cardioValue || undefined, test: cardioTest === 'run_2mile' ? '2-mile Run' : '2K Walk', exempt: cardioExempt },
         pushups: {
-          score: parseInt(pushupScore) || 0,
-          reps: parseInt(pushupReps) || 0,
+          score: parseFloat(strengthScore) || 0,
+          reps: parseInt(strengthValue, 10) || 0,
+          test: strengthTest === 'pushups' ? 'Push-ups' : 'Hand-release Push-ups',
+          exempt: strengthExempt,
         },
         situps: {
-          score: parseInt(situpScore) || 0,
-          reps: parseInt(situpReps) || 0,
+          score: parseFloat(coreScore) || 0,
+          reps: coreTest === 'plank' ? 0 : parseInt(coreValue, 10) || 0,
+          time: coreTest === 'plank' ? coreValue || undefined : undefined,
+          test: coreTest === 'situps' ? 'Sit-ups' : coreTest === 'cross_leg_reverse_crunch' ? 'Cross-leg Reverse Crunch' : 'Plank',
+          exempt: coreExempt,
         },
-        waist: waistScore ? {
-          score: parseInt(waistScore) || 0,
-          inches: parseFloat(waistInches) || 0,
-        } : undefined,
+        waist: {
+          score: parseFloat(waistScore) || 0,
+          inches: parseFloat(waistValue) || 0,
+          exempt: waistExempt,
+        },
       },
       isPrivate: false,
     };
 
-    addFitnessAssessment(user.id, assessment);
+    updateMember(user.id, {
+      fitnessAssessments: [
+        ...currentMember.fitnessAssessments,
+        assessment,
+      ],
+    });
 
-    // Check for achievements
     if (score >= 90) {
       awardAchievement(user.id, 'excellent_fa');
     }
     if (score === 100) {
       awardAchievement(user.id, 'perfect_fa');
     }
-    if (previousAssessment && score >= previousAssessment.overallScore + 10) {
-      awardAchievement(user.id, 'improvement');
-    }
 
     router.back();
   };
-
-  const newRequiredSessions = overallScore ? calculateRequiredPTSessions(parseInt(overallScore)) : 3;
-  const scoreChange = previousAssessment && overallScore
-    ? parseInt(overallScore) - previousAssessment.overallScore
-    : null;
 
   return (
     <View className="flex-1">
@@ -130,11 +139,7 @@ export default function UploadFitnessTrackerScreen() {
       />
 
       <SafeAreaView edges={['top']} className="flex-1">
-        {/* Header */}
-        <Animated.View
-          entering={FadeInDown.delay(100).springify()}
-          className="px-6 pt-4 pb-2 flex-row items-center"
-        >
+        <Animated.View entering={FadeInDown.delay(100).springify()} className="px-6 pt-4 pb-2 flex-row items-center">
           <Pressable
             onPress={() => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -144,60 +149,13 @@ export default function UploadFitnessTrackerScreen() {
           >
             <ChevronLeft size={24} color="#C0C0C0" />
           </Pressable>
-          <Text className="text-white text-xl font-bold">PFRA</Text>
+          <Text className="text-white text-xl font-bold">Add Manual PFRA</Text>
         </Animated.View>
 
-        <ScrollView
-          className="flex-1 px-6"
-          contentContainerStyle={{ paddingBottom: 40 }}
-          showsVerticalScrollIndicator={false}
-        >
-          {/* Upload Section */}
-          <Animated.View
-            entering={FadeInDown.delay(150).springify()}
-            className="mt-4"
-          >
-            <View className="bg-white/5 rounded-2xl border border-white/10 border-dashed p-8">
-              <View className="items-center">
-                <FileText size={48} color="#4A90D9" />
-                <Text className="text-white font-semibold text-center mt-4 mb-2">
-                  Upload myFSS Fitness Tracker
-                </Text>
-                <Text className="text-af-silver text-center text-sm mb-6">
-                  Upload your official PDF from myFSS and we'll extract your PFRA scores.
-                </Text>
-
-                <Pressable
-                  onPress={pickDocument}
-                  disabled={isProcessing}
-                  className={cn(
-                    "flex-row items-center bg-af-accent px-6 py-3 rounded-xl",
-                    isProcessing && "opacity-50"
-                  )}
-                >
-                  <Upload size={20} color="white" />
-                  <Text className="text-white font-semibold ml-2">
-                    {isProcessing ? 'Processing...' : 'Select PDF'}
-                  </Text>
-                </Pressable>
-
-                <Pressable
-                  onPress={() => setShowManualEntry(true)}
-                  className="mt-4"
-                >
-                  <Text className="text-af-silver underline">Enter manually instead</Text>
-                </Pressable>
-              </View>
-            </View>
-          </Animated.View>
-
-          {/* Previous Assessment */}
+        <ScrollView className="flex-1 px-6" contentContainerStyle={{ paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
           {previousAssessment && (
-            <Animated.View
-              entering={FadeInDown.delay(200).springify()}
-              className="mt-4 p-4 bg-white/5 rounded-2xl border border-white/10"
-            >
-              <Text className="text-white/60 text-sm mb-3">Previous Assessment ({previousAssessment.date})</Text>
+            <Animated.View entering={FadeInDown.delay(125).springify()} className="mt-4 p-4 bg-white/5 rounded-2xl border border-white/10">
+              <Text className="text-white/60 text-sm mb-3">Previous PFRA ({previousAssessment.date})</Text>
               <View className="flex-row items-center justify-between">
                 <Text className="text-white font-semibold">Overall Score</Text>
                 <View className={cn(
@@ -216,304 +174,202 @@ export default function UploadFitnessTrackerScreen() {
                   </Text>
                 </View>
               </View>
-              <Text className="text-af-silver text-sm mt-2">
-                Required PT: {calculateRequiredPTSessions(previousAssessment.overallScore)} sessions/week
-              </Text>
             </Animated.View>
           )}
-        </ScrollView>
-      </SafeAreaView>
 
-      {/* Confirmation Modal */}
-      <Modal visible={showConfirmation} transparent animationType="fade">
-        <View className="flex-1 bg-black/80 justify-center items-center p-6">
-          <Animated.View
-            entering={ZoomIn.duration(300)}
-            className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20"
-          >
-            <View className="flex-row items-center justify-between mb-4">
-              <Text className="text-white text-xl font-bold">Confirm Data</Text>
-              <Pressable
-                onPress={() => setShowConfirmation(false)}
-                className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
-              >
-                <X size={20} color="#C0C0C0" />
-              </Pressable>
-            </View>
-
-            <Text className="text-af-silver mb-4">
-              Please verify the extracted data and make any corrections.
-            </Text>
-
-            <ScrollView style={{ maxHeight: 400 }}>
-              {/* Overall Score */}
-              <View className="mb-4">
-                <Text className="text-white/60 text-sm mb-2">Overall Score</Text>
-                <View className="flex-row items-center">
-                  <TextInput
-                    value={overallScore}
-                    onChangeText={setOverallScore}
-                    keyboardType="numeric"
-                    className="flex-1 bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10"
-                  />
-                  {scoreChange !== null && (
-                    <View className={cn(
-                      "ml-2 flex-row items-center px-2 py-1 rounded-full",
-                      scoreChange >= 0 ? "bg-af-success/20" : "bg-af-danger/20"
-                    )}>
-                      {scoreChange >= 0 ? (
-                        <TrendingUp size={14} color="#22C55E" />
-                      ) : (
-                        <TrendingDown size={14} color="#EF4444" />
-                      )}
-                      <Text className={cn(
-                        "text-xs font-bold ml-1",
-                        scoreChange >= 0 ? "text-af-success" : "text-af-danger"
-                      )}>
-                        {scoreChange >= 0 ? '+' : ''}{scoreChange}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-              </View>
-
-              {/* Cardio */}
-              <View className="mb-4">
-                <Text className="text-white/60 text-sm mb-2">Cardio</Text>
-                <View className="flex-row">
-                  <TextInput
-                    value={cardioScore}
-                    onChangeText={setCardioScore}
-                    placeholder="Score"
-                    placeholderTextColor="#ffffff40"
-                    keyboardType="numeric"
-                    className="flex-1 bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10 mr-2"
-                  />
-                  <TextInput
-                    value={cardioTime}
-                    onChangeText={setCardioTime}
-                    placeholder="Time (mm:ss)"
-                    placeholderTextColor="#ffffff40"
-                    className="flex-1 bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10"
-                  />
-                </View>
-              </View>
-
-              {/* Push-ups */}
-              <View className="mb-4">
-                <Text className="text-white/60 text-sm mb-2">Push-ups</Text>
-                <View className="flex-row">
-                  <TextInput
-                    value={pushupScore}
-                    onChangeText={setPushupScore}
-                    placeholder="Score"
-                    placeholderTextColor="#ffffff40"
-                    keyboardType="numeric"
-                    className="flex-1 bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10 mr-2"
-                  />
-                  <TextInput
-                    value={pushupReps}
-                    onChangeText={setPushupReps}
-                    placeholder="Reps"
-                    placeholderTextColor="#ffffff40"
-                    keyboardType="numeric"
-                    className="flex-1 bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10"
-                  />
-                </View>
-              </View>
-
-              {/* Sit-ups */}
-              <View className="mb-4">
-                <Text className="text-white/60 text-sm mb-2">Sit-ups</Text>
-                <View className="flex-row">
-                  <TextInput
-                    value={situpScore}
-                    onChangeText={setSitupScore}
-                    placeholder="Score"
-                    placeholderTextColor="#ffffff40"
-                    keyboardType="numeric"
-                    className="flex-1 bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10 mr-2"
-                  />
-                  <TextInput
-                    value={situpReps}
-                    onChangeText={setSitupReps}
-                    placeholder="Reps"
-                    placeholderTextColor="#ffffff40"
-                    keyboardType="numeric"
-                    className="flex-1 bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10"
-                  />
-                </View>
-              </View>
-
-              {/* Waist (optional) */}
-              <View className="mb-4">
-                <Text className="text-white/60 text-sm mb-2">Waist (optional)</Text>
-                <View className="flex-row">
-                  <TextInput
-                    value={waistScore}
-                    onChangeText={setWaistScore}
-                    placeholder="Score"
-                    placeholderTextColor="#ffffff40"
-                    keyboardType="numeric"
-                    className="flex-1 bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10 mr-2"
-                  />
-                  <TextInput
-                    value={waistInches}
-                    onChangeText={setWaistInches}
-                    placeholder="Inches"
-                    placeholderTextColor="#ffffff40"
-                    keyboardType="decimal-pad"
-                    className="flex-1 bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10"
-                  />
-                </View>
-              </View>
-
-              {/* PT Requirement Notice */}
-              {overallScore && (
-                <View className="bg-af-accent/10 border border-af-accent/30 rounded-xl p-4 mb-4">
-                  <Text className="text-af-accent font-semibold">PT Requirement Update</Text>
-                  <Text className="text-af-silver text-sm mt-1">
-                    Based on this score, your required PT sessions will be set to {newRequiredSessions} per week.
+          <Animated.View entering={FadeInDown.delay(150).springify()} className="mt-4 bg-white/5 rounded-2xl border border-white/10 p-5">
+            <Text className="text-white font-semibold text-lg mb-4">Overall</Text>
+            <Text className="text-white/60 text-sm mb-2">Overall Score *</Text>
+            <View className="flex-row items-center">
+              <TextInput
+                value={overallScore}
+                onChangeText={setOverallScore}
+                placeholder="e.g., 87.5"
+                placeholderTextColor="#ffffff40"
+                keyboardType="decimal-pad"
+                className="flex-1 bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10"
+              />
+              {scoreChange !== null ? (
+                <View className={cn(
+                  "ml-2 flex-row items-center px-2 py-1 rounded-full",
+                  scoreChange >= 0 ? "bg-af-success/20" : "bg-af-danger/20"
+                )}>
+                  {scoreChange >= 0 ? <TrendingUp size={14} color="#22C55E" /> : <TrendingDown size={14} color="#EF4444" />}
+                  <Text className={cn("text-xs font-bold ml-1", scoreChange >= 0 ? "text-af-success" : "text-af-danger")}>
+                    {scoreChange >= 0 ? '+' : ''}{scoreChange}
                   </Text>
                 </View>
-              )}
-            </ScrollView>
-
-            <View className="flex-row mt-4">
-              <Pressable
-                onPress={() => setShowConfirmation(false)}
-                className="flex-1 bg-white/10 py-3 rounded-xl mr-2"
-              >
-                <Text className="text-white text-center font-semibold">Cancel</Text>
-              </Pressable>
-              <Pressable
-                onPress={handleSubmit}
-                disabled={!overallScore}
-                className={cn(
-                  "flex-1 py-3 rounded-xl ml-2",
-                  overallScore ? "bg-af-accent" : "bg-white/10"
-                )}
-              >
-                <Text className={cn(
-                  "text-center font-semibold",
-                  overallScore ? "text-white" : "text-white/40"
-                )}>Save</Text>
-              </Pressable>
+              ) : null}
             </View>
-          </Animated.View>
-        </View>
-      </Modal>
-
-      {/* Manual Entry Modal */}
-      <Modal visible={showManualEntry} transparent animationType="slide">
-        <View className="flex-1 bg-black/80 justify-end">
-          <View className="bg-af-navy rounded-t-3xl p-6 pb-12">
-            <View className="flex-row items-center justify-between mb-4">
-              <Text className="text-white text-xl font-bold">Manual Entry</Text>
-              <Pressable
-                onPress={() => setShowManualEntry(false)}
-                className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
-              >
-                <X size={20} color="#C0C0C0" />
-              </Pressable>
-            </View>
-
-            <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false}>
-              <View className="mb-4">
-                <Text className="text-white/60 text-sm mb-2">Overall Score *</Text>
+            <View className="mt-4 flex-row" style={{ gap: 12 }}>
+              <View className="flex-1">
+                <Text className="text-white/60 text-sm mb-2">Age</Text>
                 <TextInput
-                  value={overallScore}
-                  onChangeText={setOverallScore}
-                  placeholder="e.g., 87"
-                  placeholderTextColor="#ffffff40"
+                  value={ageYears}
+                  onChangeText={setAgeYears}
                   keyboardType="numeric"
                   className="bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10"
                 />
               </View>
-
-              <View className="mb-4">
-                <Text className="text-white/60 text-sm mb-2">Cardio Score & Time</Text>
-                <View className="flex-row">
-                  <TextInput
-                    value={cardioScore}
-                    onChangeText={setCardioScore}
-                    placeholder="Score"
-                    placeholderTextColor="#ffffff40"
-                    keyboardType="numeric"
-                    className="flex-1 bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10 mr-2"
-                  />
-                  <TextInput
-                    value={cardioTime}
-                    onChangeText={setCardioTime}
-                    placeholder="mm:ss"
-                    placeholderTextColor="#ffffff40"
-                    className="flex-1 bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10"
-                  />
+              <View className="flex-1">
+                <Text className="text-white/60 text-sm mb-2">Gender</Text>
+                <View className="rounded-xl bg-white/10 border border-white/10 flex-row p-1">
+                  <Pressable onPress={() => setGender('male')} className={cn(SEGMENT, gender === 'male' ? 'bg-af-accent' : '')}>
+                    <Text className={cn("font-semibold", gender === 'male' ? 'text-white' : 'text-af-silver')}>Male</Text>
+                  </Pressable>
+                  <Pressable onPress={() => setGender('female')} className={cn(SEGMENT, gender === 'female' ? 'bg-af-accent' : '')}>
+                    <Text className={cn("font-semibold", gender === 'female' ? 'text-white' : 'text-af-silver')}>Female</Text>
+                  </Pressable>
                 </View>
               </View>
+            </View>
+          </Animated.View>
 
-              <View className="mb-4">
-                <Text className="text-white/60 text-sm mb-2">Push-ups Score & Reps</Text>
-                <View className="flex-row">
-                  <TextInput
-                    value={pushupScore}
-                    onChangeText={setPushupScore}
-                    placeholder="Score"
-                    placeholderTextColor="#ffffff40"
-                    keyboardType="numeric"
-                    className="flex-1 bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10 mr-2"
-                  />
-                  <TextInput
-                    value={pushupReps}
-                    onChangeText={setPushupReps}
-                    placeholder="Reps"
-                    placeholderTextColor="#ffffff40"
-                    keyboardType="numeric"
-                    className="flex-1 bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10"
-                  />
-                </View>
+          <Animated.View entering={FadeInDown.delay(175).springify()} className="mt-4 bg-white/5 rounded-2xl border border-white/10 p-5">
+            <View className="mb-4 flex-row items-center justify-between gap-3">
+              <Text className="text-white font-semibold text-lg">Body Composition</Text>
+              <ExemptToggle checked={waistExempt} onPress={() => setWaistExempt((current) => !current)} />
+            </View>
+            <View className="flex-row" style={{ gap: 12 }}>
+              <View className="flex-1">
+                <Text className="text-white/60 text-sm mb-2">Score *</Text>
+                <TextInput value={waistScore} onChangeText={setWaistScore} editable={!waistExempt} keyboardType="decimal-pad" placeholder={waistExempt ? 'Exempt' : '0-20'} placeholderTextColor="#ffffff40" className={cn("bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10", waistExempt && "opacity-50")} />
               </View>
-
-              <View className="mb-4">
-                <Text className="text-white/60 text-sm mb-2">Sit-ups Score & Reps</Text>
-                <View className="flex-row">
-                  <TextInput
-                    value={situpScore}
-                    onChangeText={setSitupScore}
-                    placeholder="Score"
-                    placeholderTextColor="#ffffff40"
-                    keyboardType="numeric"
-                    className="flex-1 bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10 mr-2"
-                  />
-                  <TextInput
-                    value={situpReps}
-                    onChangeText={setSitupReps}
-                    placeholder="Reps"
-                    placeholderTextColor="#ffffff40"
-                    keyboardType="numeric"
-                    className="flex-1 bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10"
-                  />
-                </View>
+              <View className="flex-1">
+                <Text className="text-white/60 text-sm mb-2">Waist (inches) *</Text>
+                <TextInput value={waistValue} onChangeText={setWaistValue} editable={!waistExempt} keyboardType="decimal-pad" placeholder={waistExempt ? 'Exempt' : '33.0'} placeholderTextColor="#ffffff40" className={cn("bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10", waistExempt && "opacity-50")} />
               </View>
-            </ScrollView>
+            </View>
+          </Animated.View>
 
+          <Animated.View entering={FadeInDown.delay(200).springify()} className="mt-4 bg-white/5 rounded-2xl border border-white/10 p-5">
+            <View className="mb-4 flex-row items-center justify-between gap-3">
+              <Text className="text-white font-semibold text-lg">Cardio</Text>
+              <ExemptToggle checked={cardioExempt} onPress={() => setCardioExempt((current) => !current)} />
+            </View>
+            <View className="rounded-xl bg-white/10 border border-white/10 flex-row p-1 mb-4">
+              <Pressable onPress={() => setCardioTest('run_2mile')} className={cn(SEGMENT, cardioTest === 'run_2mile' ? 'bg-af-accent' : '')}><Text className={cn("text-xs font-semibold", cardioTest === 'run_2mile' ? 'text-white' : 'text-af-silver')}>2-mile Run</Text></Pressable>
+              <Pressable onPress={() => setCardioTest('hamr_20m')} className={cn(SEGMENT, cardioTest === 'hamr_20m' ? 'bg-af-accent' : '')}><Text className={cn("text-xs font-semibold", cardioTest === 'hamr_20m' ? 'text-white' : 'text-af-silver')}>HAMR</Text></Pressable>
+              <Pressable onPress={() => setCardioTest('walk_2k')} className={cn(SEGMENT, cardioTest === 'walk_2k' ? 'bg-af-accent' : '')}><Text className={cn("text-xs font-semibold", cardioTest === 'walk_2k' ? 'text-white' : 'text-af-silver')}>2km Walk</Text></Pressable>
+            </View>
+            <View className="flex-row" style={{ gap: 12 }}>
+              <View className="flex-1">
+                <Text className="text-white/60 text-sm mb-2">Score *</Text>
+                <TextInput value={cardioScore} onChangeText={setCardioScore} editable={!cardioExempt} keyboardType="decimal-pad" placeholder={cardioExempt ? 'Exempt' : cardioTest === 'walk_2k' ? '0 or 50' : '0-50'} placeholderTextColor="#ffffff40" className={cn("bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10", cardioExempt && "opacity-50")} />
+              </View>
+              <View className="flex-1">
+                <Text className="text-white/60 text-sm mb-2">{cardioLabel} *</Text>
+                <TextInput value={cardioValue} onChangeText={setCardioValue} editable={!cardioExempt} keyboardType={cardioTest === 'hamr_20m' ? 'numeric' : 'numbers-and-punctuation'} placeholder={cardioExempt ? 'Exempt' : cardioTest === 'hamr_20m' ? '58' : '11:30'} placeholderTextColor="#ffffff40" className={cn("bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10", cardioExempt && "opacity-50")} />
+              </View>
+            </View>
+          </Animated.View>
+
+          <Animated.View entering={FadeInDown.delay(225).springify()} className="mt-4 bg-white/5 rounded-2xl border border-white/10 p-5">
+            <View className="mb-4 flex-row items-center justify-between gap-3">
+              <Text className="text-white font-semibold text-lg">Strength</Text>
+              <ExemptToggle checked={strengthExempt} onPress={() => setStrengthExempt((current) => !current)} />
+            </View>
+            <View className="rounded-xl bg-white/10 border border-white/10 flex-row p-1 mb-4">
+              <Pressable onPress={() => setStrengthTest('pushups')} className={cn(SEGMENT, strengthTest === 'pushups' ? 'bg-af-accent' : '')}><Text className={cn("text-sm font-semibold", strengthTest === 'pushups' ? 'text-white' : 'text-af-silver')}>Push-ups</Text></Pressable>
+              <Pressable onPress={() => setStrengthTest('hand_release_pushups')} className={cn(SEGMENT, strengthTest === 'hand_release_pushups' ? 'bg-af-accent' : '')}><Text className={cn("text-sm font-semibold", strengthTest === 'hand_release_pushups' ? 'text-white' : 'text-af-silver')}>Hand-release</Text></Pressable>
+            </View>
+            <View className="flex-row" style={{ gap: 12 }}>
+              <View className="flex-1">
+                <Text className="text-white/60 text-sm mb-2">Score *</Text>
+                <TextInput value={strengthScore} onChangeText={setStrengthScore} editable={!strengthExempt} keyboardType="decimal-pad" placeholder={strengthExempt ? 'Exempt' : '0-15'} placeholderTextColor="#ffffff40" className={cn("bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10", strengthExempt && "opacity-50")} />
+              </View>
+              <View className="flex-1">
+                <Text className="text-white/60 text-sm mb-2">{strengthLabel} *</Text>
+                <TextInput value={strengthValue} onChangeText={setStrengthValue} editable={!strengthExempt} keyboardType="numeric" placeholder={strengthExempt ? 'Exempt' : '45'} placeholderTextColor="#ffffff40" className={cn("bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10", strengthExempt && "opacity-50")} />
+              </View>
+            </View>
+          </Animated.View>
+
+          <Animated.View entering={FadeInDown.delay(250).springify()} className="mt-4 bg-white/5 rounded-2xl border border-white/10 p-5">
+            <View className="mb-4 flex-row items-center justify-between gap-3">
+              <Text className="text-white font-semibold text-lg">Core</Text>
+              <ExemptToggle checked={coreExempt} onPress={() => setCoreExempt((current) => !current)} />
+            </View>
+            <View className="rounded-xl bg-white/10 border border-white/10 flex-row p-1 mb-4">
+              <Pressable onPress={() => setCoreTest('situps')} className={cn(SEGMENT, coreTest === 'situps' ? 'bg-af-accent' : '')}><Text className={cn("text-xs font-semibold", coreTest === 'situps' ? 'text-white' : 'text-af-silver')}>Sit-ups</Text></Pressable>
+              <Pressable onPress={() => setCoreTest('cross_leg_reverse_crunch')} className={cn(SEGMENT, coreTest === 'cross_leg_reverse_crunch' ? 'bg-af-accent' : '')}><Text className={cn("text-xs font-semibold", coreTest === 'cross_leg_reverse_crunch' ? 'text-white' : 'text-af-silver')}>Cross-leg</Text></Pressable>
+              <Pressable onPress={() => setCoreTest('plank')} className={cn(SEGMENT, coreTest === 'plank' ? 'bg-af-accent' : '')}><Text className={cn("text-xs font-semibold", coreTest === 'plank' ? 'text-white' : 'text-af-silver')}>Plank</Text></Pressable>
+            </View>
+            <View className="flex-row" style={{ gap: 12 }}>
+              <View className="flex-1">
+                <Text className="text-white/60 text-sm mb-2">Score *</Text>
+                <TextInput value={coreScore} onChangeText={setCoreScore} editable={!coreExempt} keyboardType="decimal-pad" placeholder={coreExempt ? 'Exempt' : '0-15'} placeholderTextColor="#ffffff40" className={cn("bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10", coreExempt && "opacity-50")} />
+              </View>
+              <View className="flex-1">
+                <Text className="text-white/60 text-sm mb-2">{coreLabel} *</Text>
+                <TextInput value={coreValue} onChangeText={setCoreValue} editable={!coreExempt} keyboardType={coreTest === 'plank' ? 'numbers-and-punctuation' : 'numeric'} placeholder={coreExempt ? 'Exempt' : coreTest === 'plank' ? '3:30' : '50'} placeholderTextColor="#ffffff40" className={cn("bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10", coreExempt && "opacity-50")} />
+              </View>
+            </View>
+          </Animated.View>
+
+          {overallScore ? (
+            <Animated.View entering={FadeInDown.delay(275).springify()} className="mt-4 bg-af-accent/10 border border-af-accent/30 rounded-2xl p-4">
+              <Text className="text-af-accent font-semibold">FitFlight Record</Text>
+              <Text className="text-af-silver text-sm mt-1">
+                This saves the PFRA to your FitFlight account only. It does not change required PT sessions.
+              </Text>
+            </Animated.View>
+          ) : null}
+
+          <Animated.View entering={FadeInDown.delay(300).springify()} className="mt-6">
             <Pressable
-              onPress={() => {
-                setShowManualEntry(false);
-                setShowConfirmation(true);
-              }}
-              disabled={!overallScore}
-              className={cn(
-                "py-4 rounded-xl mt-4",
-                overallScore ? "bg-af-accent" : "bg-white/10"
-              )}
+              onPress={() => canSubmit && setShowConfirmation(true)}
+              disabled={!canSubmit}
+              className={cn("py-4 rounded-xl", canSubmit ? "bg-af-accent" : "bg-white/10")}
             >
-              <Text className={cn(
-                "text-center font-bold",
-                overallScore ? "text-white" : "text-white/40"
-              )}>Continue</Text>
+              <Text className={cn("text-center font-bold", canSubmit ? "text-white" : "text-white/40")}>Review PFRA</Text>
             </Pressable>
-          </View>
+          </Animated.View>
+        </ScrollView>
+      </SafeAreaView>
+
+      <Modal visible={showConfirmation} transparent animationType="fade">
+        <View className="flex-1 bg-black/80 justify-center items-center p-6">
+          <Animated.View entering={ZoomIn.duration(300)} className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20">
+            <View className="flex-row items-center justify-between mb-4">
+              <Text className="text-white text-xl font-bold">Confirm PFRA</Text>
+              <Pressable onPress={() => setShowConfirmation(false)} className="w-8 h-8 bg-white/10 rounded-full items-center justify-center">
+                <X size={20} color="#C0C0C0" />
+              </Pressable>
+            </View>
+
+            <View className="bg-white/5 rounded-xl p-4">
+              <View className="flex-row justify-between mb-2">
+                <Text className="text-af-silver">Overall Score</Text>
+                <Text className="text-white font-semibold">{overallScore}</Text>
+              </View>
+              <View className="flex-row justify-between mb-2">
+                <Text className="text-af-silver">Cardio</Text>
+                <Text className="text-white font-semibold">{cardioScore} · {cardioValue}</Text>
+              </View>
+              <View className="flex-row justify-between mb-2">
+                <Text className="text-af-silver">Strength</Text>
+                <Text className="text-white font-semibold">{strengthScore} · {strengthValue}</Text>
+              </View>
+              <View className="flex-row justify-between mb-2">
+                <Text className="text-af-silver">Core</Text>
+                <Text className="text-white font-semibold">{coreScore} · {coreValue}</Text>
+              </View>
+              <View className="flex-row justify-between">
+                <Text className="text-af-silver">WHtR</Text>
+                <Text className="text-white font-semibold">{waistScore} · {waistValue} in</Text>
+              </View>
+            </View>
+
+            <View className="flex-row mt-4">
+              <Pressable onPress={() => setShowConfirmation(false)} className="flex-1 bg-white/10 py-3 rounded-xl mr-2">
+                <Text className="text-white text-center font-semibold">Edit</Text>
+              </Pressable>
+              <Pressable onPress={handleSubmit} className="flex-1 bg-af-accent py-3 rounded-xl ml-2">
+                <Text className="text-white text-center font-semibold">Save PFRA</Text>
+              </Pressable>
+            </View>
+          </Animated.View>
         </View>
       </Modal>
     </View>

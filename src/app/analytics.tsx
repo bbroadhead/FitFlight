@@ -15,6 +15,7 @@ import { format, startOfWeek, addDays } from 'date-fns';
 import { useMemberStore, useAuthStore, getDisplayName, type Flight, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import ExcelJS from 'exceljs';
+import { formatMonthLabel, getAvailableMonthKeys, getMemberMonthSummary, getMonthKey, getMonthSessions } from '@/lib/monthlyStats';
 
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
 const WEEKLY_ATTENDANCE_TARGET = 5;
@@ -102,6 +103,7 @@ export default function AnalyticsScreen() {
   const user = useAuthStore(s => s.user);
   const [isExporting, setIsExporting] = useState(false);
   const [expandedOverviewCard, setExpandedOverviewCard] = useState<OverviewCardKey | null>(null);
+  const [selectedMonthKey, setSelectedMonthKey] = useState(getMonthKey());
   const userSquadron = user?.squadron ?? 'Hawks';
   const members = useMemo(
     () => allMembers.filter((member) => member.squadron === userSquadron),
@@ -111,6 +113,13 @@ export default function AnalyticsScreen() {
     () => allPtSessions.filter((session) => (session.squadron ?? 'Hawks') === userSquadron),
     [allPtSessions, userSquadron]
   );
+  const availableMonthKeys = useMemo(
+    () => getAvailableMonthKeys(members, ptSessions),
+    [members, ptSessions]
+  );
+  const activeMonthKey = availableMonthKeys.includes(selectedMonthKey)
+    ? selectedMonthKey
+    : availableMonthKeys[0] ?? getMonthKey();
 
   // Calculate analytics
   const analytics = useMemo(() => {
@@ -120,9 +129,10 @@ export default function AnalyticsScreen() {
     );
     const totalMembers = members.length;
     const totalPFLs = members.filter(m => m.accountType === 'ptl').length;
-    const totalSessions = ptSessions.length;
-    const totalMinutes = members.reduce((acc, m) => acc + m.exerciseMinutes, 0);
-    const totalMiles = members.reduce((acc, m) => acc + m.distanceRun, 0);
+    const monthSessions = getMonthSessions(ptSessions, activeMonthKey);
+    const totalSessions = monthSessions.length;
+    const totalMinutes = members.reduce((acc, m) => acc + getMemberMonthSummary(m, activeMonthKey).minutes, 0);
+    const totalMiles = members.reduce((acc, m) => acc + getMemberMonthSummary(m, activeMonthKey).miles, 0);
     const currentWeekSessions = ptSessions.filter((session) => currentWeekDates.has(session.date));
     const totalAttendanceMarksThisWeek = currentWeekSessions.reduce((acc, session) => acc + session.attendees.length, 0);
     const membersMeetingWeeklyTarget = members.filter((member) => {
@@ -142,7 +152,7 @@ export default function AnalyticsScreen() {
     // Flight breakdown
     const flightStats = FLIGHTS.map(flight => {
       const flightMembers = members.filter(m => m.flight === flight);
-      const flightSessions = ptSessions.filter(s => s.flight === flight);
+      const flightSessions = monthSessions.filter(s => s.flight === flight);
       const avgAttendance = flightSessions.length > 0
         ? flightSessions.reduce((acc, s) => acc + s.attendees.length, 0) / flightSessions.length
         : 0;
@@ -150,8 +160,8 @@ export default function AnalyticsScreen() {
       return {
         flight,
         memberCount: flightMembers.length,
-        totalMinutes: flightMembers.reduce((acc, m) => acc + m.exerciseMinutes, 0),
-        totalMiles: flightMembers.reduce((acc, m) => acc + m.distanceRun, 0),
+        totalMinutes: flightMembers.reduce((acc, m) => acc + getMemberMonthSummary(m, activeMonthKey).minutes, 0),
+        totalMiles: flightMembers.reduce((acc, m) => acc + getMemberMonthSummary(m, activeMonthKey).miles, 0),
         avgAttendance: Math.round(avgAttendance * 10) / 10,
         sessions: flightSessions.length,
       };
@@ -172,7 +182,7 @@ export default function AnalyticsScreen() {
 
     let totalWorkouts = 0;
     members.forEach(member => {
-      member.workouts.forEach(workout => {
+      getMemberMonthSummary(member, activeMonthKey).workouts.forEach(workout => {
         workoutTypeCounts[workout.type] = (workoutTypeCounts[workout.type] || 0) + 1;
         totalWorkouts++;
       });
@@ -222,7 +232,7 @@ export default function AnalyticsScreen() {
       .sort((left, right) => right.count - left.count);
 
     const longestWorkout = members
-      .flatMap((member) => member.workouts.map((workout) => ({ member, workout })))
+      .flatMap((member) => getMemberMonthSummary(member, activeMonthKey).workouts.map((workout) => ({ member, workout })))
       .sort((left, right) => right.workout.duration - left.workout.duration)[0] ?? null;
 
     const pfraTimeline = Array.from({ length: 3 }, (_, index) => {
@@ -274,8 +284,9 @@ export default function AnalyticsScreen() {
       membersWithFA: membersWithFA.length,
       workoutTypeBreakdown,
       totalWorkouts,
+      activeMonthKey,
     };
-  }, [members, ptSessions]);
+  }, [activeMonthKey, members, ptSessions]);
 
   const buildPdfHtml = () => {
     const generatedAt = new Date().toLocaleString();
@@ -320,7 +331,7 @@ export default function AnalyticsScreen() {
         <body>
           <div class="shell">
             <h1>${userSquadron} Squadron Analytics</h1>
-            <div class="subtitle">Generated ${generatedAt}${user ? ` by ${getDisplayName(user)}` : ''}</div>
+            <div class="subtitle">Generated ${generatedAt}${user ? ` by ${getDisplayName(user)}` : ''} for ${formatMonthLabel(activeMonthKey)}</div>
             <div class="grid">
               <div class="card"><div class="label">Members</div><div class="value">${analytics.totalMembers}</div></div>
               <div class="card"><div class="label">Workouts</div><div class="value">${analytics.totalWorkouts}</div></div>
@@ -358,6 +369,7 @@ export default function AnalyticsScreen() {
       { metric: 'Squadron', value: userSquadron },
       { metric: 'Total Members', value: analytics.totalMembers },
       { metric: 'Total PFLs', value: analytics.totalPFLs },
+      { metric: 'Report Month', value: formatMonthLabel(activeMonthKey) },
       { metric: 'Total Workouts', value: analytics.totalWorkouts },
       { metric: 'Total PT Sessions', value: analytics.totalSessions },
       { metric: 'Total Minutes', value: analytics.totalMinutes },
@@ -390,7 +402,14 @@ export default function AnalyticsScreen() {
         firstName: member.firstName,
         lastName: member.lastName,
         flight: member.flight,
-        role: member.accountType === 'ptl' ? 'PFL' : member.accountType,
+        role:
+          member.accountType === 'ptl'
+            ? 'PFL'
+            : member.accountType === 'squadron_leadership'
+              ? 'Squadron Leadership'
+              : member.accountType === 'ufpm'
+                ? 'UFPM'
+                : member.accountType,
         minutes: member.exerciseMinutes,
         miles: member.distanceRun,
         workouts: member.workouts.length,
@@ -552,6 +571,35 @@ export default function AnalyticsScreen() {
           contentContainerStyle={{ paddingBottom: 40 }}
           showsVerticalScrollIndicator={false}
         >
+          <Animated.View
+            entering={FadeInDown.delay(125).springify()}
+            className="mt-4"
+          >
+            <Text className="text-white/60 text-xs uppercase tracking-wider mb-2">Report Month</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingRight: 12 }}>
+              {availableMonthKeys.map((monthKey) => (
+                <Pressable
+                  key={monthKey}
+                  onPress={() => {
+                    Haptics.selectionAsync();
+                    setSelectedMonthKey(monthKey);
+                  }}
+                  className={cn(
+                    "px-3 py-2 rounded-full mr-2 border",
+                    activeMonthKey === monthKey ? "bg-af-accent border-af-accent" : "bg-white/5 border-white/10"
+                  )}
+                >
+                  <Text className={cn(
+                    "text-xs",
+                    activeMonthKey === monthKey ? "text-white font-semibold" : "text-af-silver"
+                  )}>
+                    {formatMonthLabel(monthKey)}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </Animated.View>
+
           {/* Export Buttons */}
           <Animated.View
             entering={FadeInDown.delay(150).springify()}
@@ -592,7 +640,8 @@ export default function AnalyticsScreen() {
             entering={FadeInDown.delay(200).springify()}
             className="mt-4 p-4 bg-white/5 rounded-2xl border border-white/10"
           >
-            <Text className="text-white font-semibold text-lg mb-4">Squadron Overview</Text>
+            <Text className="text-white font-semibold text-lg mb-1">Squadron Overview</Text>
+            <Text className="text-af-silver text-xs mb-3">{formatMonthLabel(activeMonthKey)}</Text>
             <Text className="text-af-silver text-xs mb-3">Tap to expand for additional details</Text>
             <View className="flex-row flex-wrap">
               <View className="w-1/2 p-2">

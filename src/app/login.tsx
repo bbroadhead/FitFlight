@@ -40,6 +40,14 @@ function getInitialAccountType(firstName: string, lastName: string): AccountType
     return 'ufpm';
   }
 
+  if (
+    (normalizedFirstName === 'benjamin' && normalizedLastName === 'isenberg') ||
+    (normalizedFirstName === 'jessica' && normalizedLastName === 'kick') ||
+    (normalizedFirstName === 'nicky' && normalizedLastName === 'spader')
+  ) {
+    return 'squadron_leadership';
+  }
+
   return 'standard';
 }
 
@@ -65,6 +73,14 @@ function findMatchingMember<T extends Pick<Member, 'id' | 'email' | 'firstName' 
     member.firstName.trim().toLowerCase() === normalizedFirstName &&
     member.lastName.trim().toLowerCase() === normalizedLastName
   ) ?? null;
+}
+
+function getPostLoginRoute(member: Pick<Member, 'mustChangePassword' | 'hasLoggedIntoApp'>) {
+  if (member.mustChangePassword) {
+    return '/reset-password?mode=first-login';
+  }
+
+  return member.hasLoggedIntoApp ? '/(tabs)' : '/welcome';
 }
 
 export default function LoginScreen() {
@@ -126,7 +142,8 @@ export default function LoginScreen() {
         const metadata = authUser.user_metadata ?? {};
         const normalizedEmail = (authUser.email ?? email).toLowerCase();
         const roleRecord = await fetchRoleForEmail(normalizedEmail, sessionFromHash.accessToken).catch(() => null);
-        const rosterMembers = await fetchRosterMembers(sessionFromHash.accessToken).catch(() => []);
+        const resolvedSquadron = (typeof metadata.squadron === 'string' ? metadata.squadron : 'Hawks') as Squadron;
+        const rosterMembers = await fetchRosterMembers(sessionFromHash.accessToken, resolvedSquadron).catch(() => []);
         const localExistingMember = findMatchingMember(members, {
           email: normalizedEmail,
           firstName: typeof metadata.firstName === 'string' ? metadata.firstName : '',
@@ -175,6 +192,8 @@ export default function LoginScreen() {
               monthlyPlacements: [],
               trophyCount: 0,
               hasSeenTutorial: false,
+              mustChangePassword: false,
+              hasLoggedIntoApp: false,
             };
 
         if (!existingMember) {
@@ -197,6 +216,7 @@ export default function LoginScreen() {
             accountType: member.accountType,
             isVerified: true,
             ptlPendingApproval: member.ptlPendingApproval,
+            profilePicture: member.profilePicture,
           });
         }
 
@@ -216,14 +236,17 @@ export default function LoginScreen() {
           squadron: member.squadron,
           accountType: member.accountType,
           email: member.email,
+          profilePicture: member.profilePicture,
           isVerified: true,
           ptlPendingApproval: member.ptlPendingApproval,
           fitnessAssessmentsPrivate: false,
           hasSeenTutorial: member.hasSeenTutorial ?? false,
+          mustChangePassword: member.mustChangePassword ?? false,
+          hasLoggedIntoApp: member.hasLoggedIntoApp ?? false,
         }, { rememberSession: true });
 
         clearUrlHashSession();
-        router.replace(member.hasSeenTutorial ? '/(tabs)' : '/welcome');
+        router.replace(getPostLoginRoute(member));
       } catch (confirmationError) {
         clearUrlHashSession();
         setError(
@@ -251,7 +274,8 @@ export default function LoginScreen() {
       const metadata = response.user.user_metadata ?? {};
       const normalizedEmail = email.toLowerCase();
       const roleRecord = await fetchRoleForEmail(normalizedEmail, response.access_token).catch(() => null);
-      const rosterMembers = await fetchRosterMembers(response.access_token).catch(() => []);
+      const resolvedSquadron = (typeof metadata.squadron === 'string' ? metadata.squadron : selectedSquadron) as Squadron;
+      const rosterMembers = await fetchRosterMembers(response.access_token, resolvedSquadron).catch(() => []);
       const localExistingMember = findMatchingMember(members, {
         email: normalizedEmail,
         firstName: typeof metadata.firstName === 'string' ? metadata.firstName : '',
@@ -301,6 +325,8 @@ export default function LoginScreen() {
             monthlyPlacements: [],
             trophyCount: 0,
             hasSeenTutorial: false,
+            mustChangePassword: false,
+            hasLoggedIntoApp: false,
           };
 
       if (!existingMember) {
@@ -323,6 +349,7 @@ export default function LoginScreen() {
           accountType: member.accountType,
           isVerified: true,
           ptlPendingApproval: member.ptlPendingApproval,
+          profilePicture: member.profilePicture,
         });
       }
 
@@ -337,10 +364,13 @@ export default function LoginScreen() {
         squadron: member.squadron,
         accountType: member.accountType,
         email: member.email,
+        profilePicture: member.profilePicture,
         isVerified: member.isVerified,
         ptlPendingApproval: member.ptlPendingApproval,
         fitnessAssessmentsPrivate: false,
         hasSeenTutorial: member.hasSeenTutorial ?? false,
+        mustChangePassword: member.mustChangePassword ?? false,
+        hasLoggedIntoApp: member.hasLoggedIntoApp ?? false,
       };
 
       setSessionTokens({
@@ -348,7 +378,7 @@ export default function LoginScreen() {
         refreshToken: response.refresh_token,
       });
       login(user, { rememberSession: stayLoggedIn });
-      router.replace((member.hasSeenTutorial ?? false) ? '/(tabs)' : '/welcome');
+      router.replace(getPostLoginRoute(member));
     };
 
     run().catch((error) => {
@@ -461,6 +491,9 @@ export default function LoginScreen() {
       monthlyPlacements: [],
       trophyCount: 0,
       hasSeenTutorial: false,
+      mustChangePassword: false,
+      hasLoggedIntoApp: false,
+      profilePicture: existingMemberOverride?.profilePicture,
     };
 
     if (existingMemberOverride) {
@@ -503,10 +536,13 @@ export default function LoginScreen() {
       squadron: selectedSquadron,
       accountType,
       email: email.toLowerCase(),
+      profilePicture: newMember.profilePicture,
       isVerified: true,
       ptlPendingApproval: wantsPTL,
       fitnessAssessmentsPrivate: false,
       hasSeenTutorial: false, // New users haven't seen tutorial
+      mustChangePassword: false,
+      hasLoggedIntoApp: false,
     };
 
     setSessionTokens({

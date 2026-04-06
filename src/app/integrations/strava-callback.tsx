@@ -130,7 +130,7 @@ export default function StravaCallbackScreen() {
                 onPress={() => router.replace('/(tabs)/profile')}
                 className="mt-6 rounded-xl bg-white/10 px-5 py-3"
               >
-                <Text className="text-white font-semibold">Back to Profile</Text>
+                <Text className="text-white font-semibold">Back to Account</Text>
               </Pressable>
             )}
           </View>

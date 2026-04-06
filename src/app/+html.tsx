@@ -5,20 +5,22 @@ import { ScrollViewStyleReset } from 'expo-router/html';
 // The contents of this function only run in Node.js environments and
 // do not have access to the DOM or browser APIs.
 export default function Root({ children }: { children: React.ReactNode }) {
+  const basePath = '/FitFlight';
   return (
     <html lang="en">
       <head>
         <meta charSet="utf-8" />
         <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
         <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
-        <link rel="manifest" href="/FitFlight/manifest.json" />
+        <link rel="manifest" href={`${basePath}/manifest.json`} />
         <link
           rel="apple-touch-icon"
           sizes="180x180"
           type="image/png"
-          href="apple-touch-icon.png"
+          href={`${basePath}/apple-touch-icon.png`}
         />
-        <link rel="apple-touch-icon" href="/FitFlight/apple-touch-icon.png" />
+        <link rel="icon" type="image/png" sizes="192x192" href={`${basePath}/logo192.png`} />
+        <link rel="icon" type="image/png" sizes="512x512" href={`${basePath}/logo512.png`} />
         {/* iOS PWA support */}
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-title" content="FitFlight" />

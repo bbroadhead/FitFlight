@@ -7,8 +7,9 @@ import { Trophy, Timer, ChevronDown, ChevronUp, Crown, Medal, Search, Building2,
 import Animated, { FadeInDown, FadeInRight, useAnimatedStyle, useSharedValue, withDelay, withSpring } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import { ALL_ACHIEVEMENTS, getDisplayName, type Flight, useAuthStore, useMemberStore, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
+import { ALL_ACHIEVEMENTS, getDisplayName, getEffectiveAchievementIds, type Flight, useAuthStore, useMemberStore, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
+import { getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
 
 const WORKOUT_TYPE_COLORS: Record<WorkoutType, string> = {
   Running: '#22C55E',
@@ -262,6 +263,7 @@ export function LeaderboardContent({
   }, [members, userSquadron]);
 
   const sortedMembers = useMemo<LeaderboardMember[]>(() => {
+    const currentMonthKey = getMonthKey();
     let filtered = squadronMembers;
 
     if (searchQuery.trim()) {
@@ -285,22 +287,22 @@ export function LeaderboardContent({
         firstName: m.firstName,
         lastName: m.lastName,
         flight: m.flight,
-        exerciseMinutes: m.exerciseMinutes,
-        distanceRun: m.distanceRun,
-        workoutCount: m.workouts.length,
-        totalScore: m.exerciseMinutes + Math.round(m.distanceRun * 10) + m.workouts.length * 25,
+        exerciseMinutes: getMemberMonthSummary(m, currentMonthKey).minutes,
+        distanceRun: getMemberMonthSummary(m, currentMonthKey).miles,
+        workoutCount: getMemberMonthSummary(m, currentMonthKey).workoutCount,
+        totalScore: getMemberMonthSummary(m, currentMonthKey).score,
         trophyCount: m.trophyCount,
         hardAchievements: ALL_ACHIEVEMENTS
-          .filter(a => a.isHard && m.achievements.includes(a.id))
+          .filter(a => a.isHard && getEffectiveAchievementIds(m).includes(a.id))
           .map(a => ({ id: a.id, name: a.name })),
       }))
       .sort((a, b) => b.totalScore - a.totalScore);
   }, [searchQuery, selectedFlight, squadronMembers]);
 
   const maxValues = useMemo(() => ({
-    minutes: Math.max(...squadronMembers.map(m => m.exerciseMinutes), 1),
-    distance: Math.max(...squadronMembers.map(m => m.distanceRun), 1),
-    workouts: Math.max(...squadronMembers.map(m => m.workouts.length), 1),
+    minutes: Math.max(...squadronMembers.map(m => getMemberMonthSummary(m, getMonthKey()).minutes), 1),
+    distance: Math.max(...squadronMembers.map(m => getMemberMonthSummary(m, getMonthKey()).miles), 1),
+    workouts: Math.max(...squadronMembers.map(m => getMemberMonthSummary(m, getMonthKey()).workoutCount), 1),
   }), [squadronMembers]);
 
   const squadronWorkoutBreakdown = useMemo(() => {
@@ -309,7 +311,7 @@ export function LeaderboardContent({
 
     let totalWorkouts = 0;
     squadronMembers.forEach(member => {
-      member.workouts.forEach(workout => {
+      getMemberMonthSummary(member, getMonthKey()).workouts.forEach(workout => {
         counts[workout.type] = (counts[workout.type] || 0) + 1;
         totalWorkouts++;
       });
@@ -401,19 +403,19 @@ export function LeaderboardContent({
           <View className="flex-row justify-between">
             <View className="items-center flex-1">
               <Timer size={24} color="#4A90D9" />
-              <Text className="text-white font-bold text-xl mt-1">{Math.round(squadronMembers.reduce((acc, m) => acc + m.exerciseMinutes, 0) / 60)}</Text>
+              <Text className="text-white font-bold text-xl mt-1">{Math.round(squadronMembers.reduce((acc, m) => acc + getMemberMonthSummary(m, getMonthKey()).minutes, 0) / 60)}</Text>
               <Text className="text-af-silver text-xs">Hours</Text>
             </View>
             <View className="w-px bg-white/10" />
             <View className="items-center flex-1">
                   <RunningIcon size={24} color="#22C55E" />
-              <Text className="text-white font-bold text-xl mt-1">{squadronMembers.reduce((acc, m) => acc + m.distanceRun, 0).toFixed(0)}</Text>
+              <Text className="text-white font-bold text-xl mt-1">{squadronMembers.reduce((acc, m) => acc + getMemberMonthSummary(m, getMonthKey()).miles, 0).toFixed(0)}</Text>
               <Text className="text-af-silver text-xs">Miles</Text>
             </View>
             <View className="w-px bg-white/10" />
             <View className="items-center flex-1">
               <Dumbbell size={24} color="#A855F7" />
-              <Text className="text-white font-bold text-xl mt-1">{squadronMembers.reduce((acc, m) => acc + m.workouts.length, 0)}</Text>
+              <Text className="text-white font-bold text-xl mt-1">{squadronMembers.reduce((acc, m) => acc + getMemberMonthSummary(m, getMonthKey()).workoutCount, 0)}</Text>
               <Text className="text-af-silver text-xs">Workouts</Text>
             </View>
           </View>

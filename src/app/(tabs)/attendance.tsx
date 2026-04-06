@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LayoutChangeEvent, NativeScrollEvent, NativeSyntheticEvent, PanResponder, Pressable, ScrollView, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { ChevronLeft, ChevronRight, Check, X } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
@@ -20,6 +21,7 @@ const DAY_COLUMN_WIDTH = 60;
 const ATTENDANCE_FILTER_STORAGE_KEY = 'fitflight-attendance-filter';
 
 export default function AttendanceScreen() {
+  const router = useRouter();
   const [currentWeekStart, setCurrentWeekStart] = useState(() => startOfWeek(new Date(), { weekStartsOn: 1 }));
   const [selectedFlight, setSelectedFlight] = useState<Flight | 'all'>('all');
   const [currentScrollX, setCurrentScrollX] = useState(0);
@@ -30,6 +32,8 @@ export default function AttendanceScreen() {
   const syncingSourceRef = useRef<string | null>(null);
   const currentScrollXRef = useRef(0);
   const dragStartScrollXRef = useRef(0);
+  const attendanceInteractionRef = useRef(false);
+  const attendanceInteractionResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flightScrollXRef = useRef(0);
   const flightDragStartScrollXRef = useRef(0);
   const [tableViewportWidth, setTableViewportWidth] = useState(0);
@@ -43,6 +47,23 @@ export default function AttendanceScreen() {
 
   const canEdit = user ? canEditAttendance(user.accountType) : false;
   const userSquadron = user?.squadron ?? 'Hawks';
+
+  const markAttendanceInteraction = useCallback((active: boolean) => {
+    if (attendanceInteractionResetRef.current) {
+      clearTimeout(attendanceInteractionResetRef.current);
+      attendanceInteractionResetRef.current = null;
+    }
+
+    if (active) {
+      attendanceInteractionRef.current = true;
+      return;
+    }
+
+    attendanceInteractionResetRef.current = setTimeout(() => {
+      attendanceInteractionRef.current = false;
+      attendanceInteractionResetRef.current = null;
+    }, 120);
+  }, []);
 
   const weekDays = useMemo(() => {
     return Array.from({ length: 7 }, (_, i) => addDays(currentWeekStart, i));
@@ -109,6 +130,7 @@ export default function AttendanceScreen() {
 
   const handleToggleAttendance = async (date: Date, memberId: string, flight: Flight, squadron: typeof userSquadron = userSquadron) => {
     if (!canEdit) return;
+    if (attendanceInteractionRef.current) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
     const dateStr = format(date, 'yyyy-MM-dd');
@@ -164,9 +186,21 @@ export default function AttendanceScreen() {
     });
     return count;
   };
+  const totalWeeklyCheckIns = useMemo(
+    () => flightMembers.reduce((sum, member) => sum + getWeeklyAttendance(member.id), 0),
+    [flightMembers, weekDays, ptSessions, userSquadron]
+  );
+  const averageWeeklyCheckIns = flightMembers.length > 0 ? totalWeeklyCheckIns / flightMembers.length : 0;
+  const membersOnTarget = useMemo(
+    () => flightMembers.filter((member) => getWeeklyAttendance(member.id) >= WEEKLY_PROGRESS_TARGET).length,
+    [flightMembers, weekDays, ptSessions, userSquadron]
+  );
 
   useEffect(() => {
     return () => {
+      if (attendanceInteractionResetRef.current) {
+        clearTimeout(attendanceInteractionResetRef.current);
+      }
       setSwipeEnabled(true);
     };
   }, [setSwipeEnabled]);
@@ -318,6 +352,7 @@ export default function AttendanceScreen() {
     onMoveShouldSetPanResponder: (_, gestureState) => canCaptureHorizontalDrag(gestureState.dx, gestureState.dy),
     onPanResponderGrant: () => {
       dragStartScrollXRef.current = currentScrollXRef.current;
+      markAttendanceInteraction(true);
       setSwipeEnabled(false);
     },
     onPanResponderMove: (_, gestureState) => {
@@ -329,12 +364,14 @@ export default function AttendanceScreen() {
       updateSwipeState(nextX);
     },
     onPanResponderRelease: () => {
+      markAttendanceInteraction(false);
       updateSwipeState(currentScrollXRef.current);
     },
     onPanResponderTerminate: () => {
+      markAttendanceInteraction(false);
       updateSwipeState(currentScrollXRef.current);
     },
-  }), [canCaptureHorizontalDrag, horizontalOverflow, syncHorizontalScroll, updateSwipeState]);
+  }), [canCaptureHorizontalDrag, horizontalOverflow, markAttendanceInteraction, syncHorizontalScroll, updateSwipeState]);
 
   const flightPanResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => false,
@@ -420,6 +457,7 @@ export default function AttendanceScreen() {
           entering={FadeInDown.delay(200).springify()}
           className="px-6 mb-4"
         >
+          <View className="rounded-2xl border border-white/10 bg-white/5 p-3">
           <View onLayout={handleFlightStripLayout} {...flightPanResponder.panHandlers}>
           <ScrollView
             ref={flightScrollRef}
@@ -470,31 +508,43 @@ export default function AttendanceScreen() {
             </View>
           </ScrollView>
           </View>
+          </View>
         </Animated.View>
 
         {/* Attendance Table Header */}
         <View className="px-6 mb-2" onLayout={handleTableLayout}>
-          <View className="flex-row items-center">
+          <View className="flex-row items-center rounded-2xl border border-white/10 bg-white/5 px-3 py-3">
             <View style={{ width: NAME_COLUMN_WIDTH }}>
-              <Text className="text-af-silver text-xs">Member</Text>
+              <Text className="text-af-silver text-xs uppercase tracking-[0.4px]">Member</Text>
             </View>
             <View className="flex-1 relative" {...attendancePanResponder.panHandlers}>
               <ScrollView
                 ref={headerScrollRef}
                 horizontal
                 bounces={false}
-                scrollEnabled={false}
+                scrollEnabled={horizontalOverflow > 0}
                 showsHorizontalScrollIndicator={false}
                 scrollEventThrottle={16}
                 onScroll={(event) => handleHorizontalScroll(event, 'header')}
-                onTouchStart={() => updateSwipeState(currentScrollXRef.current)}
-                onScrollEndDrag={(event) => updateSwipeState(event.nativeEvent.contentOffset.x)}
-                onMomentumScrollEnd={(event) => updateSwipeState(event.nativeEvent.contentOffset.x)}
+                onTouchStart={() => {
+                  markAttendanceInteraction(true);
+                  updateSwipeState(currentScrollXRef.current);
+                }}
+                onScrollBeginDrag={() => markAttendanceInteraction(true)}
+                onScrollEndDrag={(event) => {
+                  markAttendanceInteraction(false);
+                  updateSwipeState(event.nativeEvent.contentOffset.x);
+                }}
+                onMomentumScrollBegin={() => markAttendanceInteraction(true)}
+                onMomentumScrollEnd={(event) => {
+                  markAttendanceInteraction(false);
+                  updateSwipeState(event.nativeEvent.contentOffset.x);
+                }}
               >
                 <View className="flex-row" style={{ width: dayColumnsWidth }}>
                   {weekDays.map((day) => (
                     <View key={day.toISOString()} style={{ width: DAY_COLUMN_WIDTH }} className="items-center">
-                    <Text className="text-af-silver text-xs">{format(day, 'EEE')}</Text>
+                    <Text className="text-af-silver text-xs uppercase tracking-[0.4px]">{format(day, 'EEE')}</Text>
                       <Text className="text-white font-bold">{format(day, 'd')}</Text>
                     </View>
                   ))}
@@ -524,7 +574,7 @@ export default function AttendanceScreen() {
               )}
             </View>
             <View style={{ width: PROGRESS_COLUMN_WIDTH }} className="items-center">
-              <Text className="text-af-silver text-xs">Progress</Text>
+              <Text className="text-af-silver text-xs uppercase tracking-[0.4px]">Progress</Text>
             </View>
           </View>
         </View>
@@ -535,6 +585,50 @@ export default function AttendanceScreen() {
           contentContainerStyle={{ paddingBottom: 120 }}
           showsVerticalScrollIndicator={false}
         >
+          <Animated.View
+            entering={FadeInDown.delay(125).springify()}
+            className="mb-4"
+          >
+            <View className="rounded-2xl border border-white/10 bg-white/6 overflow-hidden">
+              <LinearGradient
+                colors={['rgba(74,144,217,0.16)', 'rgba(20,184,166,0.07)', 'rgba(255,255,255,0.02)']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={{ padding: 14 }}
+              >
+                <View className="flex-row items-center justify-between gap-3">
+                  <View className="flex-1">
+                    <Text className="text-white font-semibold text-base">
+                      {selectedFlight === 'all' ? `${userSquadron} Attendance` : `${selectedFlight} Flight`}
+                    </Text>
+                    <Text className="text-af-silver text-xs mt-1">
+                      Tap a member for profile. Tap attendance markers to update.
+                    </Text>
+                  </View>
+                  <View className="rounded-xl border border-white/10 bg-black/15 px-3 py-2 items-center min-w-[70px]">
+                    <Text className="text-af-silver text-[10px] uppercase tracking-[0.4px]">At 5/5</Text>
+                    <Text className="text-white text-lg font-bold mt-0.5">{membersOnTarget}</Text>
+                  </View>
+                </View>
+
+                <View className="mt-3 flex-row" style={{ gap: 8 }}>
+                  <View className="flex-1 rounded-xl border border-white/10 bg-black/10 px-3 py-2.5">
+                    <Text className="text-af-silver text-[10px] uppercase tracking-[0.4px]">Members</Text>
+                    <Text className="text-white text-lg font-bold mt-0.5">{flightMembers.length}</Text>
+                  </View>
+                  <View className="flex-1 rounded-xl border border-white/10 bg-black/10 px-3 py-2.5">
+                    <Text className="text-af-silver text-[10px] uppercase tracking-[0.4px]">Week</Text>
+                    <Text className="text-white text-lg font-bold mt-0.5">{totalWeeklyCheckIns}</Text>
+                  </View>
+                  <View className="flex-1 rounded-xl border border-white/10 bg-black/10 px-3 py-2.5">
+                    <Text className="text-af-silver text-[10px] uppercase tracking-[0.4px]">Avg</Text>
+                    <Text className="text-white text-lg font-bold mt-0.5">{averageWeeklyCheckIns.toFixed(1)}</Text>
+                  </View>
+                </View>
+              </LinearGradient>
+            </View>
+          </Animated.View>
+
           {flightMembers.map((member, index) => {
             const weeklyAttendance = getWeeklyAttendance(member.id);
             const progressPercent = Math.min((weeklyAttendance / WEEKLY_PROGRESS_TARGET) * 100, 100);
@@ -544,27 +638,45 @@ export default function AttendanceScreen() {
               <Animated.View
                 key={member.id}
                 entering={FadeInUp.delay(250 + index * 50).springify()}
-                className="py-3 border-b border-white/5"
+                className="mb-3"
               >
-                <View className="flex-row items-center">
-                  <View style={{ width: NAME_COLUMN_WIDTH, paddingRight: 8 }}>
+                <View className="flex-row items-center rounded-2xl border border-white/10 bg-white/5 px-3 py-3">
+                  <Pressable
+                    onPress={() => {
+                      Haptics.selectionAsync();
+                      router.push({ pathname: '/member-profile', params: { id: member.id } });
+                    }}
+                    style={{ width: NAME_COLUMN_WIDTH, paddingRight: 8 }}
+                    className="rounded-xl"
+                  >
                     <Text className="text-af-silver text-[11px]" numberOfLines={1}>{displayName.rank}</Text>
                     <Text className="text-white font-medium mt-0.5" numberOfLines={1}>{displayName.name}</Text>
-                    <Text className="text-af-silver text-xs">{weeklyAttendance}/{WEEKLY_PROGRESS_TARGET} sessions</Text>
-                  </View>
+                    <Text className="text-af-silver text-xs mt-1">{weeklyAttendance}/{WEEKLY_PROGRESS_TARGET} sessions</Text>
+                  </Pressable>
 
                   <View className="flex-1 relative" {...attendancePanResponder.panHandlers}>
                     <ScrollView
                       ref={(ref) => registerRowScrollRef(member.id, ref)}
                       horizontal
                       bounces={false}
-                      scrollEnabled={false}
+                      scrollEnabled={horizontalOverflow > 0}
                       showsHorizontalScrollIndicator={false}
                       scrollEventThrottle={16}
                       onScroll={(event) => handleHorizontalScroll(event, member.id)}
-                      onTouchStart={() => updateSwipeState(currentScrollXRef.current)}
-                      onScrollEndDrag={(event) => updateSwipeState(event.nativeEvent.contentOffset.x)}
-                      onMomentumScrollEnd={(event) => updateSwipeState(event.nativeEvent.contentOffset.x)}
+                      onTouchStart={() => {
+                        markAttendanceInteraction(true);
+                        updateSwipeState(currentScrollXRef.current);
+                      }}
+                      onScrollBeginDrag={() => markAttendanceInteraction(true)}
+                      onScrollEndDrag={(event) => {
+                        markAttendanceInteraction(false);
+                        updateSwipeState(event.nativeEvent.contentOffset.x);
+                      }}
+                      onMomentumScrollBegin={() => markAttendanceInteraction(true)}
+                      onMomentumScrollEnd={(event) => {
+                        markAttendanceInteraction(false);
+                        updateSwipeState(event.nativeEvent.contentOffset.x);
+                      }}
                     >
                       <View className="flex-row" style={{ width: dayColumnsWidth }}>
                         {weekDays.map((day) => {
@@ -578,10 +690,10 @@ export default function AttendanceScreen() {
                               className="items-center"
                             >
                               <View className={cn(
-                                "w-10 h-10 rounded-full items-center justify-center border",
+                                "w-10 h-10 rounded-full items-center justify-center border shadow-sm",
                                 attending
                                   ? "bg-af-success/20 border-af-success"
-                                  : "bg-white/5 border-white/10"
+                                  : "bg-black/10 border-white/10"
                               )}>
                                 {attending ? (
                                   <Check size={20} color="#22C55E" />
@@ -620,7 +732,7 @@ export default function AttendanceScreen() {
 
                   <View style={{ width: PROGRESS_COLUMN_WIDTH }} className="items-center">
                     <View className="w-10 h-10 items-center justify-center">
-                      <View className="w-8 h-8 rounded-full border-2 border-white/20 items-center justify-center overflow-hidden">
+                      <View className="w-8 h-8 rounded-full border-2 border-white/20 items-center justify-center overflow-hidden bg-black/10">
                         <View
                           className={cn(
                             "absolute bottom-0 left-0 right-0",

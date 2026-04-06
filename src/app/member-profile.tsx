@@ -1,13 +1,16 @@
 import React, { useMemo, useEffect, useState } from 'react';
-import { View, Text, Pressable, ScrollView, Modal, Image } from 'react-native';
+import { View, Text, Pressable, ScrollView, Image } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ChevronLeft, Timer, MapPin, Trophy, Lock, Unlock, TrendingUp, Award, Shield, Camera, Dumbbell, Activity, Image as ImageIcon, BarChart3, X, ChevronDown, User } from 'lucide-react-native';
+import { ChevronLeft, Timer, MapPin, Trophy, Lock, Unlock, TrendingUp, Shield, Camera, Dumbbell, Activity, Image as ImageIcon, BarChart3, User } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeInUp, useAnimatedStyle, useSharedValue, withSpring, withDelay } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { useMemberStore, useAuthStore, getDisplayName, ALL_ACHIEVEMENTS, canEditAttendance, type AccountType, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
+import { TrophyCase, CompactTrophyBadges } from '@/components/TrophyCase';
+import { buildTrophyStats, getRarestEarnedTrophies } from '@/lib/trophies';
+import { getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
 
 // Workout type colors
 const WORKOUT_TYPE_COLORS: Record<WorkoutType, string> = {
@@ -72,8 +75,7 @@ export default function MemberProfileScreen() {
   const currentUser = useAuthStore(s => s.user);
   const currentUserSquadron = currentUser?.squadron ?? 'Hawks';
 
-  const [showAchievementsModal, setShowAchievementsModal] = useState(false);
-  const [achievementsSummaryExpanded, setAchievementsSummaryExpanded] = useState(false);
+  const [showTrophyCase, setShowTrophyCase] = useState(false);
 
   const member = useMemo(() => members.find(m => m.id === id), [members, id]);
   const canViewMember =
@@ -95,11 +97,12 @@ export default function MemberProfileScreen() {
 
   // Calculate leaderboard position
   const sortedMembers = useMemo(() => {
+    const currentMonthKey = getMonthKey();
     return members
       .filter((candidate) => candidate.squadron === (member?.squadron ?? currentUserSquadron))
       .sort((a, b) => {
-      const scoreA = a.exerciseMinutes + Math.round(a.distanceRun * 10) + a.workouts.length * 25;
-      const scoreB = b.exerciseMinutes + Math.round(b.distanceRun * 10) + b.workouts.length * 25;
+      const scoreA = getMemberMonthSummary(a, currentMonthKey).score;
+      const scoreB = getMemberMonthSummary(b, currentMonthKey).score;
       return scoreB - scoreA;
     });
   }, [currentUserSquadron, member?.squadron, members]);
@@ -137,13 +140,14 @@ export default function MemberProfileScreen() {
 
   const displayName = getDisplayName(member);
   const leaderboardPosition = sortedMembers.findIndex(m => m.id === member.id) + 1;
-  const totalScore = member.exerciseMinutes + Math.round(member.distanceRun * 10) + member.workouts.length * 25;
+  const totalScore = getMemberMonthSummary(member, getMonthKey()).score;
 
   // Get fitness assessments (check privacy)
   const canViewFitnessAssessments = isOwnProfile ||
     !member.fitnessAssessments.some(fa => fa.isPrivate) ||
     currentUser?.accountType === 'fitflight_creator' ||
-    currentUser?.accountType === 'ufpm';
+    currentUser?.accountType === 'ufpm' ||
+    currentUser?.accountType === 'squadron_leadership';
 
   const latestAssessment = member.fitnessAssessments[member.fitnessAssessments.length - 1];
 
@@ -151,6 +155,7 @@ export default function MemberProfileScreen() {
     switch (accountType) {
       case 'fitflight_creator': return 'FitFlight Creator';
       case 'ufpm': return 'UFPM';
+      case 'squadron_leadership': return 'Squadron Leadership';
       case 'ptl': return 'PFL';
       default: return 'Member';
     }
@@ -160,6 +165,7 @@ export default function MemberProfileScreen() {
     switch (accountType) {
       case 'fitflight_creator': return { bg: 'bg-purple-500/20', text: 'text-purple-400' };
       case 'ufpm': return { bg: 'bg-af-gold/20', text: 'text-af-gold' };
+      case 'squadron_leadership': return { bg: 'bg-sky-500/20', text: 'text-sky-300' };
       case 'ptl': return { bg: 'bg-af-accent/20', text: 'text-af-accent' };
       default: return { bg: 'bg-white/10', text: 'text-af-silver' };
     }
@@ -167,9 +173,10 @@ export default function MemberProfileScreen() {
 
   const accountColors = getAccountTypeColor(member.accountType);
 
-  // Get earned achievements
-  const earnedAchievements = ALL_ACHIEVEMENTS.filter(a => member.achievements.includes(a.id));
-  const unearnedAchievements = ALL_ACHIEVEMENTS.filter(a => !member.achievements.includes(a.id));
+  const trophyStats = buildTrophyStats(ALL_ACHIEVEMENTS, members, member);
+  const earnedTrophies = trophyStats.filter((trophy) => trophy.isEarned);
+  const rarestTrophies = getRarestEarnedTrophies(ALL_ACHIEVEMENTS, members, member, 3);
+  const trophyOverflowCount = Math.max(earnedTrophies.length - rarestTrophies.length, 0);
 
   const getWorkoutIcon = (type: string) => {
     switch (type.toLowerCase()) {
@@ -262,7 +269,10 @@ export default function MemberProfileScreen() {
                   </View>
                 )}
               </View>
-              <Text className="text-white text-2xl font-bold">{displayName}</Text>
+              <View className="flex-row items-center justify-center flex-wrap">
+                <Text className="text-white text-2xl font-bold mr-3">{displayName}</Text>
+                <CompactTrophyBadges trophies={rarestTrophies} overflowCount={trophyOverflowCount} />
+              </View>
               <Text className="text-af-silver">{member.flight} Flight</Text>
               <View className="flex-row items-center mt-2">
                 <View className={cn("px-3 py-1 rounded-full", accountColors.bg)}>
@@ -270,15 +280,6 @@ export default function MemberProfileScreen() {
                     {getAccountTypeLabel(member.accountType)}
                   </Text>
                 </View>
-                {/* Hard achievement badges */}
-                {earnedAchievements.filter(a => a.isHard).slice(0, 2).map((achievement) => (
-                  <View
-                    key={achievement.id}
-                    className="ml-2 px-2 py-1 bg-af-gold/20 rounded-full border border-af-gold/50"
-                  >
-                    <Text className="text-af-gold text-xs font-semibold">{achievement.name.split(' ')[0]}</Text>
-                  </View>
-                ))}
               </View>
             </View>
 
@@ -292,75 +293,14 @@ export default function MemberProfileScreen() {
               </View>
             )}
 
-            {/* Achievements Summary - Expandable */}
-            <Pressable
-              onPress={() => {
+            <TrophyCase
+              expanded={showTrophyCase}
+              onToggle={() => {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                setAchievementsSummaryExpanded(!achievementsSummaryExpanded);
+                setShowTrophyCase((current) => !current);
               }}
-              className="mt-3"
-            >
-              <View className="flex-row items-center justify-center bg-purple-500/20 rounded-xl p-3">
-                <Award size={18} color="#A855F7" />
-                <Text className="text-purple-400 font-semibold ml-2">
-                  {earnedAchievements.length} Achievements
-                </Text>
-                <ChevronDown
-                  size={18}
-                  color="#A855F7"
-                  style={{ marginLeft: 4, transform: [{ rotate: achievementsSummaryExpanded ? '180deg' : '0deg' }] }}
-                />
-              </View>
-
-              {/* Expanded Achievements List */}
-              {achievementsSummaryExpanded && earnedAchievements.length > 0 && (
-                <ScrollView
-                  className="mt-3 max-h-48"
-                  showsVerticalScrollIndicator={true}
-                  nestedScrollEnabled={true}
-                >
-                  {earnedAchievements.map((achievement) => (
-                    <View
-                      key={achievement.id}
-                      className={cn(
-                        "flex-row items-center p-3 rounded-xl mb-2 border",
-                        achievement.isHard
-                          ? "bg-af-gold/20 border-af-gold/40"
-                          : "bg-purple-500/10 border-purple-500/30"
-                      )}
-                    >
-                      <View className={cn(
-                        "w-10 h-10 rounded-lg items-center justify-center mr-3",
-                        achievement.isHard ? "bg-af-gold/30" : "bg-purple-500/20"
-                      )}>
-                        <Award size={20} color={achievement.isHard ? "#FFD700" : "#A855F7"} />
-                      </View>
-                      <View className="flex-1">
-                        <Text className={cn(
-                          "font-semibold text-sm",
-                          achievement.isHard ? "text-af-gold" : "text-white"
-                        )}>
-                          {achievement.name}
-                        </Text>
-                        <Text className="text-white/50 text-xs">{achievement.description}</Text>
-                      </View>
-                      {achievement.isHard && (
-                        <View className="bg-af-gold/30 px-1.5 py-0.5 rounded">
-                          <Text className="text-af-gold text-xs font-bold">Hard</Text>
-                        </View>
-                      )}
-                    </View>
-                  ))}
-                </ScrollView>
-              )}
-
-              {/* No achievements message */}
-              {achievementsSummaryExpanded && earnedAchievements.length === 0 && (
-                <View className="mt-3 p-4 bg-white/5 rounded-xl items-center">
-                  <Text className="text-white/40 text-sm">No achievements earned yet</Text>
-                </View>
-              )}
-            </Pressable>
+              trophies={trophyStats}
+            />
 
             {/* Leaderboard Position */}
             <View className="flex-row items-center justify-center mt-4 bg-af-gold/10 rounded-xl p-3">
@@ -477,20 +417,36 @@ export default function MemberProfileScreen() {
                 <View className="space-y-3">
                   <View className="flex-row items-center justify-between">
                     <Text className="text-af-silver">Cardio</Text>
-                    <Text className="text-white font-semibold">{latestAssessment.components.cardio.score} pts</Text>
+                    <Text className="text-white font-semibold">
+                      {latestAssessment.components.cardio.exempt
+                        ? 'Exempt'
+                        : `${latestAssessment.components.cardio.score} pts`}
+                    </Text>
                   </View>
                   <View className="flex-row items-center justify-between">
-                    <Text className="text-af-silver">Push-ups</Text>
-                    <Text className="text-white font-semibold">{latestAssessment.components.pushups.score} pts ({latestAssessment.components.pushups.reps} reps)</Text>
+                    <Text className="text-af-silver">{latestAssessment.components.pushups.test ?? 'Strength'}</Text>
+                    <Text className="text-white font-semibold">
+                      {latestAssessment.components.pushups.exempt
+                        ? 'Exempt'
+                        : `${latestAssessment.components.pushups.score} pts (${latestAssessment.components.pushups.reps} reps)`}
+                    </Text>
                   </View>
                   <View className="flex-row items-center justify-between">
-                    <Text className="text-af-silver">Sit-ups</Text>
-                    <Text className="text-white font-semibold">{latestAssessment.components.situps.score} pts ({latestAssessment.components.situps.reps} reps)</Text>
+                    <Text className="text-af-silver">{latestAssessment.components.situps.test ?? 'Core'}</Text>
+                    <Text className="text-white font-semibold">
+                      {latestAssessment.components.situps.exempt
+                        ? 'Exempt'
+                        : `${latestAssessment.components.situps.score} pts (${latestAssessment.components.situps.time ?? `${latestAssessment.components.situps.reps} reps`})`}
+                    </Text>
                   </View>
                   {latestAssessment.components.waist && (
                     <View className="flex-row items-center justify-between">
                       <Text className="text-af-silver">Waist</Text>
-                      <Text className="text-white font-semibold">{latestAssessment.components.waist.score} pts ({latestAssessment.components.waist.inches}")</Text>
+                      <Text className="text-white font-semibold">
+                        {latestAssessment.components.waist.exempt
+                          ? 'Exempt'
+                          : `${latestAssessment.components.waist.score} pts (${latestAssessment.components.waist.inches}")`}
+                      </Text>
                     </View>
                   )}
                 </View>
@@ -504,7 +460,7 @@ export default function MemberProfileScreen() {
             ) : canViewFitnessAssessments ? (
               <View className="bg-white/5 rounded-2xl border border-white/10 p-6 items-center">
                 <Shield size={32} color="#C0C0C0" />
-                <Text className="text-af-silver mt-2">No PFRA records recorded</Text>
+                <Text className="text-af-silver mt-2">No PFRA records uploaded</Text>
               </View>
             ) : (
               <View className="bg-white/5 rounded-2xl border border-white/10 p-6 items-center">
@@ -600,221 +556,9 @@ export default function MemberProfileScreen() {
             )}
           </Animated.View>
 
-          {/* Achievements Section */}
-          <Animated.View
-            entering={FadeInDown.delay(300).springify()}
-            className="mt-4"
-          >
-            <Text className="text-white font-semibold text-lg mb-3">Achievements</Text>
-
-            {earnedAchievements.length > 0 && (
-              <View className="mb-4">
-                <Text className="text-af-silver text-sm mb-2">Earned ({earnedAchievements.length})</Text>
-                <View className="flex-row flex-wrap">
-                  {earnedAchievements.map((achievement) => (
-                    <Pressable
-                      key={achievement.id}
-                      onPress={() => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        setShowAchievementsModal(true);
-                      }}
-                      className={cn(
-                        "w-16 h-16 rounded-xl items-center justify-center m-1 border-2",
-                        achievement.isHard
-                          ? "bg-af-gold/30 border-af-gold"
-                          : "bg-af-gold/20 border-af-gold/50"
-                      )}
-                    >
-                      <Award size={24} color={achievement.isHard ? "#FFD700" : "#DAA520"} />
-                      <Text className={cn(
-                        "text-xs mt-1 text-center",
-                        achievement.isHard ? "text-af-gold font-bold" : "text-af-gold"
-                      )} numberOfLines={1}>
-                        {achievement.name.split(' ')[0]}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-              </View>
-            )}
-
-            {unearnedAchievements.length > 0 && (
-              <View>
-                <Text className="text-af-silver text-sm mb-2">Locked ({unearnedAchievements.length})</Text>
-                <View className="space-y-2">
-                  {unearnedAchievements.slice(0, 4).map((achievement) => (
-                    <Pressable
-                      key={achievement.id}
-                      onPress={() => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        setShowAchievementsModal(true);
-                      }}
-                      className="flex-row items-center bg-white/5 rounded-xl p-3 border border-white/10"
-                    >
-                      <View className="w-10 h-10 bg-white/10 rounded-lg items-center justify-center mr-3">
-                        <Lock size={18} color="#6B7280" />
-                      </View>
-                      <View className="flex-1">
-                        <Text className="text-white/60 font-medium">{achievement.name}</Text>
-                        <Text className="text-white/40 text-xs">{achievement.description}</Text>
-                      </View>
-                      {achievement.isHard && (
-                        <View className="bg-af-gold/20 px-2 py-1 rounded">
-                          <Text className="text-af-gold text-xs">Hard</Text>
-                        </View>
-                      )}
-                    </Pressable>
-                  ))}
-                  {unearnedAchievements.length > 4 && (
-                    <Pressable
-                      onPress={() => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        setShowAchievementsModal(true);
-                      }}
-                      className="items-center py-2"
-                    >
-                      <Text className="text-af-accent text-sm">View all {unearnedAchievements.length} locked achievements</Text>
-                    </Pressable>
-                  )}
-                </View>
-              </View>
-            )}
-          </Animated.View>
         </ScrollView>
       </SafeAreaView>
-
-      {/* Full-Screen Achievements Modal */}
-      <Modal visible={showAchievementsModal} animationType="slide">
-        <View className="flex-1 bg-af-navy">
-          <LinearGradient
-            colors={['#0A1628', '#001F5C', '#0A1628']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
-          />
-          <SafeAreaView edges={['top', 'bottom']} className="flex-1">
-            {/* Modal Header - Fixed with proper padding */}
-            <View className="flex-row items-center justify-between px-6 pt-4 pb-4 border-b border-white/10">
-              <Text className="text-white text-xl font-bold">All Achievements</Text>
-              <Pressable
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  setShowAchievementsModal(false);
-                }}
-                className="w-10 h-10 bg-white/10 rounded-full items-center justify-center"
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <X size={24} color="#C0C0C0" />
-              </Pressable>
-            </View>
-
-            {/* Progress Summary */}
-            <View className="mx-6 mt-4 p-4 bg-white/5 rounded-2xl border border-white/10">
-              <View className="flex-row items-center justify-between">
-                <View>
-                  <Text className="text-white font-semibold text-lg">
-                    {earnedAchievements.length} / {ALL_ACHIEVEMENTS.length}
-                  </Text>
-                  <Text className="text-af-silver text-sm">Achievements Earned</Text>
-                </View>
-                <View className="flex-row items-center">
-                  <Award size={32} color="#FFD700" />
-                </View>
-              </View>
-              {/* Progress Bar */}
-              <View className="mt-3 h-2 bg-white/10 rounded-full overflow-hidden">
-                <View
-                  className="h-full bg-af-gold rounded-full"
-                  style={{ width: `${(earnedAchievements.length / ALL_ACHIEVEMENTS.length) * 100}%` }}
-                />
-              </View>
-            </View>
-
-            <ScrollView
-              className="flex-1 px-6 mt-4"
-              contentContainerStyle={{ paddingBottom: 40 }}
-              showsVerticalScrollIndicator={false}
-            >
-              {/* Earned Achievements */}
-              {earnedAchievements.length > 0 && (
-                <View className="mb-6">
-                  <Text className="text-af-success font-semibold mb-3">
-                    Earned ({earnedAchievements.length})
-                  </Text>
-                  {earnedAchievements.map((achievement) => (
-                    <View
-                      key={achievement.id}
-                      className={cn(
-                        "flex-row items-center p-4 rounded-xl mb-2 border",
-                        achievement.isHard
-                          ? "bg-af-gold/20 border-af-gold/50"
-                          : "bg-af-success/10 border-af-success/30"
-                      )}
-                    >
-                      <View className={cn(
-                        "w-12 h-12 rounded-xl items-center justify-center mr-3",
-                        achievement.isHard ? "bg-af-gold/30" : "bg-af-success/20"
-                      )}>
-                        <Award size={28} color={achievement.isHard ? "#FFD700" : "#22C55E"} />
-                      </View>
-                      <View className="flex-1">
-                        <View className="flex-row items-center">
-                          <Text className={cn(
-                            "font-semibold",
-                            achievement.isHard ? "text-af-gold" : "text-white"
-                          )}>
-                            {achievement.name}
-                          </Text>
-                          {achievement.isHard && (
-                            <View className="ml-2 bg-af-gold/30 px-2 py-0.5 rounded">
-                              <Text className="text-af-gold text-xs font-bold">Hard</Text>
-                            </View>
-                          )}
-                        </View>
-                        <Text className="text-af-silver text-sm">{achievement.description}</Text>
-                        <Text className="text-af-success text-xs mt-1">✓ Earned</Text>
-                      </View>
-                    </View>
-                  ))}
-                </View>
-              )}
-
-              {/* Locked Achievements */}
-              {unearnedAchievements.length > 0 && (
-                <View>
-                  <Text className="text-af-silver font-semibold mb-3">
-                    Locked ({unearnedAchievements.length})
-                  </Text>
-                  {unearnedAchievements.map((achievement) => (
-                    <View
-                      key={achievement.id}
-                      className="flex-row items-center bg-white/5 p-4 rounded-xl mb-2 border border-white/10"
-                    >
-                      <View className="w-12 h-12 bg-white/10 rounded-xl items-center justify-center mr-3">
-                        <Lock size={24} color="#6B7280" />
-                      </View>
-                      <View className="flex-1">
-                        <View className="flex-row items-center">
-                          <Text className="text-white/60 font-semibold">{achievement.name}</Text>
-                          {achievement.isHard && (
-                            <View className="ml-2 bg-af-gold/20 px-2 py-0.5 rounded">
-                              <Text className="text-af-gold/70 text-xs font-bold">Hard</Text>
-                            </View>
-                          )}
-                        </View>
-                        <Text className="text-white/40 text-sm">{achievement.description}</Text>
-                        <Text className="text-white/30 text-xs mt-1 italic">
-                          Category: {achievement.category.charAt(0).toUpperCase() + achievement.category.slice(1)}
-                        </Text>
-                      </View>
-                    </View>
-                  ))}
-                </View>
-              )}
-            </ScrollView>
-          </SafeAreaView>
-        </View>
-      </Modal>
     </View>
   );
 }
+

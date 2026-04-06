@@ -8,6 +8,7 @@ import Animated, { FadeInDown } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { useAuthStore, useMemberStore, type Squadron, SQUADRONS, getDisplayName } from '@/lib/store';
 import { cn } from '@/lib/cn';
+import { getMemberMonthSummary } from '@/lib/monthlyStats';
 
 export default function CrossSquadronScreen() {
   const router = useRouter();
@@ -19,15 +20,15 @@ export default function CrossSquadronScreen() {
   const squadronStats = useMemo(() => {
     return SQUADRONS.map(squadron => {
       const squadronMembers = members.filter(m => m.squadron === squadron);
-      const totalMinutes = squadronMembers.reduce((acc, m) => acc + m.exerciseMinutes, 0);
-      const totalDistance = squadronMembers.reduce((acc, m) => acc + m.distanceRun, 0);
-      const totalWorkouts = squadronMembers.reduce((acc, m) => acc + m.workouts.length, 0);
+      const totalMinutes = squadronMembers.reduce((acc, m) => acc + getMemberMonthSummary(m, new Date().toISOString().slice(0, 7)).minutes, 0);
+      const totalDistance = squadronMembers.reduce((acc, m) => acc + getMemberMonthSummary(m, new Date().toISOString().slice(0, 7)).miles, 0);
+      const totalWorkouts = squadronMembers.reduce((acc, m) => acc + getMemberMonthSummary(m, new Date().toISOString().slice(0, 7)).workoutCount, 0);
 
       // Get top 3 performers
       const topPerformers = [...squadronMembers]
         .map(m => ({
           ...m,
-          totalScore: m.exerciseMinutes + Math.round(m.distanceRun * 10) + m.workouts.length * 25,
+          totalScore: getMemberMonthSummary(m, new Date().toISOString().slice(0, 7)).score,
         }))
         .sort((a, b) => b.totalScore - a.totalScore)
         .slice(0, 3);

@@ -111,7 +111,27 @@ export const PFRA_MINIMUM_COMPONENT_POINTS = {
   cardio: 35.0,
 } as const;
 
+export const PFRA_COMPONENT_MAX_POINTS = {
+  waist: 20,
+  strength: 15,
+  core: 15,
+  cardio: 50,
+} as const;
+
 export type ScoreBreakdown = { waist: number; strength: number; core: number; cardio: number; total: number };
+export type PFRAExemptionFlags = {
+  waist?: boolean;
+  strength?: boolean;
+  core?: boolean;
+  cardio?: boolean;
+};
+
+export type ExemptionAwareScoreSummary = {
+  completedScore: number;
+  completedMax: number;
+  normalizedTotal: number | null;
+  countedComponentKeys: Array<keyof typeof PFRA_COMPONENT_MAX_POINTS>;
+};
 
 export function scoreTotal(params: { ageYears: number; gender: Gender; waistIn: number; heightIn: number; strengthTest: 'pushups' | 'hand_release_pushups'; strengthReps: number; coreTest: 'situps' | 'cross_leg_reverse_crunch' | 'plank'; coreValue: number; cardioTest: 'run_2mile' | 'hamr_20m' | 'walk_2k'; cardioValue: number; }): ScoreBreakdown {
   const waist = scoreWHtR(params.waistIn, params.heightIn);
@@ -128,4 +148,30 @@ export function meetsPFRAComponentMinimums(scores: Pick<ScoreBreakdown, 'waist' 
     scores.core >= PFRA_MINIMUM_COMPONENT_POINTS.core &&
     scores.cardio >= PFRA_MINIMUM_COMPONENT_POINTS.cardio
   );
+}
+
+export function scoreWithExemptions(
+  scores: Pick<ScoreBreakdown, 'waist' | 'strength' | 'core' | 'cardio'>,
+  exemptions: PFRAExemptionFlags = {},
+): ExemptionAwareScoreSummary {
+  const countedComponentKeys = (Object.keys(PFRA_COMPONENT_MAX_POINTS) as Array<keyof typeof PFRA_COMPONENT_MAX_POINTS>)
+    .filter((key) => !exemptions[key]);
+
+  const completedScore = countedComponentKeys.reduce((sum, key) => sum + scores[key], 0);
+  const completedMax = countedComponentKeys.reduce((sum, key) => sum + PFRA_COMPONENT_MAX_POINTS[key], 0);
+
+  return {
+    completedScore,
+    completedMax,
+    normalizedTotal: completedMax > 0 ? (completedScore / completedMax) * 100 : null,
+    countedComponentKeys,
+  };
+}
+
+export function meetsPFRAComponentMinimumsWithExemptions(
+  scores: Pick<ScoreBreakdown, 'waist' | 'strength' | 'core' | 'cardio'>,
+  exemptions: PFRAExemptionFlags = {},
+): boolean {
+  return (Object.keys(PFRA_MINIMUM_COMPONENT_POINTS) as Array<keyof typeof PFRA_MINIMUM_COMPONENT_POINTS>)
+    .every((key) => exemptions[key] || scores[key] >= PFRA_MINIMUM_COMPONENT_POINTS[key]);
 }

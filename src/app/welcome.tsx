@@ -9,6 +9,7 @@ import * as Haptics from 'expo-haptics';
 import { useAuthStore, useMemberStore } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { Image } from 'react-native';
+import { updateRosterPasswordStatus } from '@/lib/supabaseData';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -46,7 +47,7 @@ const TUTORIAL_SLIDES: TutorialSlide[] = [
     iconColor: '#FFD700',
     iconBg: 'bg-af-gold/30',
     title: 'Squadron Leaderboard',
-    description: 'See how you stack up against fellow Airmen. Earn achievements and climb the ranks.',
+    description: 'See how you stack up against fellow Airmen. Earn trophies and climb the ranks.',
     features: [
       'Real-time squadron rankings',
       'Track exercise minutes, distance & workouts',
@@ -101,7 +102,7 @@ const TUTORIAL_SLIDES: TutorialSlide[] = [
     description: 'Start tracking your fitness journey with your squadron. Let\'s get after it!',
     features: [
       'View the tutorial anytime in Settings',
-      'Connect fitness apps in Profile',
+      'Connect fitness apps in Account',
       'Contact your PFL for questions',
     ],
   },
@@ -158,6 +159,7 @@ export default function WelcomeScreen() {
   const router = useRouter();
   const updateUser = useAuthStore(s => s.updateUser);
   const user = useAuthStore(s => s.user);
+  const accessToken = useAuthStore(s => s.accessToken);
   const updateMember = useMemberStore(s => s.updateMember);
   const flatListRef = useRef<FlatList>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -199,21 +201,43 @@ export default function WelcomeScreen() {
   };
 
   const handleComplete = () => {
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    updateUser({ hasSeenTutorial: true });
-    if (user) {
-      updateMember(user.id, { hasSeenTutorial: true });
-    }
-    router.replace('/(tabs)');
+    const run = async () => {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      updateUser({ hasSeenTutorial: true, hasLoggedIntoApp: true });
+      if (user) {
+        updateMember(user.id, { hasSeenTutorial: true, hasLoggedIntoApp: true });
+        if (accessToken) {
+          await updateRosterPasswordStatus(
+            user.email,
+            { hasLoggedIntoApp: true },
+            accessToken
+          ).catch(() => undefined);
+        }
+      }
+      router.replace('/(tabs)');
+    };
+
+    void run();
   };
 
   const handleSkip = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    updateUser({ hasSeenTutorial: true });
-    if (user) {
-      updateMember(user.id, { hasSeenTutorial: true });
-    }
-    router.replace('/(tabs)');
+    const run = async () => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      updateUser({ hasSeenTutorial: true, hasLoggedIntoApp: true });
+      if (user) {
+        updateMember(user.id, { hasSeenTutorial: true, hasLoggedIntoApp: true });
+        if (accessToken) {
+          await updateRosterPasswordStatus(
+            user.email,
+            { hasLoggedIntoApp: true },
+            accessToken
+          ).catch(() => undefined);
+        }
+      }
+      router.replace('/(tabs)');
+    };
+
+    void run();
   };
 
   const isLastSlide = currentIndex === TUTORIAL_SLIDES.length - 1;

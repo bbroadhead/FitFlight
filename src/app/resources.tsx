@@ -32,6 +32,13 @@ const RESOURCES: ResourceItem[] = [
     description: 'Open the latest Warfighter fitness reference guide included in the app.',
     moduleId: require("../../assets/docs/The Warfighter's Fitness Playbook 2.0 Feb 2026.pdf"),
   },
+  {
+    id: 'pfra-scoring-charts',
+    title: 'PFRA Scoring Charts',
+    subtitle: 'Effective 1 March 2026',
+    description: 'Open the official PFRA scoring charts included in the app bundle.',
+    moduleId: require('../../assets/docs/PFRA Scoring Charts.pdf'),
+  },
 ];
 
 export default function ResourcesScreen() {

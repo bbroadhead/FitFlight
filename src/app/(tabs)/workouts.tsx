@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { View, Text, Pressable, ScrollView, TextInput, Modal, KeyboardAvoidingView, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -8,6 +8,7 @@ import * as Haptics from 'expo-haptics';
 import SmartSlider from "../../components/SmartSlider";
 import { useMemberStore, useAuthStore, getDisplayName, type WorkoutType, type SharedWorkout, type Squadron, WORKOUT_TYPES, isAdmin } from '@/lib/store';
 import { cn } from '@/lib/cn';
+import { createSharedWorkout, deleteSharedWorkoutFromSupabase, fetchSharedWorkouts, updateSharedWorkout } from '@/lib/supabaseData';
 
 type FilterType = 'all' | 'favorites' | 'mine';
 type SortType = 'newest' | 'popular' | 'duration';
@@ -211,12 +212,15 @@ function WorkoutCard({
 
 export default function WorkoutsScreen() {
   const user = useAuthStore(s => s.user);
+  const accessToken = useAuthStore(s => s.accessToken);
   const members = useMemberStore(s => s.members);
   const sharedWorkouts = useMemberStore(s => s.sharedWorkouts);
+  const syncSharedWorkouts = useMemberStore(s => s.syncSharedWorkouts);
   const addSharedWorkout = useMemberStore(s => s.addSharedWorkout);
   const deleteSharedWorkout = useMemberStore(s => s.deleteSharedWorkout);
   const rateSharedWorkout = useMemberStore(s => s.rateSharedWorkout);
   const toggleFavoriteWorkout = useMemberStore(s => s.toggleFavoriteWorkout);
+  const previewAchievementCelebration = useMemberStore(s => s.previewAchievementCelebration);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showFilterModal, setShowFilterModal] = useState(false);
@@ -236,7 +240,36 @@ export default function WorkoutsScreen() {
 
   const currentUserId = user?.id ?? '';
   const userAccountType = user?.accountType ?? 'standard';
-  const userSquadron: Squadron = (user?.squadron as Squadron) ?? '392 IS';
+  const userSquadron: Squadron = (user?.squadron as Squadron) ?? 'Hawks';
+
+  useEffect(() => {
+    if (!accessToken || !userSquadron) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    const syncWorkouts = async () => {
+      try {
+        const workouts = await fetchSharedWorkouts(accessToken, userSquadron);
+        if (!isCancelled) {
+          syncSharedWorkouts(workouts);
+        }
+      } catch (error) {
+        console.error('Unable to sync shared workouts from Supabase.', error);
+      }
+    };
+
+    void syncWorkouts();
+    const intervalId = setInterval(() => {
+      void syncWorkouts();
+    }, 15000);
+
+    return () => {
+      isCancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [accessToken, syncSharedWorkouts, userSquadron]);
 
   const getMemberName = (memberId: string) => {
     const member = members.find(m => m.id === memberId);
@@ -308,37 +341,104 @@ export default function WorkoutsScreen() {
   };
 
   const handleSubmitWorkout = () => {
-    if (!newName.trim()) {
-      console.log('[Workouts] Cannot submit: name is empty');
-      return;
-    }
-    if (!user) {
-      console.log('[Workouts] Cannot submit: user is not logged in');
-      return;
-    }
+    const run = async () => {
+      if (!newName.trim() || !user || !accessToken) {
+        return;
+      }
 
-    const newWorkout: SharedWorkout = {
-      id: Date.now().toString() + Math.random().toString(36).substring(2, 9),
-      name: newName.trim(),
-      type: newType,
-      duration: parseInt(newDuration) || 30,
-      intensity: newIntensity,
-      description: newDescription.trim(),
-      isMultiStep,
-      steps: isMultiStep ? steps.filter(s => s.trim()) : [],
-      createdBy: user.id,
-      createdAt: new Date().toISOString(),
-      squadron: userSquadron,
-      thumbsUp: [],
-      thumbsDown: [],
-      favoritedBy: [],
+      const newWorkout: SharedWorkout = {
+        id: Date.now().toString() + Math.random().toString(36).substring(2, 9),
+        name: newName.trim(),
+        type: newType,
+        duration: parseInt(newDuration) || 30,
+        intensity: newIntensity,
+        description: newDescription.trim(),
+        isMultiStep,
+        steps: isMultiStep ? steps.filter(s => s.trim()) : [],
+        createdBy: user.id,
+        createdAt: new Date().toISOString(),
+        squadron: userSquadron,
+        thumbsUp: [],
+        thumbsDown: [],
+        favoritedBy: [],
+      };
+
+      const createdWorkout = await createSharedWorkout(newWorkout, accessToken);
+      const alreadyHadCreatorTrophy = members.find((member) => member.id === user.id)?.achievements.includes('shared_workout_creator') ?? false;
+      addSharedWorkout(createdWorkout);
+      if (!alreadyHadCreatorTrophy) {
+        previewAchievementCelebration('shared_workout_creator');
+      }
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setShowCreateModal(false);
+      resetCreateForm();
     };
 
-    console.log('[Workouts] Submitting workout:', newWorkout.name);
-    addSharedWorkout(newWorkout);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setShowCreateModal(false);
-    resetCreateForm();
+    void run();
+  };
+
+  const handleDeleteWorkout = (workoutId: string) => {
+    const run = async () => {
+      if (!accessToken) {
+        return;
+      }
+      await deleteSharedWorkoutFromSupabase(workoutId, accessToken);
+      deleteSharedWorkout(workoutId);
+    };
+
+    void run();
+  };
+
+  const handleRateWorkout = (workout: SharedWorkout, rating: 'up' | 'down' | 'none') => {
+    const run = async () => {
+      if (!accessToken) {
+        return;
+      }
+
+      const newThumbsUp = workout.thumbsUp.filter(id => id !== currentUserId);
+      const newThumbsDown = workout.thumbsDown.filter(id => id !== currentUserId);
+      if (rating === 'up') {
+        newThumbsUp.push(currentUserId);
+      } else if (rating === 'down') {
+        newThumbsDown.push(currentUserId);
+      }
+
+      const updatedWorkout = await updateSharedWorkout({
+        ...workout,
+        thumbsUp: newThumbsUp,
+        thumbsDown: newThumbsDown,
+      }, accessToken);
+
+      rateSharedWorkout(workout.id, currentUserId, rating);
+      syncSharedWorkouts(
+        sharedWorkouts.map((candidate) => candidate.id === workout.id ? updatedWorkout : candidate)
+      );
+    };
+
+    void run();
+  };
+
+  const handleToggleFavorite = (workout: SharedWorkout) => {
+    const run = async () => {
+      if (!accessToken) {
+        return;
+      }
+
+      const isFavorited = workout.favoritedBy.includes(currentUserId);
+      const updatedWorkout = await updateSharedWorkout({
+        ...workout,
+        favoritedBy: isFavorited
+          ? workout.favoritedBy.filter(id => id !== currentUserId)
+          : [...workout.favoritedBy, currentUserId],
+      }, accessToken);
+
+      toggleFavoriteWorkout(workout.id, currentUserId);
+      syncSharedWorkouts(
+        sharedWorkouts.map((candidate) => candidate.id === workout.id ? updatedWorkout : candidate)
+      );
+    };
+
+    void run();
   };
 
   const canSubmit = newName.trim().length > 0 && (!isMultiStep || steps.some(s => s.trim()));
@@ -456,9 +556,9 @@ export default function WorkoutsScreen() {
                 workout={workout}
                 currentUserId={currentUserId}
                 creatorName={getMemberName(workout.createdBy)}
-                onRate={(rating) => rateSharedWorkout(workout.id, currentUserId, rating)}
-                onToggleFavorite={() => toggleFavoriteWorkout(workout.id, currentUserId)}
-                onDelete={() => deleteSharedWorkout(workout.id)}
+                onRate={(rating) => handleRateWorkout(workout, rating)}
+                onToggleFavorite={() => handleToggleFavorite(workout)}
+                onDelete={() => handleDeleteWorkout(workout.id)}
                 canDelete={workout.createdBy === currentUserId || isAdmin(userAccountType)}
               />
             ))

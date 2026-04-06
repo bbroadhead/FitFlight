@@ -6,7 +6,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { useEffect } from 'react';
-import { useAuthStore } from '@/lib/store';
+import { useMemberStore, ALL_ACHIEVEMENTS } from '@/lib/store';
+import { AchievementCelebration } from '@/components/AchievementCelebration';
 
 export const unstable_settings = {
   initialRouteName: 'login',
@@ -30,29 +31,44 @@ const AirForceDarkTheme = {
 };
 
 function RootLayoutNav() {
+  const recentAchievementId = useMemberStore((state) => state.recentAchievementId);
+  const dismissAchievementCelebration = useMemberStore((state) => state.dismissAchievementCelebration);
+
   useEffect(() => {
     SplashScreen.hideAsync();
   }, []);
 
+  const recentAchievement = recentAchievementId
+    ? ALL_ACHIEVEMENTS.find((achievement) => achievement.id === recentAchievementId) ?? null
+    : null;
+
   return (
     <ThemeProvider value={AirForceDarkTheme}>
-      <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="login" options={{ headerShown: false }} />
-        <Stack.Screen name="reset-password" options={{ headerShown: false }} />
-        <Stack.Screen name="welcome" options={{ headerShown: false }} />
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="member-profile" options={{ headerShown: false }} />
-        <Stack.Screen name="analytics" options={{ headerShown: false }} />
-        <Stack.Screen name="add-workout" options={{ headerShown: false }} />
-        <Stack.Screen name="schedule-session" options={{ headerShown: false }} />
-        <Stack.Screen name="upload-fitness" options={{ headerShown: false }} />
-        <Stack.Screen name="cross-squadron" options={{ headerShown: false }} />
-        <Stack.Screen name="import-roster" options={{ headerShown: false }} />
-        <Stack.Screen name="resources" options={{ headerShown: false }} />
-        <Stack.Screen name="leaderboard" options={{ headerShown: false }} />
-        <Stack.Screen name="integrations/strava-callback" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
-      </Stack>
+      <>
+        <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="login" options={{ headerShown: false }} />
+          <Stack.Screen name="reset-password" options={{ headerShown: false }} />
+          <Stack.Screen name="welcome" options={{ headerShown: false }} />
+          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="member-profile" options={{ headerShown: false }} />
+          <Stack.Screen name="analytics" options={{ headerShown: false }} />
+          <Stack.Screen name="add-workout" options={{ headerShown: false }} />
+          <Stack.Screen name="schedule-session" options={{ headerShown: false }} />
+          <Stack.Screen name="upload-fitness" options={{ headerShown: false }} />
+          <Stack.Screen name="cross-squadron" options={{ headerShown: false }} />
+          <Stack.Screen name="import-roster" options={{ headerShown: false }} />
+          <Stack.Screen name="resources" options={{ headerShown: false }} />
+          <Stack.Screen name="leaderboard" options={{ headerShown: false }} />
+          <Stack.Screen name="integrations/strava-callback" options={{ headerShown: false }} />
+          <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
+        </Stack>
+        {recentAchievement ? (
+          <AchievementCelebration
+            achievement={recentAchievement}
+            onDismiss={dismissAchievementCelebration}
+          />
+        ) : null}
+      </>
     </ThemeProvider>
   );
 }

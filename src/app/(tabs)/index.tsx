@@ -9,6 +9,7 @@ import * as Haptics from 'expo-haptics';
 import { Trophy, Dumbbell, Calendar, Calculator, User, ArrowRight, FileText, Medal, Crown, Users } from 'lucide-react-native';
 import { useAuthStore, useMemberStore, getDisplayName } from '@/lib/store';
 import { LeaderboardContent } from '@/components/LeaderboardContent';
+import { getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
 
 function NavCard({
   title,
@@ -55,17 +56,18 @@ export default function HomeScreen() {
     [members, user?.squadron]
   );
   const rankedMembers = useMemo(
-    () =>
+    () => {
+      const currentMonthKey = getMonthKey();
+      return (
       [...squadronMembers]
         .map(member => ({
           id: member.id,
           name: getDisplayName(member),
-          totalScore:
-            member.exerciseMinutes +
-            Math.round(member.distanceRun * 10) +
-            member.workouts.length * 25,
+          totalScore: getMemberMonthSummary(member, currentMonthKey).score,
         }))
-        .sort((a, b) => b.totalScore - a.totalScore),
+        .sort((a, b) => b.totalScore - a.totalScore)
+      );
+    },
     [squadronMembers]
   );
   const leader = rankedMembers[0];
@@ -237,7 +239,7 @@ export default function HomeScreen() {
               </View>
               <View className="w-1/2 px-1.5 mb-3">
                 <NavCard
-                  title="Profile"
+                  title="Account"
                   icon={User}
                   color="#C0C0C0"
                   bgClass="bg-white/5"

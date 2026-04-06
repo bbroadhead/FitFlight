@@ -1,31 +1,47 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, TextInput, Pressable, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Lock, CheckCircle2, AlertCircle } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { clearUrlHashSession, readSessionFromUrlHash, updatePassword } from '@/lib/supabaseAuth';
+import { useAuthStore, useMemberStore } from '@/lib/store';
+import { updateRosterPasswordStatus } from '@/lib/supabaseData';
 
 export default function ResetPasswordScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ mode?: string }>();
+  const authUser = useAuthStore((state) => state.user);
+  const storedAccessToken = useAuthStore((state) => state.accessToken);
+  const updateUser = useAuthStore((state) => state.updateUser);
+  const updateMember = useMemberStore((state) => state.updateMember);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const isFirstLoginPasswordChange = useMemo(() => params.mode === 'first-login', [params.mode]);
 
   useEffect(() => {
     const sessionFromHash = readSessionFromUrlHash();
+    if (sessionFromHash?.accessToken) {
+      setAccessToken(sessionFromHash.accessToken);
+      clearUrlHashSession();
+      return;
+    }
+
+    if (isFirstLoginPasswordChange && storedAccessToken) {
+      setAccessToken(storedAccessToken);
+      return;
+    }
+
     if (!sessionFromHash?.accessToken) {
       setError('This password reset link is invalid or expired. Request a new reset email from the sign-in screen.');
       return;
     }
-
-    setAccessToken(sessionFromHash.accessToken);
-    clearUrlHashSession();
-  }, []);
+  }, [isFirstLoginPasswordChange, storedAccessToken]);
 
   const handleUpdatePassword = () => {
     const run = async () => {
@@ -49,7 +65,26 @@ export default function ResetPasswordScreen() {
       }
 
       await updatePassword(accessToken, password);
-      setSuccess('Your password has been updated. You can sign in now.');
+      if (isFirstLoginPasswordChange && authUser?.email) {
+        await updateRosterPasswordStatus(
+          authUser.email,
+          {
+            mustChangePassword: false,
+          },
+          accessToken
+        ).catch(() => undefined);
+
+        updateUser({
+          mustChangePassword: false,
+        });
+        updateMember(authUser.id, {
+          mustChangePassword: false,
+        });
+        setSuccess('Your password has been updated. Welcome to FitFlight.');
+      } else {
+        setSuccess('Your password has been updated. You can sign in now.');
+      }
+
       setPassword('');
       setConfirmPassword('');
     };
@@ -144,12 +179,21 @@ export default function ResetPasswordScreen() {
                 <Text className="text-white font-bold text-lg">Update Password</Text>
               </Pressable>
 
-              <Pressable
-                onPress={() => router.replace('/login')}
-                className="bg-white/10 py-4 rounded-xl items-center justify-center active:opacity-80"
-              >
-                <Text className="text-white font-semibold">Back to Sign In</Text>
-              </Pressable>
+              {isFirstLoginPasswordChange ? (
+                <Pressable
+                  onPress={() => router.replace(authUser?.hasLoggedIntoApp ? '/(tabs)' : '/welcome')}
+                  className="bg-white/10 py-4 rounded-xl items-center justify-center active:opacity-80"
+                >
+                  <Text className="text-white font-semibold">Continue to FitFlight</Text>
+                </Pressable>
+              ) : (
+                <Pressable
+                  onPress={() => router.replace('/login')}
+                  className="bg-white/10 py-4 rounded-xl items-center justify-center active:opacity-80"
+                >
+                  <Text className="text-white font-semibold">Back to Sign In</Text>
+                </Pressable>
+              )}
             </Animated.View>
           </ScrollView>
         </KeyboardAvoidingView>

@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { View, Text, Pressable, Dimensions } from 'react-native';
 import Animated, {
   useSharedValue,
@@ -8,11 +8,14 @@ import Animated, {
   withDelay,
   FadeIn,
   FadeOut,
-  ZoomIn
+  ZoomIn,
+  Easing,
+  withRepeat,
+  withTiming,
 } from 'react-native-reanimated';
-import { Crown, Medal, Award, Star, Flame, Zap, TrendingUp, ShieldCheck, Sparkles, Trophy, MapPin, Footprints, Dumbbell, Mountain } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { type Achievement } from '@/lib/store';
+import { getTrophyVisual } from '@/lib/trophies';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -21,27 +24,73 @@ interface AchievementCelebrationProps {
   onDismiss: () => void;
 }
 
-const ICON_MAP: Record<string, React.ElementType> = {
-  crown: Crown,
-  medal: Medal,
-  award: Award,
-  star: Star,
-  flame: Flame,
-  zap: Zap,
-  'trending-up': TrendingUp,
-  'shield-check': ShieldCheck,
-  sparkles: Sparkles,
-  trophy: Trophy,
-  'map-pin': MapPin,
-  footprints: Footprints,
-  dumbbell: Dumbbell,
-  mountain: Mountain,
-};
+const CONFETTI_COLORS = ['#FFD700', '#4A90D9', '#22C55E', '#A855F7', '#F97316', '#FFFFFF'];
+
+function ConfettiPiece({ index }: { index: number }) {
+  const startLeft = (index * 47) % Math.max(SCREEN_WIDTH - 20, 1);
+  const drift = ((index % 6) - 2.5) * 18;
+  const translateY = useSharedValue(-120 - (index % 6) * 36);
+  const translateX = useSharedValue(0);
+  const rotate = useSharedValue(0);
+  const opacity = useSharedValue(0);
+  const color = CONFETTI_COLORS[index % CONFETTI_COLORS.length];
+
+  useEffect(() => {
+    opacity.value = withSequence(
+      withTiming(1, { duration: 250 }),
+      withDelay(1800, withTiming(0, { duration: 400 }))
+    );
+    translateY.value = withDelay(
+      (index % 8) * 80,
+      withTiming(SCREEN_HEIGHT + 120, {
+        duration: 2400 + (index % 6) * 180,
+        easing: Easing.out(Easing.quad),
+      })
+    );
+    translateX.value = withDelay(
+      (index % 7) * 60,
+      withTiming(drift, {
+        duration: 2000 + (index % 5) * 120,
+        easing: Easing.inOut(Easing.sin),
+      })
+    );
+    rotate.value = withRepeat(withTiming(360, { duration: 900, easing: Easing.linear }), 4, false);
+  }, [index, opacity, rotate, translateX, translateY]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    opacity: opacity.value,
+    transform: [
+      { translateX: translateX.value },
+      { translateY: translateY.value },
+      { rotate: `${rotate.value}deg` },
+    ],
+  }));
+
+  return (
+    <Animated.View
+      style={[
+        animatedStyle,
+        {
+          position: 'absolute',
+          top: 0,
+          left: startLeft,
+          width: index % 2 === 0 ? 10 : 14,
+          height: index % 3 === 0 ? 16 : 10,
+          borderRadius: 3,
+          backgroundColor: color,
+        },
+      ]}
+    />
+  );
+}
 
 export function AchievementCelebration({ achievement, onDismiss }: AchievementCelebrationProps) {
   const scale = useSharedValue(0);
   const rotation = useSharedValue(0);
-  const glowOpacity = useSharedValue(0);
+  const trophyLift = useSharedValue(24);
+  const { Icon, iconColor, iconBg, borderColor } = getTrophyVisual(achievement.id);
+
+  const confettiPieces = useMemo(() => Array.from({ length: 42 }, (_, index) => index), []);
 
   useEffect(() => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -57,13 +106,7 @@ export function AchievementCelebration({ achievement, onDismiss }: AchievementCe
       withSpring(0, { damping: 12 })
     );
 
-    glowOpacity.value = withDelay(
-      200,
-      withSequence(
-        withSpring(1, { damping: 10 }),
-        withDelay(1000, withSpring(0.5, { damping: 10 }))
-      )
-    );
+    trophyLift.value = withDelay(120, withSpring(0, { damping: 12, stiffness: 110 }));
   }, []);
 
   const iconAnimatedStyle = useAnimatedStyle(() => ({
@@ -73,11 +116,9 @@ export function AchievementCelebration({ achievement, onDismiss }: AchievementCe
     ],
   }));
 
-  const glowAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: glowOpacity.value,
+  const trophyAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: trophyLift.value }],
   }));
-
-  const IconComponent = ICON_MAP[achievement.icon] || Award;
 
   return (
     <Animated.View
@@ -91,56 +132,48 @@ export function AchievementCelebration({ achievement, onDismiss }: AchievementCe
         className="absolute inset-0"
       />
 
+      {confettiPieces.map((piece) => (
+        <ConfettiPiece key={piece} index={piece} />
+      ))}
+
       <Animated.View
         entering={ZoomIn.delay(100).duration(400)}
-        className="items-center px-8"
+        className="items-center px-8 w-full"
       >
-        {/* Glow Effect */}
         <Animated.View
-          style={[
-            glowAnimatedStyle,
-            {
-              position: 'absolute',
-              width: 200,
-              height: 200,
-              borderRadius: 100,
-              backgroundColor: '#FFD700',
-              opacity: 0.3,
-              shadowColor: '#FFD700',
-              shadowOffset: { width: 0, height: 0 },
-              shadowOpacity: 1,
-              shadowRadius: 50,
-            },
-          ]}
-        />
-
-        {/* Achievement Icon */}
-        <Animated.View
-          style={iconAnimatedStyle}
-          className="w-32 h-32 bg-af-gold/30 rounded-full items-center justify-center border-4 border-af-gold mb-6"
+          style={[trophyAnimatedStyle, iconAnimatedStyle, { zIndex: 2 }]}
+          className="mb-8"
         >
-          <IconComponent size={64} color="#FFD700" />
+          <View
+            className="w-28 h-28 rounded-full items-center justify-center"
+            style={{
+              backgroundColor: iconBg,
+              borderWidth: 2,
+              borderColor,
+            }}
+          >
+            <Icon size={52} color={iconColor} />
+          </View>
         </Animated.View>
 
-        {/* Title */}
-        <Text className="text-af-gold text-sm uppercase tracking-widest mb-2">
-          Achievement Unlocked
+        <Text className="text-af-gold text-sm uppercase tracking-widest mb-2" style={{ zIndex: 2 }}>
+          Trophy Unlocked
         </Text>
 
-        <Text className="text-white text-3xl font-bold text-center mb-2">
+        <Text className="text-white text-4xl font-bold text-center mb-3" style={{ zIndex: 2 }}>
           {achievement.name}
         </Text>
 
-        <Text className="text-af-silver text-center text-lg mb-8">
+        <Text className="text-af-silver text-center text-lg mb-8 max-w-xl" style={{ zIndex: 2 }}>
           {achievement.description}
         </Text>
 
-        {/* Dismiss Button */}
         <Pressable
           onPress={onDismiss}
-          className="bg-af-gold/20 border border-af-gold/50 px-8 py-3 rounded-full"
+          className="bg-af-gold/20 border border-af-gold/50 px-8 py-4 rounded-full"
+          style={{ zIndex: 2 }}
         >
-          <Text className="text-af-gold font-semibold">Awesome!</Text>
+          <Text className="text-af-gold font-semibold text-base">Awesome!</Text>
         </Pressable>
       </Animated.View>
     </Animated.View>

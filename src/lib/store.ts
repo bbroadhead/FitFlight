@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Types
 export type Flight = 'Apex' | 'Bomber' | 'Cryptid' | 'Doom' | 'Ewok' | 'Foxhound' | 'ADF' | 'DET';
-export type AccountType = 'fitflight_creator' | 'ufpm' | 'ptl' | 'standard';
+export type AccountType = 'fitflight_creator' | 'ufpm' | 'squadron_leadership' | 'ptl' | 'standard';
 export type Squadron = 'Hawks' | 'Tigers';
 export type WorkoutType = 'Running' | 'Walking' | 'Cycling' | 'Strength' | 'HIIT' | 'Swimming' | 'Sports' | 'Cardio' | 'Flexibility' | 'Other';
 export type IntegrationService = 'apple_health' | 'strava' | 'garmin';
@@ -52,10 +52,10 @@ export interface FitnessAssessment {
   date: string; // ISO date string
   overallScore: number;
   components: {
-    cardio: { score: number; time?: string; laps?: number };
-    pushups: { score: number; reps: number };
-    situps: { score: number; reps: number };
-    waist?: { score: number; inches: number };
+    cardio: { score: number; time?: string; laps?: number; test?: string; exempt?: boolean };
+    pushups: { score: number; reps: number; test?: string; exempt?: boolean };
+    situps: { score: number; reps: number; test?: string; time?: string; exempt?: boolean };
+    waist?: { score: number; inches: number; exempt?: boolean };
   };
   isPrivate: boolean;
 }
@@ -87,7 +87,7 @@ export interface Achievement {
   icon: string;
   earnedDate?: string;
   category: 'leaderboard' | 'milestone' | 'streak' | 'fitness' | 'special';
-  isHard: boolean; // Hard achievements get gold border and badge
+  isHard: boolean;
 }
 
 export interface MonthlyPlacement {
@@ -129,6 +129,8 @@ export interface Member {
   monthlyPlacements: MonthlyPlacement[]; // Track top 3 placements
   trophyCount: number; // Number of times placed in top 3
   hasSeenTutorial?: boolean;
+  mustChangePassword?: boolean;
+  hasLoggedIntoApp?: boolean;
 }
 
 export interface PTSession {
@@ -175,6 +177,8 @@ export interface User {
   hasSeenTutorial?: boolean; // Whether user has completed the onboarding tutorial
   connectedIntegrations?: IntegrationService[]; // Connected fitness app integrations
   integrationConnections?: Partial<Record<IntegrationService, IntegrationConnection>>;
+  mustChangePassword?: boolean;
+  hasLoggedIntoApp?: boolean;
 }
 
 // Helper to get display name
@@ -198,41 +202,209 @@ export const calculateRequiredPTSessions = (score: number): number => {
 // All available achievements
 export const ALL_ACHIEVEMENTS: Achievement[] = [
   // Leaderboard achievements
-  { id: 'gold_month', name: 'Gold Champion', description: 'Place 1st on the monthly leaderboard', icon: 'crown', category: 'leaderboard', isHard: true },
-  { id: 'silver_month', name: 'Silver Performer', description: 'Place 2nd on the monthly leaderboard', icon: 'medal', category: 'leaderboard', isHard: false },
-  { id: 'bronze_month', name: 'Bronze Contender', description: 'Place 3rd on the monthly leaderboard', icon: 'award', category: 'leaderboard', isHard: false },
+  { id: 'top_3_month', name: 'Podium Finish', description: 'Finish in the top 3 on the monthly squadron leaderboard.', icon: 'medal', category: 'leaderboard', isHard: true },
 
   // Milestone achievements
-  { id: 'first_workout', name: 'First Steps', description: 'Log your first workout', icon: 'footprints', category: 'milestone', isHard: false },
-  { id: '10_workouts', name: 'Getting Consistent', description: 'Log 10 workouts', icon: 'dumbbell', category: 'milestone', isHard: false },
-  { id: '50_workouts', name: 'Dedicated Athlete', description: 'Log 50 workouts', icon: 'trophy', category: 'milestone', isHard: true },
-  { id: '100_workouts', name: 'Century Club', description: 'Log 100 workouts', icon: 'star', category: 'milestone', isHard: true },
-  { id: '100_miles', name: 'Century Runner', description: 'Run 100 total miles', icon: 'map-pin', category: 'milestone', isHard: true },
-  { id: '500_miles', name: 'Marathon Master', description: 'Run 500 total miles', icon: 'mountain', category: 'milestone', isHard: true },
+  { id: 'first_workout', name: 'First Rep', description: 'Log your first workout in FitFlight.', icon: 'footprints', category: 'milestone', isHard: false },
+  { id: '10_workouts', name: 'Building Rhythm', description: 'Log 10 workouts.', icon: 'dumbbell', category: 'milestone', isHard: false },
+  { id: '25_workouts', name: 'Momentum Builder', description: 'Log 25 workouts.', icon: 'target', category: 'milestone', isHard: false },
+  { id: '50_workouts', name: 'Locked In', description: 'Log 50 workouts.', icon: 'trophy', category: 'milestone', isHard: true },
+  { id: '100_workouts', name: 'Century Club', description: 'Log 100 workouts.', icon: 'star', category: 'milestone', isHard: true },
+  { id: '200_workouts', name: 'Fitness Ironman', description: 'Log 200 workouts.', icon: 'gem', category: 'milestone', isHard: true },
+  { id: '100_miles', name: 'Century Runner', description: 'Accumulate 100 miles.', icon: 'map-pin', category: 'milestone', isHard: false },
+  { id: '500_miles', name: 'Long Haul', description: 'Accumulate 500 miles.', icon: 'mountain', category: 'milestone', isHard: true },
+  { id: '1000_miles', name: 'Distance Dominator', description: 'Accumulate 1000 miles.', icon: 'rocket', category: 'milestone', isHard: true },
+  { id: 'variety', name: 'Versatile Athlete', description: 'Log workouts in 5 different workout types.', icon: 'layers', category: 'milestone', isHard: false },
 
   // Streak achievements
-  { id: 'week_streak', name: 'Week Warrior', description: 'Complete PT for 7 consecutive days', icon: 'flame', category: 'streak', isHard: false },
-  { id: 'month_streak', name: 'Monthly Machine', description: 'Complete PT every week for a month', icon: 'zap', category: 'streak', isHard: true },
+  { id: 'week_streak', name: 'Weekly Warrior', description: 'Complete your weekly PT requirement for one full week.', icon: 'flame', category: 'streak', isHard: false },
+  { id: 'month_streak', name: 'Monthly Machine', description: 'Complete your weekly PT requirement for four straight weeks.', icon: 'zap', category: 'streak', isHard: true },
+  { id: 'three_month_streak', name: 'Quarterly Champion', description: 'Complete your weekly PT requirement for 12 straight weeks.', icon: 'shield', category: 'streak', isHard: true },
+  { id: 'early_bird', name: 'Show Up Strong', description: 'Attend 10 PT sessions.', icon: 'sunrise', category: 'streak', isHard: false },
+  { id: 'iron_will', name: 'Iron Will', description: 'Miss no required PT sessions for an entire month.', icon: 'shield', category: 'streak', isHard: true },
 
   // Fitness achievements
-  { id: 'excellent_fa', name: 'Excellent Rating', description: 'Score 90+ on a PFRA', icon: 'shield-check', category: 'fitness', isHard: false },
-  { id: 'perfect_fa', name: 'Perfect Score', description: 'Score 100 on a PFRA', icon: 'sparkles', category: 'fitness', isHard: true },
-  { id: 'improvement', name: 'Self Improvement', description: 'Improve your PFRA score by 10+ points', icon: 'trending-up', category: 'fitness', isHard: false },
-
-  // Additional achievements
-  { id: '25_workouts', name: 'Quarter Century', description: 'Log 25 workouts', icon: 'target', category: 'milestone', isHard: false },
-  { id: '200_workouts', name: 'Fitness Legend', description: 'Log 200 workouts', icon: 'gem', category: 'milestone', isHard: true },
-  { id: '1000_miles', name: 'Ultra Runner', description: 'Run 1000 total miles', icon: 'rocket', category: 'milestone', isHard: true },
-  { id: 'variety', name: 'Jack of All Trades', description: 'Log 5 different workout types', icon: 'layers', category: 'milestone', isHard: false },
-  { id: 'three_month_streak', name: 'Quarterly Champion', description: 'Complete PT every week for 3 months', icon: 'shield', category: 'streak', isHard: true },
-  { id: 'early_bird', name: 'Early Bird', description: 'Attend 10 morning PT sessions', icon: 'sunrise', category: 'streak', isHard: false },
-  { id: 'iron_will', name: 'Iron Will', description: 'Never miss a required PT session for a month', icon: 'anchor', category: 'streak', isHard: true },
-  { id: 'top_3_twice', name: 'Consistent Performer', description: 'Place top 3 on leaderboard twice', icon: 'repeat', category: 'leaderboard', isHard: true },
-  { id: 'top_3_five', name: 'Dominant Force', description: 'Place top 3 on leaderboard five times', icon: 'crown', category: 'leaderboard', isHard: true },
+  { id: 'excellent_fa', name: 'Excellent PFRA', description: 'Score 90 or higher on a PFRA.', icon: 'shield-check', category: 'fitness', isHard: false },
+  { id: 'perfect_fa', name: 'Perfect PFRA', description: 'Score a perfect 100 on a PFRA.', icon: 'sparkles', category: 'fitness', isHard: true },
+  { id: 'shared_workout_creator', name: 'Squadron Builder', description: 'Create a workout in the Workouts tab for your squadron to use.', icon: 'dumbbell', category: 'special', isHard: false },
 
   // Special achievements
-  { id: 'completionist', name: 'Completionist', description: 'Earn all other achievements', icon: 'award', category: 'special', isHard: true },
+  { id: 'completionist', name: 'FitFlight Legend', description: 'Earn every other trophy in the app.', icon: 'award', category: 'special', isHard: true },
 ];
+
+const REMOVED_TROPHY_IDS = new Set([
+  'gold_month',
+  'silver_month',
+  'bronze_month',
+  'improvement',
+  'top_3_twice',
+  'top_3_five',
+]);
+
+const TROPHY_IDS = new Set(ALL_ACHIEVEMENTS.map((achievement) => achievement.id));
+
+export const getEffectiveAchievementIds = (
+  member: Pick<Member, 'achievements' | 'trophyCount' | 'monthlyPlacements'>
+) => {
+  const sanitized = member.achievements.filter(
+    (achievementId) => !REMOVED_TROPHY_IDS.has(achievementId) && TROPHY_IDS.has(achievementId)
+  );
+  const nextAchievements = new Set(sanitized);
+
+  if (member.trophyCount > 0 || member.monthlyPlacements.length > 0) {
+    nextAchievements.add('top_3_month');
+  }
+
+  return Array.from(nextAchievements);
+};
+
+const withCompletionist = (member: Pick<Member, 'achievements' | 'trophyCount' | 'monthlyPlacements'>) => {
+  const effectiveAchievements = new Set(getEffectiveAchievementIds(member));
+  const shouldUnlockCompletionist =
+    !effectiveAchievements.has('completionist') &&
+    ALL_ACHIEVEMENTS
+      .filter((achievement) => achievement.id !== 'completionist')
+      .every((achievement) => effectiveAchievements.has(achievement.id));
+
+  if (shouldUnlockCompletionist) {
+    effectiveAchievements.add('completionist');
+  }
+
+  return Array.from(effectiveAchievements);
+};
+
+const getWeekStartKey = (dateValue: string) => {
+  const date = new Date(`${dateValue}T00:00:00`);
+  const day = date.getDay();
+  const diffToMonday = (day + 6) % 7;
+  date.setDate(date.getDate() - diffToMonday);
+  return date.toISOString().split('T')[0];
+};
+
+const countMaxConsecutiveWeeks = (weekKeys: string[]) => {
+  if (weekKeys.length === 0) {
+    return 0;
+  }
+
+  const orderedWeeks = [...new Set(weekKeys)].sort((left, right) => left.localeCompare(right));
+  let longest = 1;
+  let current = 1;
+
+  for (let index = 1; index < orderedWeeks.length; index += 1) {
+    const previous = new Date(`${orderedWeeks[index - 1]}T00:00:00`);
+    const currentDate = new Date(`${orderedWeeks[index]}T00:00:00`);
+    const diffDays = Math.round((currentDate.getTime() - previous.getTime()) / (1000 * 60 * 60 * 24));
+
+    if (diffDays === 7) {
+      current += 1;
+    } else {
+      current = 1;
+    }
+
+    longest = Math.max(longest, current);
+  }
+
+  return longest;
+};
+
+const getAutomaticAchievementIds = (
+  member: Pick<Member, 'id' | 'workouts' | 'distanceRun' | 'fitnessAssessments' | 'requiredPTSessionsPerWeek' | 'trophyCount' | 'monthlyPlacements' | 'flight' | 'squadron'>,
+  ptSessions: PTSession[],
+  sharedWorkouts: SharedWorkout[]
+) => {
+  const automaticAchievements = new Set<string>();
+  const workoutCount = member.workouts.length;
+  const uniqueWorkoutTypes = new Set(member.workouts.map((workout) => workout.type)).size;
+
+  if (workoutCount >= 1) automaticAchievements.add('first_workout');
+  if (workoutCount >= 10) automaticAchievements.add('10_workouts');
+  if (workoutCount >= 25) automaticAchievements.add('25_workouts');
+  if (workoutCount >= 50) automaticAchievements.add('50_workouts');
+  if (workoutCount >= 100) automaticAchievements.add('100_workouts');
+  if (workoutCount >= 200) automaticAchievements.add('200_workouts');
+
+  if (member.distanceRun >= 100) automaticAchievements.add('100_miles');
+  if (member.distanceRun >= 500) automaticAchievements.add('500_miles');
+  if (member.distanceRun >= 1000) automaticAchievements.add('1000_miles');
+
+  if (uniqueWorkoutTypes >= 5) automaticAchievements.add('variety');
+
+  if (member.fitnessAssessments.some((assessment) => assessment.overallScore >= 90)) {
+    automaticAchievements.add('excellent_fa');
+  }
+  if (member.fitnessAssessments.some((assessment) => assessment.overallScore === 100)) {
+    automaticAchievements.add('perfect_fa');
+  }
+
+  if (member.trophyCount > 0 || member.monthlyPlacements.length > 0) {
+    automaticAchievements.add('top_3_month');
+  }
+
+  if (sharedWorkouts.some((workout) => workout.createdBy === member.id && workout.squadron === member.squadron)) {
+    automaticAchievements.add('shared_workout_creator');
+  }
+
+  const attendedSessions = ptSessions.filter((session) => session.attendees.includes(member.id));
+  if (attendedSessions.length >= 10) {
+    automaticAchievements.add('early_bird');
+  }
+
+  const attendanceByWeek = new Map<string, number>();
+  attendedSessions.forEach((session) => {
+    const weekKey = getWeekStartKey(session.date);
+    attendanceByWeek.set(weekKey, (attendanceByWeek.get(weekKey) ?? 0) + 1);
+  });
+
+  const completedWeeks = Array.from(attendanceByWeek.entries())
+    .filter(([, count]) => count >= member.requiredPTSessionsPerWeek)
+    .map(([weekKey]) => weekKey);
+  const longestCompletedWeekStreak = countMaxConsecutiveWeeks(completedWeeks);
+
+  if (completedWeeks.length >= 1) automaticAchievements.add('week_streak');
+  if (longestCompletedWeekStreak >= 4) automaticAchievements.add('month_streak');
+  if (longestCompletedWeekStreak >= 12) automaticAchievements.add('three_month_streak');
+
+  const flightSessionsByWeek = new Map<string, { total: number; attended: number }>();
+  ptSessions
+    .filter((session) => session.flight === member.flight && session.squadron === member.squadron)
+    .forEach((session) => {
+      const weekKey = getWeekStartKey(session.date);
+      const current = flightSessionsByWeek.get(weekKey) ?? { total: 0, attended: 0 };
+      current.total += 1;
+      if (session.attendees.includes(member.id)) {
+        current.attended += 1;
+      }
+      flightSessionsByWeek.set(weekKey, current);
+    });
+
+  const flawlessWeeks = Array.from(flightSessionsByWeek.entries())
+    .filter(([, counts]) => counts.total > 0 && counts.attended === counts.total)
+    .map(([weekKey]) => weekKey);
+
+  if (countMaxConsecutiveWeeks(flawlessWeeks) >= 4) {
+    automaticAchievements.add('iron_will');
+  }
+
+  return Array.from(automaticAchievements);
+};
+
+const buildMemberWithDerivedAchievements = (member: Member, ptSessions: PTSession[], sharedWorkouts: SharedWorkout[]) => {
+  const automaticAchievements = getAutomaticAchievementIds(member, ptSessions, sharedWorkouts);
+  const existingAchievements = getEffectiveAchievementIds(member);
+  const mergedAchievements = Array.from(new Set([...existingAchievements, ...automaticAchievements]));
+
+  return {
+    ...member,
+    achievements: withCompletionist({
+      ...member,
+      achievements: mergedAchievements,
+    }),
+  };
+};
+
+const recomputeMembersAchievements = (members: Member[], ptSessions: PTSession[], sharedWorkouts: SharedWorkout[]) => (
+  members.map((member) => buildMemberWithDerivedAchievements(member, ptSessions, sharedWorkouts))
+);
 
 interface AuthState {
   user: User | null;
@@ -257,6 +429,7 @@ interface MemberState {
   sharedWorkouts: SharedWorkout[];
   defaultPTSessionsPerWeek: number;
   ufpmId: string | null;
+  recentAchievementId: string | null;
 
   // Member actions
   addMember: (member: Member) => void;
@@ -305,11 +478,16 @@ interface MemberState {
   // Workout actions
   addWorkout: (memberId: string, workout: Workout) => void;
   importWorkouts: (memberId: string, workouts: Workout[]) => void;
+  pruneOldWorkoutMedia: (currentMonthKey?: string) => void;
+  syncApprovedManualWorkouts: (entries: Array<{ memberId: string; workouts: Workout[] }>) => void;
 
   // Achievement actions
   awardAchievement: (memberId: string, achievementId: string) => void;
+  dismissAchievementCelebration: () => void;
+  previewAchievementCelebration: (achievementId: string) => void;
 
   // Shared Workout actions
+  syncSharedWorkouts: (workouts: SharedWorkout[]) => void;
   addSharedWorkout: (workout: SharedWorkout) => void;
   deleteSharedWorkout: (id: string) => void;
   rateSharedWorkout: (workoutId: string, memberId: string, rating: 'up' | 'down' | 'none') => void;
@@ -338,9 +516,12 @@ const OWNER_ACCOUNT: Member = {
   monthlyPlacements: [],
   trophyCount: 0,
   hasSeenTutorial: false,
+  mustChangePassword: false,
+  hasLoggedIntoApp: true,
 };
 
 const INITIAL_MEMBERS = [OWNER_ACCOUNT];
+const ROSTER_BACKED_SQUADRON: Squadron = 'Hawks';
 
 const normalizeOwnerMember = (member: Member): Member => {
   if (member.email.toLowerCase() !== OWNER_ACCOUNT.email.toLowerCase()) {
@@ -387,10 +568,13 @@ const hasLocalMemberData = (member: Member) => {
 
 const mergeMember = (base: Member, existing?: Member): Member => {
   if (!existing) {
-    return base;
+    return {
+      ...base,
+      achievements: withCompletionist(base),
+    };
   }
 
-  return {
+  const mergedMember = {
     ...base,
     id: existing.id || base.id,
     email: existing.email || base.email,
@@ -409,6 +593,13 @@ const mergeMember = (base: Member, existing?: Member): Member => {
     monthlyPlacements: existing.monthlyPlacements,
     trophyCount: existing.trophyCount,
     hasSeenTutorial: existing.hasSeenTutorial ?? base.hasSeenTutorial,
+    mustChangePassword: existing.mustChangePassword ?? base.mustChangePassword,
+    hasLoggedIntoApp: existing.hasLoggedIntoApp ?? base.hasLoggedIntoApp,
+  };
+
+  return {
+    ...mergedMember,
+    achievements: withCompletionist(mergedMember),
   };
 };
 
@@ -479,7 +670,27 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'flighttrack-auth',
+      version: 2,
       storage: createJSONStorage(() => AsyncStorage),
+      migrate: (persistedState: unknown, version) => {
+        if (!persistedState || typeof persistedState !== 'object') {
+          return persistedState as AuthState;
+        }
+
+        const state = persistedState as Partial<AuthState>;
+        if (version < 2 && state.isAuthenticated && !state.accessToken) {
+          return {
+            ...state,
+            user: null,
+            isAuthenticated: false,
+            rememberSession: false,
+            accessToken: null,
+            refreshToken: null,
+          } as AuthState;
+        }
+
+        return persistedState as AuthState;
+      },
       partialize: (state) => ({
         user: state.rememberSession ? state.user : null,
         isAuthenticated: state.rememberSession ? state.isAuthenticated : false,
@@ -508,10 +719,15 @@ export const useMemberStore = create<MemberState>()(
       sharedWorkouts: [],
       defaultPTSessionsPerWeek: 3,
       ufpmId: null,
+      recentAchievementId: null,
 
       // Member actions
       addMember: (member) => set((state) => ({
-        members: [...state.members, normalizeOwnerMember(member)]
+        members: recomputeMembersAchievements(
+          [...state.members, normalizeOwnerMember({ ...member, achievements: withCompletionist(member) })],
+          state.ptSessions,
+          state.sharedWorkouts
+        )
       })),
 
       syncMembersFromRoster: (rosterMembers) => set((state) => {
@@ -535,20 +751,25 @@ export const useMemberStore = create<MemberState>()(
             return false;
           }
 
+          if (member.squadron === ROSTER_BACKED_SQUADRON) {
+            return false;
+          }
+
           return hasLocalMemberData(member);
         });
 
         const nextMembers = [owner, ...mergedRosterMembers, ...preservedLocalOnlyMembers.map(normalizeOwnerMember)];
         const validMemberIds = new Set(nextMembers.map((member) => member.id));
+        const nextPtSessions = state.ptSessions.map((session) => ({
+          ...session,
+          squadron: session.squadron ?? 'Hawks',
+          attendees: session.attendees.filter((memberId) => validMemberIds.has(memberId)),
+          createdBy: validMemberIds.has(session.createdBy) ? session.createdBy : owner.id,
+        }));
 
         return {
-          members: nextMembers,
-          ptSessions: state.ptSessions.map((session) => ({
-            ...session,
-            squadron: session.squadron ?? 'Hawks',
-            attendees: session.attendees.filter((memberId) => validMemberIds.has(memberId)),
-            createdBy: validMemberIds.has(session.createdBy) ? session.createdBy : owner.id,
-          })),
+          members: recomputeMembersAchievements(nextMembers, nextPtSessions, state.sharedWorkouts),
+          ptSessions: nextPtSessions,
           scheduledSessions: state.scheduledSessions.map((session) => ({
             ...session,
             squadron: session.squadron ?? 'Hawks',
@@ -567,34 +788,53 @@ export const useMemberStore = create<MemberState>()(
       })),
 
       updateMember: (id, updates) => set((state) => ({
-        members: state.members.map(m => m.id === id ? normalizeOwnerMember({ ...m, ...updates }) : m)
+        members: recomputeMembersAchievements(state.members.map(m => {
+          if (m.id !== id) return m;
+          const nextMember = normalizeOwnerMember({ ...m, ...updates });
+          return {
+            ...nextMember,
+            achievements: withCompletionist(nextMember),
+          };
+        }), state.ptSessions, state.sharedWorkouts)
       })),
 
       getMemberById: (id) => get().members.find(m => m.id === id),
 
       // PT Session actions
       addPTSession: (session) => set((state) => ({
-        ptSessions: [...state.ptSessions, session]
+        ptSessions: [...state.ptSessions, session],
+        members: recomputeMembersAchievements(state.members, [...state.ptSessions, session], state.sharedWorkouts),
       })),
 
-      syncPTSessions: (sessions) => set(() => ({
-        ptSessions: sessions.map((session) => ({
+      syncPTSessions: (sessions) => set((state) => {
+        const nextSessions = sessions.map((session) => ({
           ...session,
           squadron: session.squadron ?? 'Hawks',
           attendees: [...new Set(session.attendees)],
-        })),
-      })),
+        }));
+
+        return {
+          ptSessions: nextSessions,
+          members: recomputeMembersAchievements(state.members, nextSessions, state.sharedWorkouts),
+        };
+      }),
 
       updatePTSession: (id, updates) => set((state) => ({
-        ptSessions: state.ptSessions.map(s => s.id === id ? { ...s, ...updates } : s)
+        ptSessions: state.ptSessions.map(s => s.id === id ? { ...s, ...updates } : s),
+        members: recomputeMembersAchievements(
+          state.members,
+          state.ptSessions.map(s => s.id === id ? { ...s, ...updates } : s),
+          state.sharedWorkouts
+        ),
       })),
 
       deletePTSession: (id) => set((state) => ({
-        ptSessions: state.ptSessions.filter(s => s.id !== id)
+        ptSessions: state.ptSessions.filter(s => s.id !== id),
+        members: recomputeMembersAchievements(state.members, state.ptSessions.filter(s => s.id !== id), state.sharedWorkouts),
       })),
 
-      toggleAttendance: (sessionId, memberId) => set((state) => ({
-        ptSessions: state.ptSessions.map(s => {
+      toggleAttendance: (sessionId, memberId) => set((state) => {
+        const nextSessions = state.ptSessions.map(s => {
           if (s.id !== sessionId) return s;
           const isPresent = s.attendees.includes(memberId);
           return {
@@ -603,8 +843,13 @@ export const useMemberStore = create<MemberState>()(
               ? s.attendees.filter(id => id !== memberId)
               : [...s.attendees, memberId]
           };
-        })
-      })),
+        });
+
+        return {
+          ptSessions: nextSessions,
+          members: recomputeMembersAchievements(state.members, nextSessions, state.sharedWorkouts),
+        };
+      }),
 
       // Scheduled Session actions
       addScheduledSession: (session) => set((state) => ({
@@ -716,16 +961,17 @@ export const useMemberStore = create<MemberState>()(
       // Fitness Assessment actions
       addFitnessAssessment: (memberId, assessment) => set((state) => {
         const requiredSessions = calculateRequiredPTSessions(assessment.overallScore);
+        const nextMembers = state.members.map(m =>
+          m.id === memberId
+            ? {
+                ...m,
+                fitnessAssessments: [...m.fitnessAssessments, assessment],
+                requiredPTSessionsPerWeek: requiredSessions,
+              }
+            : m
+        );
         return {
-          members: state.members.map(m =>
-            m.id === memberId
-              ? {
-                  ...m,
-                  fitnessAssessments: [...m.fitnessAssessments, assessment],
-                  requiredPTSessionsPerWeek: requiredSessions,
-                }
-              : m
-          ),
+          members: recomputeMembersAchievements(nextMembers, state.ptSessions, state.sharedWorkouts),
         };
       }),
 
@@ -745,7 +991,7 @@ export const useMemberStore = create<MemberState>()(
 
       // Workout actions
       addWorkout: (memberId, workout) => set((state) => ({
-        members: state.members.map(m =>
+        members: recomputeMembersAchievements(state.members.map(m =>
           m.id === memberId
             ? {
                 ...m,
@@ -754,11 +1000,11 @@ export const useMemberStore = create<MemberState>()(
                 distanceRun: m.distanceRun + (workout.distance ?? 0),
               }
             : m
-        ),
+        ), state.ptSessions, state.sharedWorkouts),
       })),
 
       importWorkouts: (memberId, workouts) => set((state) => ({
-        members: state.members.map((member) => {
+        members: recomputeMembersAchievements(state.members.map((member) => {
           if (member.id !== memberId) {
             return member;
           }
@@ -772,29 +1018,118 @@ export const useMemberStore = create<MemberState>()(
             exerciseMinutes: summary.exerciseMinutes,
             distanceRun: summary.distanceRun,
           };
-        }),
+        }), state.ptSessions, state.sharedWorkouts),
       })),
+
+      pruneOldWorkoutMedia: (currentMonthKey = new Date().toISOString().slice(0, 7)) => set((state) => ({
+        members: state.members.map((member) => ({
+          ...member,
+          workouts: member.workouts.map((workout) => (
+            workout.screenshotUri && !workout.date.startsWith(currentMonthKey)
+              ? { ...workout, screenshotUri: undefined }
+              : workout
+          )),
+        })),
+      })),
+
+      syncApprovedManualWorkouts: (entries) => set((state) => {
+        const workoutsByMember = new Map(entries.map((entry) => [entry.memberId, entry.workouts]));
+        const nextMembers = state.members.map((member) => {
+          const approvedManualWorkouts = workoutsByMember.get(member.id);
+          if (!approvedManualWorkouts) {
+            return member;
+          }
+
+          const preservedWorkouts = member.workouts.filter(
+            (workout) => !(workout.source === 'manual' && Boolean(workout.externalId))
+          );
+          const mergedWorkouts = mergeWorkouts(preservedWorkouts, approvedManualWorkouts);
+          const summary = summarizeWorkouts(mergedWorkouts);
+
+          return {
+            ...member,
+            workouts: mergedWorkouts,
+            exerciseMinutes: summary.exerciseMinutes,
+            distanceRun: summary.distanceRun,
+          };
+        });
+
+        return {
+          members: recomputeMembersAchievements(nextMembers, state.ptSessions, state.sharedWorkouts),
+        };
+      }),
 
       // Achievement actions
       awardAchievement: (memberId, achievementId) => set((state) => ({
-        members: state.members.map(m =>
-          m.id === memberId && !m.achievements.includes(achievementId)
-            ? { ...m, achievements: [...m.achievements, achievementId] }
-            : m
-        ),
+        members: state.members.map((member) => {
+          const currentAchievements = new Set(getEffectiveAchievementIds(member));
+          if (member.id !== memberId || currentAchievements.has(achievementId)) {
+            return member;
+          }
+
+          const nextAchievements = withCompletionist({
+            ...member,
+            achievements: [...currentAchievements, achievementId],
+          });
+
+          return {
+            ...member,
+            achievements: nextAchievements,
+          };
+        }),
+        recentAchievementId: state.members.some((member) => {
+          if (member.id !== memberId) {
+            return false;
+          }
+
+          return !new Set(getEffectiveAchievementIds(member)).has(achievementId);
+        })
+          ? (() => {
+              const targetMember = state.members.find((member) => member.id === memberId);
+              if (!targetMember) {
+                return state.recentAchievementId;
+              }
+
+              const nextAchievements = withCompletionist({
+                ...targetMember,
+                achievements: [...getEffectiveAchievementIds(targetMember), achievementId],
+              });
+
+              return nextAchievements.includes('completionist') && !targetMember.achievements.includes('completionist')
+                ? 'completionist'
+                : achievementId;
+            })()
+          : state.recentAchievementId,
       })),
+
+      dismissAchievementCelebration: () => set({ recentAchievementId: null }),
+
+      previewAchievementCelebration: (achievementId) => set({ recentAchievementId: achievementId }),
 
       // Shared Workout actions
-      addSharedWorkout: (workout) => set((state) => ({
-        sharedWorkouts: [workout, ...state.sharedWorkouts],
+      syncSharedWorkouts: (workouts) => set((state) => ({
+        sharedWorkouts: workouts,
+        members: recomputeMembersAchievements(state.members, state.ptSessions, workouts),
       })),
 
-      deleteSharedWorkout: (id) => set((state) => ({
-        sharedWorkouts: state.sharedWorkouts.filter(w => w.id !== id),
-      })),
+      addSharedWorkout: (workout) => set((state) => {
+        const nextSharedWorkouts = [workout, ...state.sharedWorkouts];
+        return {
+          sharedWorkouts: nextSharedWorkouts,
+          members: recomputeMembersAchievements(state.members, state.ptSessions, nextSharedWorkouts),
+        };
+      }),
 
-      rateSharedWorkout: (workoutId, memberId, rating) => set((state) => ({
-        sharedWorkouts: state.sharedWorkouts.map(w => {
+      deleteSharedWorkout: (id) => set((state) => {
+        const nextSharedWorkouts = state.sharedWorkouts.filter(w => w.id !== id);
+        return {
+          sharedWorkouts: nextSharedWorkouts,
+          members: recomputeMembersAchievements(state.members, state.ptSessions, nextSharedWorkouts),
+        };
+      }),
+
+      rateSharedWorkout: (workoutId, memberId, rating) => set((state) => {
+        const nextSharedWorkouts = state.sharedWorkouts.map(w => {
           if (w.id !== workoutId) return w;
           // Remove from both arrays first
           const newThumbsUp = w.thumbsUp.filter(id => id !== memberId);
@@ -806,11 +1141,15 @@ export const useMemberStore = create<MemberState>()(
             newThumbsDown.push(memberId);
           }
           return { ...w, thumbsUp: newThumbsUp, thumbsDown: newThumbsDown };
-        }),
-      })),
+        });
+        return {
+          sharedWorkouts: nextSharedWorkouts,
+          members: recomputeMembersAchievements(state.members, state.ptSessions, nextSharedWorkouts),
+        };
+      }),
 
-      toggleFavoriteWorkout: (workoutId, memberId) => set((state) => ({
-        sharedWorkouts: state.sharedWorkouts.map(w => {
+      toggleFavoriteWorkout: (workoutId, memberId) => set((state) => {
+        const nextSharedWorkouts = state.sharedWorkouts.map(w => {
           if (w.id !== workoutId) return w;
           const isFavorited = w.favoritedBy.includes(memberId);
           return {
@@ -819,8 +1158,12 @@ export const useMemberStore = create<MemberState>()(
               ? w.favoritedBy.filter(id => id !== memberId)
               : [...w.favoritedBy, memberId],
           };
-        }),
-      })),
+        });
+        return {
+          sharedWorkouts: nextSharedWorkouts,
+          members: recomputeMembersAchievements(state.members, state.ptSessions, nextSharedWorkouts),
+        };
+      }),
     }),
     {
       name: 'flighttrack-members',
@@ -831,15 +1174,15 @@ export const useMemberStore = create<MemberState>()(
 
 // Helper to check if user can manage PTL status
 export const canManagePTL = (accountType: AccountType): boolean => {
-  return accountType === 'fitflight_creator' || accountType === 'ufpm';
+  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'squadron_leadership';
 };
 
 // Helper to check if user can edit PT attendance
 export const canEditAttendance = (accountType: AccountType): boolean => {
-  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'ptl';
+  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'squadron_leadership' || accountType === 'ptl';
 };
 
 // Helper to check if user has admin access
 export const isAdmin = (accountType: AccountType): boolean => {
-  return accountType === 'fitflight_creator' || accountType === 'ufpm';
+  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'squadron_leadership';
 };

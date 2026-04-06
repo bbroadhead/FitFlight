@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, Pressable, ScrollView, TextInput, Modal, Image } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { View, Text, Pressable, ScrollView, TextInput, Modal, Image, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -7,14 +7,15 @@ import { ChevronLeft, Camera, Upload, X, Check, Clock, MapPin, Lock, Unlock, Ale
 import Animated, { FadeInDown, FadeIn, ZoomIn } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
-import { useMemberStore, useAuthStore, type Workout, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
+import * as FileSystem from 'expo-file-system';
+import { useMemberStore, useAuthStore, getDisplayName, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
+import { createManualWorkoutSubmission } from '@/lib/supabaseData';
 
 export default function AddWorkoutScreen() {
   const router = useRouter();
   const user = useAuthStore(s => s.user);
-  const addWorkout = useMemberStore(s => s.addWorkout);
-  const awardAchievement = useMemberStore(s => s.awardAchievement);
+  const accessToken = useAuthStore(s => s.accessToken);
   const members = useMemberStore(s => s.members);
 
   const [screenshotUri, setScreenshotUri] = useState<string | null>(null);
@@ -23,11 +24,24 @@ export default function AddWorkoutScreen() {
   const [distance, setDistance] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
   const [showConfirmation, setShowConfirmation] = useState(false);
-
-  const currentMember = user ? members.find(m => m.id === user.id) : null;
-  const currentWorkoutCount = currentMember?.workouts.length ?? 0;
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const workoutTypeScrollRef = useRef<ScrollView>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const canSubmit = duration && screenshotUri;
+  const webWorkoutTypeScrollProps = Platform.OS === 'web'
+    ? ({
+        onWheel: (event: any) => {
+          const delta = typeof event?.nativeEvent?.deltaY === 'number'
+            ? event.nativeEvent.deltaY
+            : event?.deltaY ?? 0;
+          if (delta && workoutTypeScrollRef.current) {
+            const currentX = event?.currentTarget?.scrollLeft ?? 0;
+            workoutTypeScrollRef.current.scrollTo({ x: currentX + delta, animated: false });
+          }
+        },
+      } as any)
+    : {};
 
   const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -55,37 +69,69 @@ export default function AddWorkoutScreen() {
     }
   };
 
-  const handleSubmit = () => {
-    if (!user || !duration || !screenshotUri) return;
-
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-
-    const workout: Workout = {
-      id: Date.now().toString(),
-      date: new Date().toISOString().split('T')[0],
-      type: workoutType,
-      duration: parseInt(duration) || 0,
-      distance: distance ? parseFloat(distance) : undefined,
-      source: 'screenshot',
-      screenshotUri: screenshotUri,
-      isPrivate,
-    };
-
-    addWorkout(user.id, workout);
-
-    // Check for achievements
-    const newWorkoutCount = currentWorkoutCount + 1;
-    if (newWorkoutCount === 1) {
-      awardAchievement(user.id, 'first_workout');
-    } else if (newWorkoutCount === 10) {
-      awardAchievement(user.id, '10_workouts');
-    } else if (newWorkoutCount === 50) {
-      awardAchievement(user.id, '50_workouts');
-    } else if (newWorkoutCount === 100) {
-      awardAchievement(user.id, '100_workouts');
+  const convertImageToDataUrl = async (uri: string) => {
+    if (Platform.OS === 'web') {
+      const response = await fetch(uri);
+      const blob = await response.blob();
+      const mimeType = blob.type || 'image/jpeg';
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const result = reader.result;
+          if (typeof result === 'string') {
+            resolve(result.split(',')[1] ?? '');
+            return;
+          }
+          reject(new Error('Unable to read image proof.'));
+        };
+        reader.onerror = () => reject(new Error('Unable to read image proof.'));
+        reader.readAsDataURL(blob);
+      });
+      return `data:${mimeType};base64,${base64}`;
     }
 
-    router.back();
+    const base64 = await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    return `data:image/jpeg;base64,${base64}`;
+  };
+
+  const handleSubmit = () => {
+    const run = async () => {
+      if (!user || !duration || !screenshotUri || !accessToken) return;
+
+      setSubmitError(null);
+      setIsSubmitting(true);
+
+      try {
+        const proofImageData = await convertImageToDataUrl(screenshotUri);
+        await createManualWorkoutSubmission({
+          memberId: user.id,
+          memberEmail: user.email,
+          memberName: getDisplayName(user),
+          memberRank: user.rank,
+          memberFlight: user.flight,
+          squadron: user.squadron,
+          workoutDate: new Date().toISOString().split('T')[0],
+          workoutType,
+          duration: parseInt(duration, 10) || 0,
+          distance: distance ? parseFloat(distance) : undefined,
+          isPrivate,
+          proofImageData,
+          accessToken,
+        });
+
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        router.back();
+      } catch (error) {
+        setSubmitError(error instanceof Error ? error.message : 'Unable to submit workout proof.');
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      } finally {
+        setIsSubmitting(false);
+      }
+    };
+
+    void run();
   };
 
   return (
@@ -112,7 +158,7 @@ export default function AddWorkoutScreen() {
           >
             <ChevronLeft size={24} color="#C0C0C0" />
           </Pressable>
-          <Text className="text-white text-xl font-bold">Add Workout</Text>
+          <Text className="text-white text-xl font-bold">Add Manual Workout</Text>
         </Animated.View>
 
         <ScrollView
@@ -126,7 +172,7 @@ export default function AddWorkoutScreen() {
             className="mt-4"
           >
             <View className="flex-row items-center mb-2">
-              <Text className="text-white/60 text-sm">Workout Screenshot *</Text>
+              <Text className="text-white/60 text-sm">Workout Proof Image *</Text>
               <View className="ml-2 flex-row items-center bg-af-warning/20 px-2 py-1 rounded">
                 <AlertCircle size={12} color="#F59E0B" />
                 <Text className="text-af-warning text-xs ml-1">Required</Text>
@@ -135,10 +181,10 @@ export default function AddWorkoutScreen() {
               {!screenshotUri ? (
                 <View className="bg-white/5 rounded-2xl border border-white/10 border-dashed p-8">
                   <Text className="text-white font-semibold text-center mb-4">
-                    Upload a workout screenshot
+                    Upload workout proof
                   </Text>
                   <Text className="text-af-silver text-center text-sm mb-6">
-                    Take a photo or select from your gallery. You'll enter the workout data manually.
+                    Take a photo or select an image proving you completed the workout. It will be reviewed before it is counted.
                   </Text>
                   <View className="flex-row justify-center">
                     <Pressable
@@ -181,9 +227,11 @@ export default function AddWorkoutScreen() {
           >
             <Text className="text-white/60 text-sm mb-2">Workout Type</Text>
             <ScrollView
+              ref={workoutTypeScrollRef}
               horizontal
-              showsHorizontalScrollIndicator={false}
+              showsHorizontalScrollIndicator={Platform.OS === 'web'}
               style={{ flexGrow: 0 }}
+              {...webWorkoutTypeScrollProps}
             >
               <View className="flex-row">
                 {WORKOUT_TYPES.map((type) => (
@@ -295,30 +343,36 @@ export default function AddWorkoutScreen() {
             entering={FadeInDown.delay(450).springify()}
             className="mt-6"
           >
+            {submitError ? (
+              <View className="flex-row items-center justify-center mb-3 bg-af-danger/10 p-3 rounded-xl">
+                <AlertCircle size={16} color="#EF4444" />
+                <Text className="text-af-danger text-sm ml-2">{submitError}</Text>
+              </View>
+            ) : null}
             {!screenshotUri && (
               <View className="flex-row items-center justify-center mb-3 bg-af-warning/10 p-3 rounded-xl">
                 <AlertCircle size={16} color="#F59E0B" />
-                <Text className="text-af-warning text-sm ml-2">Screenshot is required to add workout</Text>
+                <Text className="text-af-warning text-sm ml-2">Screenshot/image proof is required to add workout</Text>
               </View>
             )}
             <Pressable
               onPress={() => {
-                if (canSubmit) {
+                if (canSubmit && !isSubmitting) {
                   setShowConfirmation(true);
                 }
               }}
-              disabled={!canSubmit}
+              disabled={!canSubmit || isSubmitting}
               className={cn(
                 "py-4 rounded-xl flex-row items-center justify-center",
-                canSubmit ? "bg-af-accent" : "bg-white/10"
+                canSubmit && !isSubmitting ? "bg-af-accent" : "bg-white/10"
               )}
             >
-              <Check size={20} color={canSubmit ? "white" : "#666666"} />
+              <Check size={20} color={canSubmit && !isSubmitting ? "white" : "#666666"} />
               <Text className={cn(
                 "font-bold text-lg ml-2",
-                canSubmit ? "text-white" : "text-white/40"
+                canSubmit && !isSubmitting ? "text-white" : "text-white/40"
               )}>
-                Add Workout
+                {isSubmitting ? 'Submitting...' : 'Submit for Approval'}
               </Text>
             </Pressable>
           </Animated.View>
@@ -332,7 +386,7 @@ export default function AddWorkoutScreen() {
             entering={ZoomIn.duration(300)}
             className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20"
           >
-            <Text className="text-white text-xl font-bold mb-4">Confirm Workout</Text>
+            <Text className="text-white text-xl font-bold mb-4">Submit Manual Workout</Text>
 
             {screenshotUri && (
               <Image
@@ -368,6 +422,12 @@ export default function AddWorkoutScreen() {
               </View>
             </View>
 
+            <View className="bg-af-accent/10 border border-af-accent/20 rounded-xl p-4 mb-4">
+              <Text className="text-white text-sm leading-5">
+                This workout will be sent to your squadron's PFLs, UFPM, and Owner for approval. It will only count toward your attendance and account after approval.
+              </Text>
+            </View>
+
             <View className="flex-row">
               <Pressable
                 onPress={() => setShowConfirmation(false)}
@@ -382,7 +442,7 @@ export default function AddWorkoutScreen() {
                 }}
                 className="flex-1 bg-af-accent py-3 rounded-xl ml-2"
               >
-                <Text className="text-white text-center font-semibold">Confirm</Text>
+                <Text className="text-white text-center font-semibold">Send for Review</Text>
               </Pressable>
             </View>
           </Animated.View>

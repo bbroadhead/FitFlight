@@ -3,6 +3,7 @@ import { View, Text, Pressable, ScrollView, TextInput, Platform, Linking, Layout
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { Audio } from 'expo-av';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system';
@@ -13,9 +14,11 @@ import { Buffer } from 'buffer';
 import { jsPDF } from 'jspdf';
 
 import SmartSlider from '@/components/SmartSlider';
+import { useAuthStore, useMemberStore } from '@/lib/store';
 import {
   HAND_RELEASE_PUSHUP_ROWS,
   HAMR_20M_ROWS,
+  PFRA_COMPONENT_MAX_POINTS,
   PFRA_MINIMUM_COMPONENT_POINTS,
   PLANK_ROWS_SEC,
   PUSHUP_ROWS,
@@ -26,8 +29,9 @@ import {
   WALK_2K_MAX_SEC,
   getPFRAAgeBracket,
   getWalkAgeBracket,
-  meetsPFRAComponentMinimums,
+  meetsPFRAComponentMinimumsWithExemptions,
   passesWalk2k,
+  scoreWithExemptions,
   scoreTotal,
   type Gender,
 } from '@/lib/pfraScoring2026';
@@ -315,9 +319,33 @@ function LabeledSlider({ label, valueLabel, theme, children, input, markers, mar
   );
 }
 
-function ComponentScoreBar({ label, value, max, theme, isPassFail = false, onPress, detail }: { label: string; value: number; max: number; theme: ComponentTheme; isPassFail?: boolean; onPress?: () => void; detail?: string; }) {
-  const widthPct = (max > 0 ? `${Math.min(100, Math.max(0, (value / max) * 100))}%` : '0%') as unknown as `${number}%`;
-  const labelText = isPassFail ? (value > 0 ? 'PASS' : 'FAIL') : `${value.toFixed(1)}/${max}`;
+function ComponentScoreBar({
+  label,
+  value,
+  max,
+  theme,
+  isPassFail = false,
+  onPress,
+  detail,
+  exempt = false,
+}: {
+  label: string;
+  value: number;
+  max: number;
+  theme: ComponentTheme;
+  isPassFail?: boolean;
+  onPress?: () => void;
+  detail?: string;
+  exempt?: boolean;
+}) {
+  const widthPct = (
+    exempt
+      ? '100%'
+      : max > 0
+        ? `${Math.min(100, Math.max(0, (value / max) * 100))}%`
+        : '0%'
+  ) as unknown as `${number}%`;
+  const labelText = exempt ? 'EXEMPT' : isPassFail ? (value > 0 ? 'PASS' : 'FAIL') : `${value.toFixed(1)}/${max}`;
 
   return (
     <Pressable className="mb-2" onPress={onPress} disabled={!onPress}>
@@ -327,7 +355,7 @@ function ComponentScoreBar({ label, value, max, theme, isPassFail = false, onPre
           {detail ? <Text className="text-right text-[11px] text-white/75">{detail}</Text> : null}
         </View>
         <View className="relative h-6 overflow-hidden rounded-full border border-white/10 bg-white/10">
-          <View style={{ width: widthPct, backgroundColor: theme.color }} className="absolute left-0 top-0 h-full rounded-full" />
+          <View style={{ width: widthPct, backgroundColor: exempt ? 'rgba(255,255,255,0.2)' : theme.color }} className="absolute left-0 top-0 h-full rounded-full" />
           <View className="absolute inset-0 items-center justify-center px-2">
             <Text
               className="text-[11px] font-bold text-white"
@@ -338,6 +366,23 @@ function ComponentScoreBar({ label, value, max, theme, isPassFail = false, onPre
           </View>
         </View>
       </View>
+    </Pressable>
+  );
+}
+
+function ExemptToggle({
+  checked,
+  onPress,
+}: {
+  checked: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable onPress={onPress} className="flex-row items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1.5">
+      <View className="h-4 w-4 items-center justify-center rounded border border-white/40 bg-white/5">
+        {checked ? <Ionicons name="checkmark" size={12} color="#FFFFFF" /> : null}
+      </View>
+      <Text className="text-xs font-semibold uppercase tracking-[0.4px] text-white/75">Exempt</Text>
     </Pressable>
   );
 }
@@ -639,8 +684,17 @@ export default function CalculatorScreen() {
 
   const [audioCollapsed, setAudioCollapsed] = useState(true);
   const [showSaveModal, setShowSaveModal] = useState(false);
+  const [showOfficialSaveModal, setShowOfficialSaveModal] = useState(false);
   const [isSavingPdf, setIsSavingPdf] = useState(false);
+  const [isSavingOfficialPfRA, setIsSavingOfficialPfRA] = useState(false);
   const [pdfFileName, setPdfFileName] = useState('name-date-official');
+  const updateMember = useMemberStore((s) => s.updateMember);
+  const members = useMemberStore((s) => s.members);
+  const awardAchievement = useMemberStore((s) => s.awardAchievement);
+  const user = useAuthStore((s) => s.user);
+  const currentMember = user ? members.find((member) => member.id === user.id) : null;
+  const [savePfRADate, setSavePfRADate] = useState(new Date());
+  const [showSavePfRADatePicker, setShowSavePfRADatePicker] = useState(false);
   const [ageYears, setAgeYears] = useState(34);
   const [gender, setGender] = useState<Gender>('male');
 
@@ -658,9 +712,22 @@ export default function CalculatorScreen() {
   const [pushupReps, setPushupReps] = useState(40);
   const [coreReps, setCoreReps] = useState(40);
   const [plankSec, setPlankSec] = useState(120);
+  const [waistExempt, setWaistExempt] = useState(false);
+  const [strengthExempt, setStrengthExempt] = useState(false);
+  const [coreExempt, setCoreExempt] = useState(false);
+  const [cardioExempt, setCardioExempt] = useState(false);
 
   const cardioValue = cardioTest === 'run_2mile' ? runSec : cardioTest === 'walk_2k' ? walkSec : hamrShuttles;
   const coreValue = coreTest === 'plank' ? plankSec : coreReps;
+  const componentExemptions = useMemo(
+    () => ({
+      waist: waistExempt,
+      strength: strengthExempt,
+      core: coreExempt,
+      cardio: cardioExempt,
+    }),
+    [cardioExempt, coreExempt, strengthExempt, waistExempt],
+  );
 
   const scores = useMemo(() => {
     return scoreTotal({
@@ -678,8 +745,17 @@ export default function CalculatorScreen() {
   }, [ageYears, gender, waistIn, heightIn, strengthTest, pushupReps, coreTest, coreValue, cardioTest, cardioValue]);
 
   const walkPass = cardioTest === 'walk_2k' ? passesWalk2k(ageYears, gender, walkSec) : false;
-  const meetsMinimums = cardioTest === 'walk_2k' ? walkPass : meetsPFRAComponentMinimums(scores);
-  const officialTotal = cardioTest === 'walk_2k' ? null : scores.total;
+  const exemptionAwareScores = useMemo(() => scoreWithExemptions(scores, componentExemptions), [componentExemptions, scores]);
+  const minimumCheckExemptions = useMemo(
+    () => ((cardioTest === 'walk_2k' && !cardioExempt)
+      ? { ...componentExemptions, cardio: true }
+      : componentExemptions),
+    [cardioExempt, cardioTest, componentExemptions],
+  );
+  const meetsMinimums = (cardioTest === 'walk_2k' && !cardioExempt)
+    ? walkPass && meetsPFRAComponentMinimumsWithExemptions(scores, minimumCheckExemptions)
+    : meetsPFRAComponentMinimumsWithExemptions(scores, minimumCheckExemptions);
+  const officialTotal = (cardioTest === 'walk_2k' && !cardioExempt) ? null : exemptionAwareScores.normalizedTotal;
   const status = scoreStatus(officialTotal, meetsMinimums, walkPass);
 
   const whtrValue = heightIn > 0 ? waistIn / heightIn : 0;
@@ -744,12 +820,42 @@ export default function CalculatorScreen() {
       : selectedHamrStage
         ? `${hamrShuttles} shuttles • L${selectedHamrStage.level} S${selectedHamrStage.shuttleInLevel}`
         : `${hamrShuttles} shuttles`;
+  const activeScoringSummary = `${exemptionAwareScores.completedScore.toFixed(1)} / ${exemptionAwareScores.completedMax}`;
   const scoreSummaryRows = useMemo(() => ([
     { label: 'WHtR', score: scores.waist, max: 20, theme: THEMES.whtR, detail: `${waistIn.toFixed(1)} in waist • ${heightIn.toFixed(1)} in height` },
-    { label: 'Strength', score: scores.strength, max: 15, theme: THEMES.strength, detail: strengthRawValue },
+    { label: 'Strength', score: scores.strength, max: PFRA_COMPONENT_MAX_POINTS.strength, theme: THEMES.strength, detail: strengthRawValue, exempt: strengthExempt },
     { label: 'Core', score: scores.core, max: 15, theme: THEMES.core, detail: coreRawValue },
     { label: 'Cardio', score: cardioTest === 'walk_2k' ? (walkPass ? 50 : 0) : scores.cardio, max: 50, theme: THEMES.cardio, detail: cardioRawValue, isPassFail: cardioTest === 'walk_2k' },
-  ]), [cardioRawValue, cardioTest, coreRawValue, heightIn, scores.cardio, scores.core, scores.strength, scores.waist, strengthRawValue, walkPass, waistIn]);
+  ]).map((row) => {
+    if (row.label === 'WHtR') {
+      return {
+        ...row,
+        max: PFRA_COMPONENT_MAX_POINTS.waist,
+        detail: `${waistIn.toFixed(1)} in waist | ${heightIn.toFixed(1)} in height`,
+        exempt: waistExempt,
+      };
+    }
+    if (row.label === 'Strength') {
+      return {
+        ...row,
+        max: PFRA_COMPONENT_MAX_POINTS.strength,
+        exempt: strengthExempt,
+      };
+    }
+    if (row.label === 'Core') {
+      return {
+        ...row,
+        max: PFRA_COMPONENT_MAX_POINTS.core,
+        exempt: coreExempt,
+      };
+    }
+    return {
+      ...row,
+      score: cardioTest === 'walk_2k' ? (walkPass ? PFRA_COMPONENT_MAX_POINTS.cardio : 0) : scores.cardio,
+      max: PFRA_COMPONENT_MAX_POINTS.cardio,
+      exempt: cardioExempt,
+    };
+  }), [cardioExempt, cardioRawValue, cardioTest, coreExempt, coreRawValue, heightIn, scores.cardio, scores.core, scores.strength, scores.waist, strengthExempt, strengthRawValue, waistExempt, walkPass, waistIn]);
 
   const circleSize = isWide ? 118 : 110;
   const strokeWidth = 9;
@@ -865,7 +971,7 @@ export default function CalculatorScreen() {
             <div class="scoreCard">
               <div class="subtle">TOTAL SCORE</div>
               <div class="scoreValue" style="color:${officialTotal === null ? '#FFFFFF' : status.color}">${officialTotal === null ? '--' : officialTotal.toFixed(1)}</div>
-              <div class="subtle">${officialTotal === null ? (walkPass ? 'Walk pass' : 'Walk fail') : 'out of 100'}</div>
+              <div class="subtle">${officialTotal === null ? (walkPass ? 'Walk pass' : 'Walk fail') : `Normalized from ${activeScoringSummary}`}</div>
               <div class="status">${status.label}</div>
             </div>
 
@@ -874,10 +980,10 @@ export default function CalculatorScreen() {
                 <div class="scoreRow">
                   <div class="scoreRowTop">
                     <span>${row.label}</span>
-                    <span>${row.isPassFail ? (row.score > 0 ? 'PASS' : 'FAIL') : `${row.score.toFixed(1)}/${row.max}`}</span>
+                    <span>${row.exempt ? 'EXEMPT' : row.isPassFail ? (row.score > 0 ? 'PASS' : 'FAIL') : `${row.score.toFixed(1)}/${row.max}`}</span>
                   </div>
                   <div class="scoreRowDetail">
-                    <span>${row.detail ?? ''}</span>
+                    <span>${row.exempt ? 'Excluded from denominator' : row.detail ?? ''}</span>
                   </div>
                 </div>
               `).join('')}
@@ -889,25 +995,25 @@ export default function CalculatorScreen() {
               <div class="detailTitle">Body Composition</div>
               <div class="detailLine">Waist: ${waistIn.toFixed(1)} in</div>
               <div class="detailLine">Height: ${heightIn.toFixed(1)} in</div>
-              <div class="detailLine">WHtR: ${whtrValue.toFixed(2)}</div>
+              <div class="detailLine">${waistExempt ? 'Exempt from PFRA denominator' : `WHtR: ${whtrValue.toFixed(2)}`}</div>
             </div>
             <div class="detailCard">
               <div class="detailTitle">Strength</div>
               <div class="detailLine">Test: ${strengthTest === 'pushups' ? 'Push-ups' : 'Hand-release Push-ups'}</div>
               <div class="detailLine">Result: ${pushupReps} reps</div>
-              <div class="detailLine">Score: ${scores.strength.toFixed(1)}</div>
+              <div class="detailLine">${strengthExempt ? 'Exempt from PFRA denominator' : `Score: ${scores.strength.toFixed(1)}`}</div>
             </div>
             <div class="detailCard">
               <div class="detailTitle">Core</div>
               <div class="detailLine">Test: ${coreTest === 'situps' ? 'Sit-ups' : coreTest === 'cross_leg_reverse_crunch' ? 'Cross-leg Reverse Crunch' : 'Plank'}</div>
               <div class="detailLine">Result: ${coreTest === 'plank' ? formatMMSS(plankSec) : `${coreReps} reps`}</div>
-              <div class="detailLine">Score: ${scores.core.toFixed(1)}</div>
+              <div class="detailLine">${coreExempt ? 'Exempt from PFRA denominator' : `Score: ${scores.core.toFixed(1)}`}</div>
             </div>
             <div class="detailCard">
               <div class="detailTitle">Cardio</div>
               <div class="detailLine">Test: ${cardioTest === 'run_2mile' ? '2-mile Run' : cardioTest === 'walk_2k' ? '2K Walk' : '20m HAMR'}</div>
               <div class="detailLine">Result: ${cardioRawValue}</div>
-              <div class="detailLine">${selectedHamrStage ? `HAMR Level ${selectedHamrStage.level}, Shuttle ${selectedHamrStage.shuttleInLevel} of ${selectedHamrStage.shuttlesInLevel}` : `Score: ${cardioTest === 'walk_2k' ? (walkPass ? 'PASS' : 'FAIL') : scores.cardio.toFixed(1)}`}</div>
+              <div class="detailLine">${cardioExempt ? 'Exempt from PFRA denominator' : selectedHamrStage ? `HAMR Level ${selectedHamrStage.level}, Shuttle ${selectedHamrStage.shuttleInLevel} of ${selectedHamrStage.shuttlesInLevel}` : `Score: ${cardioTest === 'walk_2k' ? (walkPass ? 'PASS' : 'FAIL') : scores.cardio.toFixed(1)}`}</div>
             </div>
           </div>
         </div>
@@ -953,7 +1059,7 @@ export default function CalculatorScreen() {
     pdf.setFont('helvetica', 'normal');
     pdf.setFontSize(11);
     pdf.setTextColor(192, 192, 192);
-    pdf.text(officialTotal === null ? (walkPass ? 'Walk pass' : 'Walk fail') : 'out of 100', 54, 188);
+    pdf.text(officialTotal === null ? (walkPass ? 'Walk pass' : 'Walk fail') : `Normalized from ${activeScoringSummary}`, 54, 188);
 
     scoreSummaryRows.forEach((row, index) => {
       const boxY = 110 + index * 52;
@@ -965,16 +1071,16 @@ export default function CalculatorScreen() {
       pdf.text(row.label.toUpperCase(), 252, boxY + 14);
       pdf.setFont('helvetica', 'normal');
       pdf.setTextColor(255, 255, 255);
-      pdf.text(row.detail ?? '', 548, boxY + 14, { align: 'right', maxWidth: 190 });
+      pdf.text(row.exempt ? 'Excluded from denominator' : (row.detail ?? ''), 548, boxY + 14, { align: 'right', maxWidth: 190 });
       pdf.setFont('helvetica', 'bold');
-      pdf.text(row.isPassFail ? (row.score > 0 ? 'PASS' : 'FAIL') : `${row.score.toFixed(1)}/${row.max}`, 252, boxY + 30);
+      pdf.text(row.exempt ? 'EXEMPT' : row.isPassFail ? (row.score > 0 ? 'PASS' : 'FAIL') : `${row.score.toFixed(1)}/${row.max}`, 252, boxY + 30);
     });
 
     const detailBlocks = [
-      ['Body Composition', [`Waist: ${waistIn.toFixed(1)} in`, `Height: ${heightIn.toFixed(1)} in`, `WHtR: ${whtrValue.toFixed(2)}`]],
-      ['Strength', [`Test: ${strengthTest === 'pushups' ? 'Push-ups' : 'Hand-release Push-ups'}`, `Result: ${pushupReps} reps`, `Score: ${scores.strength.toFixed(1)}`]],
-      ['Core', [`Test: ${coreTest === 'situps' ? 'Sit-ups' : coreTest === 'cross_leg_reverse_crunch' ? 'Cross-leg Reverse Crunch' : 'Plank'}`, `Result: ${coreTest === 'plank' ? formatMMSS(plankSec) : `${coreReps} reps`}`, `Score: ${scores.core.toFixed(1)}`]],
-      ['Cardio', [`Test: ${cardioTest === 'run_2mile' ? '2-mile Run' : cardioTest === 'walk_2k' ? '2K Walk' : '20m HAMR'}`, `Result: ${cardioRawValue}`, selectedHamrStage ? `Level ${selectedHamrStage.level}, Shuttle ${selectedHamrStage.shuttleInLevel} of ${selectedHamrStage.shuttlesInLevel}` : `Score: ${cardioTest === 'walk_2k' ? (walkPass ? 'PASS' : 'FAIL') : scores.cardio.toFixed(1)}`]],
+      ['Body Composition', [`Waist: ${waistIn.toFixed(1)} in`, `Height: ${heightIn.toFixed(1)} in`, waistExempt ? 'Exempt from PFRA denominator' : `WHtR: ${whtrValue.toFixed(2)}`]],
+      ['Strength', [`Test: ${strengthTest === 'pushups' ? 'Push-ups' : 'Hand-release Push-ups'}`, `Result: ${pushupReps} reps`, strengthExempt ? 'Exempt from PFRA denominator' : `Score: ${scores.strength.toFixed(1)}`]],
+      ['Core', [`Test: ${coreTest === 'situps' ? 'Sit-ups' : coreTest === 'cross_leg_reverse_crunch' ? 'Cross-leg Reverse Crunch' : 'Plank'}`, `Result: ${coreTest === 'plank' ? formatMMSS(plankSec) : `${coreReps} reps`}`, coreExempt ? 'Exempt from PFRA denominator' : `Score: ${scores.core.toFixed(1)}`]],
+      ['Cardio', [`Test: ${cardioTest === 'run_2mile' ? '2-mile Run' : cardioTest === 'walk_2k' ? '2K Walk' : '20m HAMR'}`, `Result: ${cardioRawValue}`, cardioExempt ? 'Exempt from PFRA denominator' : selectedHamrStage ? `Level ${selectedHamrStage.level}, Shuttle ${selectedHamrStage.shuttleInLevel} of ${selectedHamrStage.shuttlesInLevel}` : `Score: ${cardioTest === 'walk_2k' ? (walkPass ? 'PASS' : 'FAIL') : scores.cardio.toFixed(1)}`]],
     ] as const;
 
     detailBlocks.forEach(([title, lines], index) => {
@@ -1023,6 +1129,65 @@ export default function CalculatorScreen() {
     }
   };
 
+  const savePFRAToAccount = async () => {
+    if (!user || !currentMember) {
+      return;
+    }
+
+    try {
+      setIsSavingOfficialPfRA(true);
+      const assessmentDate = savePfRADate.toISOString().split('T')[0];
+      const cardioComponent =
+        cardioTest === 'hamr_20m'
+          ? { score: scores.cardio, laps: hamrShuttles, test: '20m HAMR', exempt: cardioExempt }
+          : { score: cardioTest === 'walk_2k' ? (walkPass ? 50 : 0) : scores.cardio, time: cardioTest === 'run_2mile' ? formatMMSS(runSec) : formatMMSS(walkSec), test: cardioTest === 'run_2mile' ? '2-mile Run' : '2K Walk', exempt: cardioExempt };
+
+      updateMember(user.id, {
+        fitnessAssessments: [
+          ...currentMember.fitnessAssessments,
+          {
+            id: `pfra-${Date.now()}`,
+            date: assessmentDate,
+            overallScore: officialTotal ?? 0,
+            components: {
+              cardio: cardioComponent,
+              pushups: {
+                score: scores.strength,
+                reps: pushupReps,
+                test: strengthTest === 'pushups' ? 'Push-ups' : 'Hand-release Push-ups',
+                exempt: strengthExempt,
+              },
+              situps: {
+                score: scores.core,
+                reps: coreTest === 'plank' ? 0 : coreReps,
+                time: coreTest === 'plank' ? formatMMSS(plankSec) : undefined,
+                test: coreTest === 'situps' ? 'Sit-ups' : coreTest === 'cross_leg_reverse_crunch' ? 'Cross-leg Reverse Crunch' : 'Plank',
+                exempt: coreExempt,
+              },
+              waist: {
+                score: scores.waist,
+                inches: waistIn,
+                exempt: waistExempt,
+              },
+            },
+            isPrivate: false,
+          },
+        ],
+      });
+
+      if ((officialTotal ?? 0) >= 90) {
+        awardAchievement(user.id, 'excellent_fa');
+      }
+      if ((officialTotal ?? 0) === 100) {
+        awardAchievement(user.id, 'perfect_fa');
+      }
+
+      setShowOfficialSaveModal(false);
+    } finally {
+      setIsSavingOfficialPfRA(false);
+    }
+  };
+
   const renderAudioCard = (className = '', style?: any) => (
     <View className={className} style={style}>
       <View className="rounded-2xl border border-white/10 bg-white/5 p-4">
@@ -1049,8 +1214,11 @@ export default function CalculatorScreen() {
   );
 
   const bodyCompCard = (
-    <View onLayout={setSectionY('bodycomp')} className="rounded-2xl border p-5" style={{ backgroundColor: THEMES.whtR.soft, borderColor: THEMES.whtR.border }}>
-      <View className="mb-4"><Text className="text-lg font-semibold text-white">Body Composition</Text></View>
+      <View onLayout={setSectionY('bodycomp')} className="rounded-2xl border p-5" style={{ backgroundColor: THEMES.whtR.soft, borderColor: THEMES.whtR.border }}>
+      <View className="mb-4 flex-row items-center justify-between gap-3">
+        <Text className="text-lg font-semibold text-white">Body Composition</Text>
+        <ExemptToggle checked={waistExempt} onPress={() => setWaistExempt((current) => !current)} />
+      </View>
       <MetricRow label="WHtR" value={whtrValue.toFixed(2)} />
       <LabeledSlider label="Waist" valueLabel={`${waistIn.toFixed(1)} in • score ${scores.waist.toFixed(1)}/20`} theme={THEMES.whtR} input={<BoundNumberField value={waistIn} onChange={setWaistIn} min={20} max={60} step={0.5} decimals={1} className="min-w-[64px] px-2.5" />} markers={waistMarkers} markerMin={20} markerMax={60}>
         <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={waistIn} onValueChange={(v) => setWaistIn(Number(v))} minimumValue={20} maximumValue={60} step={0.5} />
@@ -1063,7 +1231,10 @@ export default function CalculatorScreen() {
 
   const strengthCard = (
     <View onLayout={setSectionY('strength')} className="rounded-2xl border p-5" style={{ backgroundColor: THEMES.strength.soft, borderColor: THEMES.strength.border }}>
-      <Text className="mb-4 text-lg font-semibold text-white">Strength</Text>
+      <View className="mb-4 flex-row items-center justify-between gap-3">
+        <Text className="text-lg font-semibold text-white">Strength</Text>
+        <ExemptToggle checked={strengthExempt} onPress={() => setStrengthExempt((current) => !current)} />
+      </View>
       <View className="mb-5 rounded-lg bg-white/10 p-1 flex-row">
         <SegmentedOption selected={strengthTest === 'pushups'} label="Push-ups" onPress={() => setStrengthTest('pushups')} theme={THEMES.strength} />
         <SegmentedOption selected={strengthTest === 'hand_release_pushups'} label="Hand-release" onPress={() => setStrengthTest('hand_release_pushups')} theme={THEMES.strength} />
@@ -1076,7 +1247,10 @@ export default function CalculatorScreen() {
 
   const coreCard = (
     <View onLayout={setSectionY('core')} className="rounded-2xl border p-5" style={{ backgroundColor: THEMES.core.soft, borderColor: THEMES.core.border }}>
-      <Text className="mb-4 text-lg font-semibold text-white">Core</Text>
+      <View className="mb-4 flex-row items-center justify-between gap-3">
+        <Text className="text-lg font-semibold text-white">Core</Text>
+        <ExemptToggle checked={coreExempt} onPress={() => setCoreExempt((current) => !current)} />
+      </View>
       <View className="mb-5 rounded-lg bg-white/10 p-1 flex-row">
         <SegmentedOption selected={coreTest === 'situps'} label="Sit-ups" onPress={() => setCoreTest('situps')} theme={THEMES.core} />
         <SegmentedOption selected={coreTest === 'cross_leg_reverse_crunch'} label="Cross-leg" onPress={() => setCoreTest('cross_leg_reverse_crunch')} theme={THEMES.core} />
@@ -1096,7 +1270,10 @@ export default function CalculatorScreen() {
 
   const cardioCard = (
     <View onLayout={setSectionY('cardio')} className="rounded-2xl border p-5" style={{ backgroundColor: THEMES.cardio.soft, borderColor: THEMES.cardio.border }}>
-      <Text className="mb-4 text-lg font-semibold text-white">Cardio</Text>
+      <View className="mb-4 flex-row items-center justify-between gap-3">
+        <Text className="text-lg font-semibold text-white">Cardio</Text>
+        <ExemptToggle checked={cardioExempt} onPress={() => setCardioExempt((current) => !current)} />
+      </View>
       <View className="mb-5 rounded-lg bg-white/10 p-1 flex-row">
         <SegmentedOption selected={cardioTest === 'run_2mile'} label="2-mile Run" onPress={() => setCardioTest('run_2mile')} theme={THEMES.cardio} />
         <SegmentedOption selected={cardioTest === 'hamr_20m'} label="HAMR" onPress={() => setCardioTest('hamr_20m')} theme={THEMES.cardio} />
@@ -1161,12 +1338,20 @@ export default function CalculatorScreen() {
                 <Text className="text-2xl font-bold text-white">PFRA Calculator</Text>
                 <Text className="mt-1 text-sm text-af-silver">Based on PFRA Scoring Charts released on 1 MAR 2026</Text>
               </View>
-              <Pressable
-                onPress={() => setShowSaveModal(true)}
-                className="rounded-xl border border-af-accent/50 bg-af-accent/15 px-4 py-2.5"
-              >
-                <Text className="font-semibold text-af-accent">Save Results</Text>
-              </Pressable>
+              <View className="items-end gap-2">
+                <Pressable
+                  onPress={() => setShowSaveModal(true)}
+                  className="rounded-xl border border-af-accent/50 bg-af-accent/15 px-4 py-2.5"
+                >
+                  <Text className="font-semibold text-af-accent">Export Results</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => setShowOfficialSaveModal(true)}
+                  className="rounded-xl border border-af-gold/50 bg-af-gold/15 px-4 py-2.5"
+                >
+                  <Text className="font-semibold text-af-gold">Save PFRA to Account</Text>
+                </Pressable>
+              </View>
             </View>
           </View>
 
@@ -1210,7 +1395,7 @@ export default function CalculatorScreen() {
 
                       <View className="flex-1">
                         {scoreSummaryRows.map((row) => (
-                          <ComponentScoreBar key={row.label} label={row.label} value={row.score} max={row.max} theme={row.theme} isPassFail={row.isPassFail} detail={row.detail} onPress={() => scrollToSection(row.label === 'WHtR' ? 'bodycomp' : row.label === 'Strength' ? 'strength' : row.label === 'Core' ? 'core' : 'cardio')} />
+                          <ComponentScoreBar key={row.label} label={row.label} value={row.score} max={row.max} theme={row.theme} isPassFail={row.isPassFail} detail={row.detail} exempt={row.exempt} onPress={() => scrollToSection(row.label === 'WHtR' ? 'bodycomp' : row.label === 'Strength' ? 'strength' : row.label === 'Core' ? 'core' : 'cardio')} />
                         ))}
                       </View>
                     </View>
@@ -1272,7 +1457,7 @@ export default function CalculatorScreen() {
 
                     <View className="flex-1">
                       {scoreSummaryRows.map((row) => (
-                        <ComponentScoreBar key={row.label} label={row.label} value={row.score} max={row.max} theme={row.theme} isPassFail={row.isPassFail} detail={row.detail} onPress={() => scrollToSection(row.label === 'WHtR' ? 'bodycomp' : row.label === 'Strength' ? 'strength' : row.label === 'Core' ? 'core' : 'cardio')} />
+                        <ComponentScoreBar key={row.label} label={row.label} value={row.score} max={row.max} theme={row.theme} isPassFail={row.isPassFail} detail={row.detail} exempt={row.exempt} onPress={() => scrollToSection(row.label === 'WHtR' ? 'bodycomp' : row.label === 'Strength' ? 'strength' : row.label === 'Core' ? 'core' : 'cardio')} />
                       ))}
                     </View>
                   </View>
@@ -1295,7 +1480,7 @@ export default function CalculatorScreen() {
       <Modal visible={showSaveModal} transparent animationType="fade">
         <View className="flex-1 items-center justify-center bg-black/75 p-6">
           <View className="w-full max-w-md rounded-3xl border border-white/15 bg-[#0F1F36] p-6">
-            <Text className="text-xl font-bold text-white">Save Calculator Results</Text>
+            <Text className="text-xl font-bold text-white">Export Calculator Results</Text>
             <Text className="mt-2 text-sm text-af-silver">Name your 1-page PDF before it is saved.</Text>
             <Text className="mt-1 text-xs text-white/55">Examples: `name-date-official` or `name-date-goal`</Text>
             <TextInput
@@ -1318,7 +1503,96 @@ export default function CalculatorScreen() {
                 className="ml-2 flex-1 rounded-xl bg-af-accent py-3"
                 disabled={isSavingPdf}
               >
-                <Text className="text-center font-semibold text-white">{isSavingPdf ? 'Saving...' : 'Save PDF'}</Text>
+                <Text className="text-center font-semibold text-white">{isSavingPdf ? 'Exporting...' : 'Export PDF'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showOfficialSaveModal} transparent animationType="fade">
+        <View className="flex-1 items-center justify-center bg-black/75 p-6">
+          <View className="w-full max-w-md rounded-3xl border border-white/15 bg-[#0F1F36] p-6">
+            <Text className="text-xl font-bold text-white">Save PFRA to Account</Text>
+            <Text className="mt-3 text-sm leading-6 text-af-silver">
+              This saves the current calculator state to your FitFlight account as a recorded PFRA result for your own tracking.
+            </Text>
+            <Text className="mt-2 text-xs text-white/55">
+              This is separate from the PFRA your UFPM enters officially. It does not change your required PT sessions.
+            </Text>
+            <View className="mt-5 rounded-xl border border-white/10 bg-white/5 p-4">
+              <View className="flex-row justify-between">
+                <Text className="text-af-silver">PFRA Score</Text>
+                <Text className="font-semibold text-white">{officialTotal === null ? 'N/A' : officialTotal.toFixed(1)}</Text>
+              </View>
+              <View className="mt-2">
+                <Text className="text-af-silver mb-2">PFRA Date</Text>
+                {Platform.OS === 'web' ? (
+                  React.createElement('input', {
+                    type: 'date',
+                    value: savePfRADate.toISOString().split('T')[0],
+                    max: new Date().toISOString().split('T')[0],
+                    onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
+                      const value = event.target.value;
+                      const nextDate = new Date(`${value}T00:00:00`);
+                      if (!Number.isNaN(nextDate.getTime()) && nextDate <= new Date()) {
+                        setSavePfRADate(nextDate);
+                      }
+                    },
+                    style: {
+                      width: '100%',
+                      borderRadius: 12,
+                      border: '1px solid rgba(255,255,255,0.15)',
+                      backgroundColor: 'rgba(255,255,255,0.10)',
+                      color: '#FFFFFF',
+                      padding: '12px 16px',
+                      outline: 'none',
+                    },
+                  })
+                ) : (
+                  <>
+                    <Pressable
+                      onPress={() => setShowSavePfRADatePicker(true)}
+                      className="rounded-xl border border-white/15 bg-white/10 px-4 py-3"
+                    >
+                      <Text className="text-white">{savePfRADate.toLocaleDateString()}</Text>
+                    </Pressable>
+                    {showSavePfRADatePicker ? (
+                      <DateTimePicker
+                        value={savePfRADate}
+                        mode="date"
+                        maximumDate={new Date()}
+                        onChange={(_, nextDate) => {
+                          setShowSavePfRADatePicker(false);
+                          if (nextDate && nextDate <= new Date()) {
+                            setSavePfRADate(nextDate);
+                          }
+                        }}
+                      />
+                    ) : null}
+                  </>
+                )}
+              </View>
+              <View className="mt-2 flex-row justify-between">
+                <Text className="text-af-silver">Cardio Test</Text>
+                <Text className="font-semibold text-white">{cardioTest === 'run_2mile' ? '2-mile Run' : cardioTest === 'walk_2k' ? '2K Walk' : '20m HAMR'}</Text>
+              </View>
+            </View>
+            <View className="mt-5 flex-row">
+              <Pressable
+                onPress={() => !isSavingOfficialPfRA && setShowOfficialSaveModal(false)}
+                className="mr-2 flex-1 rounded-xl border border-white/15 bg-white/10 py-3"
+              >
+                <Text className="text-center font-semibold text-white">Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => void savePFRAToAccount()}
+                className="ml-2 flex-1 rounded-xl bg-af-gold py-3"
+                disabled={isSavingOfficialPfRA}
+              >
+                <Text className="text-center font-semibold text-[#0A1628]">
+                  {isSavingOfficialPfRA ? 'Saving...' : 'Save to Account'}
+                </Text>
               </Pressable>
             </View>
           </View>

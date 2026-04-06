@@ -10,6 +10,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import { useMemberStore, useAuthStore, type Flight, type Member, type Squadron } from '@/lib/store';
 import { cn } from '@/lib/cn';
+import { createRosterMember } from '@/lib/supabaseData';
 
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
 const RANKS = ['AB', 'Amn', 'A1C', 'SrA', 'SSgt', 'TSgt', 'MSgt', 'SMSgt', 'CMSgt'];
@@ -18,15 +19,16 @@ interface ParsedRow {
   rank: string;
   firstName: string;
   lastName: string;
+  email: string;
   flight: string;
   isValid: boolean;
   errors: string[];
 }
 
 interface ColumnMapping {
+  fullName: number;
   rank: number;
-  firstName: number;
-  lastName: number;
+  email: number;
   flight: number;
 }
 
@@ -76,9 +78,9 @@ export default function ImportRosterScreen() {
   const [rawData, setRawData] = useState<string[][]>([]);
   const [hasHeader, setHasHeader] = useState(true);
   const [columnMapping, setColumnMapping] = useState<ColumnMapping>({
-    rank: 0,
-    firstName: 1,
-    lastName: 2,
+    fullName: 0,
+    rank: 1,
+    email: 2,
     flight: 3,
   });
   const [parsedRows, setParsedRows] = useState<ParsedRow[]>([]);
@@ -88,6 +90,35 @@ export default function ImportRosterScreen() {
   const [fileName, setFileName] = useState<string>('');
 
   const userSquadron: Squadron = user?.squadron ?? 'Hawks';
+
+  const parseRosterName = (input: string) => {
+    const trimmed = input.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    if (!trimmed.includes(',')) {
+      const parts = trimmed.split(/\s+/).filter(Boolean);
+      if (parts.length < 2) {
+        return null;
+      }
+
+      return {
+        firstName: parts[0],
+        lastName: parts.slice(1).join(' '),
+      };
+    }
+
+    const [lastPart, firstPart = ''] = trimmed.split(',', 2);
+    const firstName = firstPart.trim().split(/\s+/)[0] ?? '';
+    const lastName = lastPart.trim();
+
+    if (!firstName || !lastName) {
+      return null;
+    }
+
+    return { firstName, lastName };
+  };
 
   // Validate and normalize rank
   const normalizeRank = (input: string): string | null => {
@@ -146,23 +177,26 @@ export default function ImportRosterScreen() {
     const parsed: ParsedRow[] = dataRows.map(row => {
       const errors: string[] = [];
 
+      const rawFullName = row[columnMapping.fullName] || '';
+      const parsedName = parseRosterName(rawFullName);
       const rawRank = row[columnMapping.rank] || '';
-      const rawFirstName = row[columnMapping.firstName] || '';
-      const rawLastName = row[columnMapping.lastName] || '';
+      const rawEmail = (row[columnMapping.email] || '').trim().toLowerCase();
       const rawFlight = row[columnMapping.flight] || '';
 
       const normalizedRank = normalizeRank(rawRank);
       const normalizedFlight = normalizeFlight(rawFlight);
 
+      if (!parsedName) errors.push(`Invalid name format: "${rawFullName}"`);
       if (!normalizedRank) errors.push(`Invalid rank: "${rawRank}"`);
-      if (!rawFirstName.trim()) errors.push('Missing first name');
-      if (!rawLastName.trim()) errors.push('Missing last name');
+      if (!rawEmail) errors.push('Missing email');
       if (!normalizedFlight) errors.push(`Invalid flight: "${rawFlight}"`);
 
       // Check for duplicates
       const existingMember = members.find(
-        m => m.firstName.toLowerCase() === rawFirstName.trim().toLowerCase() &&
-             m.lastName.toLowerCase() === rawLastName.trim().toLowerCase() &&
+        m => ((rawEmail && m.email.toLowerCase() === rawEmail) || (
+             parsedName &&
+             m.firstName.toLowerCase() === parsedName.firstName.toLowerCase() &&
+             m.lastName.toLowerCase() === parsedName.lastName.toLowerCase())) &&
              m.squadron === userSquadron
       );
       if (existingMember) {
@@ -171,8 +205,9 @@ export default function ImportRosterScreen() {
 
       return {
         rank: normalizedRank || rawRank,
-        firstName: rawFirstName.trim(),
-        lastName: rawLastName.trim(),
+        firstName: parsedName?.firstName ?? '',
+        lastName: parsedName?.lastName ?? '',
+        email: rawEmail,
         flight: normalizedFlight || rawFlight,
         isValid: errors.length === 0,
         errors,
@@ -233,13 +268,13 @@ export default function ImportRosterScreen() {
 
       headerRow.forEach((cell, index) => {
         const lower = cell.toLowerCase();
-        if (lower.includes('rank') || lower === 'grade') {
+        if (lower.includes('full_name') || lower.includes('full name') || lower === 'name') {
+          autoMapping.fullName = index;
+        } else if (lower.includes('rank') || lower === 'grade') {
           autoMapping.rank = index;
-        } else if (lower.includes('first') || lower === 'fname') {
-          autoMapping.firstName = index;
-        } else if (lower.includes('last') || lower === 'lname' || lower === 'surname') {
-          autoMapping.lastName = index;
-        } else if (lower.includes('flight') || lower === 'section' || lower === 'unit') {
+        } else if (lower.includes('email') || lower === 'mail') {
+          autoMapping.email = index;
+        } else if (lower.includes('flight') || lower.includes('flt') || lower === 'section' || lower === 'unit') {
           autoMapping.flight = index;
         }
       });
@@ -255,9 +290,15 @@ export default function ImportRosterScreen() {
 
   // Import valid rows
   const handleImport = () => {
+    const run = async () => {
+      if (!accessToken) {
+        Alert.alert('Sign In Required', 'You must be signed in to import roster members.');
+        return;
+      }
+
     const validRows = parsedRows.filter(row => row.isValid);
 
-    validRows.forEach(row => {
+    for (const row of validRows) {
       const newMember: Member = {
         id: Date.now().toString() + Math.random().toString(36).substring(2, 9),
         rank: row.rank,
@@ -266,7 +307,7 @@ export default function ImportRosterScreen() {
         flight: row.flight as Flight,
         squadron: userSquadron,
         accountType: 'standard',
-        email: `${row.lastName.toLowerCase()}.${row.firstName.toLowerCase()}@us.af.mil`,
+        email: row.email,
         exerciseMinutes: 0,
         distanceRun: 0,
         connectedApps: [],
@@ -279,12 +320,18 @@ export default function ImportRosterScreen() {
         monthlyPlacements: [],
         trophyCount: 0,
       };
+      await createRosterMember(newMember, accessToken);
       addMember(newMember);
-    });
+    }
 
     setImportedCount(validRows.length);
     setStep('complete');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    };
+
+    void run().catch((error) => {
+      Alert.alert('Import failed', error instanceof Error ? error.message : 'Unable to import this roster.');
+    });
   };
 
   const validCount = parsedRows.filter(r => r.isValid).length;
@@ -292,6 +339,7 @@ export default function ImportRosterScreen() {
 
   // Get column headers for mapping display
   const headerRow = hasHeader && rawData.length > 0 ? rawData[0] : [];
+  const accessToken = useAuthStore(s => s.accessToken);
 
   return (
     <View className="flex-1">
@@ -359,28 +407,34 @@ export default function ImportRosterScreen() {
                 <View className="space-y-2">
                   <View className="flex-row items-center">
                     <View className="w-2 h-2 bg-af-accent rounded-full mr-3" />
-                    <Text className="text-white">Rank (e.g., SSgt, A1C)</Text>
+                    <Text className="text-white">FULL_NAME (for example, BROADHEAD, BENJAMIN LEWIS)</Text>
                   </View>
                   <View className="flex-row items-center mt-2">
                     <View className="w-2 h-2 bg-af-accent rounded-full mr-3" />
-                    <Text className="text-white">First Name</Text>
+                    <Text className="text-white">RANK (e.g., SSG, A1C)</Text>
                   </View>
                   <View className="flex-row items-center mt-2">
                     <View className="w-2 h-2 bg-af-accent rounded-full mr-3" />
-                    <Text className="text-white">Last Name</Text>
+                    <Text className="text-white">EMAIL</Text>
                   </View>
                   <View className="flex-row items-center mt-2">
                     <View className="w-2 h-2 bg-af-accent rounded-full mr-3" />
-                    <Text className="text-white">Flight (e.g., Apex, Doom)</Text>
+                    <Text className="text-white">FLT-DET (e.g., A FLT, D FLT, DET 1)</Text>
                   </View>
                 </View>
 
                 <View className="mt-4 p-3 bg-white/5 rounded-xl">
                   <Text className="text-af-silver text-xs">Example:</Text>
                   <Text className="text-white/80 font-mono text-xs mt-1">
-                    Rank,First Name,Last Name,Flight{'\n'}
-                    SSgt,John,Smith,Apex{'\n'}
-                    A1C,Jane,Doe,Bomber
+                    FULL_NAME,RANK,EMAIL,FLT-DET{'\n'}
+                    BROADHEAD, BENJAMIN LEWIS,SSG,benjamin.broadhead.2@us.af.mil,D FLT{'\n'}
+                    PENA, DANIEL,A1C,daniel.pena.1@us.af.mil,B FLT
+                  </Text>
+                </View>
+
+                <View className="mt-4 p-3 bg-af-accent/10 rounded-xl border border-af-accent/20">
+                  <Text className="text-af-silver text-sm">
+                    Imported members are added to the existing roster for your squadron. They do not replace the members already in the app.
                   </Text>
                 </View>
               </View>
@@ -428,7 +482,7 @@ export default function ImportRosterScreen() {
               <View className="mt-4">
                 <Text className="text-white font-semibold mb-3">Map Columns</Text>
 
-                {(['rank', 'firstName', 'lastName', 'flight'] as const).map((field) => (
+                {(['fullName', 'rank', 'email', 'flight'] as const).map((field) => (
                   <Pressable
                     key={field}
                     onPress={() => {
@@ -439,8 +493,8 @@ export default function ImportRosterScreen() {
                   >
                     <View>
                       <Text className="text-white font-medium">
-                        {field === 'firstName' ? 'First Name' :
-                         field === 'lastName' ? 'Last Name' :
+                        {field === 'fullName' ? 'Full Name' :
+                         field === 'email' ? 'Email' :
                          field.charAt(0).toUpperCase() + field.slice(1)}
                       </Text>
                       <Text className="text-af-silver text-sm">
@@ -459,12 +513,16 @@ export default function ImportRosterScreen() {
                   <Text className="text-white/60 text-xs uppercase mb-2">First Data Row Preview</Text>
                   <View className="flex-row flex-wrap">
                     <Text className="text-white mr-2">
+                      <Text className="text-af-silver">Name: </Text>
+                      {rawData[hasHeader ? 1 : 0]?.[columnMapping.fullName] || '-'}
+                    </Text>
+                    <Text className="text-white mr-2">
                       <Text className="text-af-silver">Rank: </Text>
                       {rawData[hasHeader ? 1 : 0]?.[columnMapping.rank] || '-'}
                     </Text>
-                    <Text className="text-white mr-2">
-                      <Text className="text-af-silver">Name: </Text>
-                      {rawData[hasHeader ? 1 : 0]?.[columnMapping.firstName] || '-'} {rawData[hasHeader ? 1 : 0]?.[columnMapping.lastName] || '-'}
+                    <Text className="text-white">
+                      <Text className="text-af-silver">Email: </Text>
+                      {rawData[hasHeader ? 1 : 0]?.[columnMapping.email] || '-'}
                     </Text>
                     <Text className="text-white">
                       <Text className="text-af-silver">Flight: </Text>
@@ -518,6 +576,7 @@ export default function ImportRosterScreen() {
                         <Text className="text-white font-medium">
                           {row.rank} {row.firstName} {row.lastName}
                         </Text>
+                        <Text className="text-af-silver text-sm">{row.email}</Text>
                         <Text className="text-af-silver text-sm">{row.flight} Flight</Text>
                       </View>
                       {row.isValid ? (
@@ -579,7 +638,7 @@ export default function ImportRosterScreen() {
               </View>
               <Text className="text-white text-2xl font-bold mb-2">Import Complete</Text>
               <Text className="text-af-silver text-center mb-6">
-                Successfully imported {importedCount} members to your roster
+                Successfully added {importedCount} members to the {userSquadron} roster
               </Text>
 
               <View className="flex-row items-center bg-white/5 rounded-xl p-4 mb-6">
@@ -606,8 +665,8 @@ export default function ImportRosterScreen() {
           <View className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[60%]">
             <View className="flex-row items-center justify-between mb-6">
               <Text className="text-white text-xl font-bold">
-                Select Column for {selectedColumn === 'firstName' ? 'First Name' :
-                  selectedColumn === 'lastName' ? 'Last Name' :
+                Select Column for {selectedColumn === 'fullName' ? 'Full Name' :
+                  selectedColumn === 'email' ? 'Email' :
                   selectedColumn ? selectedColumn.charAt(0).toUpperCase() + selectedColumn.slice(1) : ''}
               </Text>
               <Pressable
