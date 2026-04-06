@@ -458,12 +458,30 @@ export default function AttendanceScreen() {
           className="px-6 mb-4"
         >
           <View className="rounded-2xl border border-white/10 bg-white/5 p-3">
-          <View onLayout={handleFlightStripLayout} {...flightPanResponder.panHandlers}>
+          <View onLayout={handleFlightStripLayout}>
           <ScrollView
             ref={flightScrollRef}
             horizontal
-            scrollEnabled={false}
+            bounces={false}
+            scrollEnabled={flightHorizontalOverflow > 0}
             showsHorizontalScrollIndicator={false}
+            scrollEventThrottle={16}
+            onScroll={(event) => {
+              const x = event.nativeEvent.contentOffset.x;
+              flightScrollXRef.current = x;
+              const epsilon = 2;
+              const atBoundary = flightHorizontalOverflow <= 0 ||
+                x <= epsilon ||
+                x >= flightHorizontalOverflow - epsilon;
+              setSwipeEnabled(atBoundary);
+            }}
+            onTouchStart={() => {
+              const epsilon = 2;
+              const atBoundary = flightHorizontalOverflow <= 0 ||
+                flightScrollXRef.current <= epsilon ||
+                flightScrollXRef.current >= flightHorizontalOverflow - epsilon;
+              setSwipeEnabled(atBoundary);
+            }}
             style={{ flexGrow: 0 }}
           >
             <View className="flex-row">
@@ -522,24 +540,13 @@ export default function AttendanceScreen() {
                 ref={headerScrollRef}
                 horizontal
                 bounces={false}
-                scrollEnabled={horizontalOverflow > 0}
+                scrollEnabled={false}
                 showsHorizontalScrollIndicator={false}
                 scrollEventThrottle={16}
                 onScroll={(event) => handleHorizontalScroll(event, 'header')}
-                onTouchStart={() => {
-                  markAttendanceInteraction(true);
-                  updateSwipeState(currentScrollXRef.current);
-                }}
-                onScrollBeginDrag={() => markAttendanceInteraction(true)}
-                onScrollEndDrag={(event) => {
-                  markAttendanceInteraction(false);
-                  updateSwipeState(event.nativeEvent.contentOffset.x);
-                }}
-                onMomentumScrollBegin={() => markAttendanceInteraction(true)}
-                onMomentumScrollEnd={(event) => {
-                  markAttendanceInteraction(false);
-                  updateSwipeState(event.nativeEvent.contentOffset.x);
-                }}
+                onTouchStart={() => updateSwipeState(currentScrollXRef.current)}
+                onScrollEndDrag={(event) => updateSwipeState(event.nativeEvent.contentOffset.x)}
+                onMomentumScrollEnd={(event) => updateSwipeState(event.nativeEvent.contentOffset.x)}
               >
                 <View className="flex-row" style={{ width: dayColumnsWidth }}>
                   {weekDays.map((day) => (
