@@ -10,7 +10,8 @@
     "newArchEnabled": true,
     "web": {
       "bundler": "metro",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/favicon.png",
+      "output": "static"
     },
     "ios": {
       "supportsTablet": true,

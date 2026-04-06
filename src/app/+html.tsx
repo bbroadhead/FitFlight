@@ -18,8 +18,9 @@ export default function Root({ children }: { children: React.ReactNode }) {
           rel="apple-touch-icon"
           sizes="180x180"
           type="image/png"
-          href={`${basePath}/apple-touch-icon.png`}
+          href="apple-touch-icon.png"
         />
+        <link rel="apple-touch-icon" href={`${basePath}/apple-touch-icon.png`} />
         <link rel="icon" type="image/png" sizes="192x192" href={`${basePath}/logo192.png`} />
         <link rel="icon" type="image/png" sizes="512x512" href={`${basePath}/logo512.png`} />
         {/* iOS PWA support */}
