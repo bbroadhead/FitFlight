@@ -11,7 +11,6 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import Svg, { Circle } from 'react-native-svg';
 import { Buffer } from 'buffer';
-import { jsPDF } from 'jspdf';
 
 import SmartSlider from '@/components/SmartSlider';
 import { useAuthStore, useMemberStore } from '@/lib/store';
@@ -1022,6 +1021,7 @@ export default function CalculatorScreen() {
   `;
 
   const saveCalculatorPdfOnWeb = async (filename: string) => {
+    const { jsPDF } = await import('jspdf/dist/jspdf.es.min.js');
     const pdf = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
     pdf.setFillColor(10, 22, 40);
     pdf.rect(0, 0, 792, 612, 'F');
