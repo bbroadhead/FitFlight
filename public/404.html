@@ -5,7 +5,29 @@
     <title>FitFlight</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <script>
-      window.location.replace('/FitFlight/index.html');
+      (function () {
+        var basePath = '/FitFlight/';
+        var path = window.location.pathname;
+        var normalizedPath = path.toLowerCase();
+
+        if (normalizedPath.indexOf(basePath.toLowerCase()) !== 0) {
+          window.location.replace('/FitFlight/index.html');
+          return;
+        }
+
+        var route = path.slice(basePath.length).replace(/^\/+|\/+$/g, '');
+        if (!route) {
+          window.location.replace('/FitFlight/index.html');
+          return;
+        }
+
+        if (!route.includes('.') && !route.includes('/')) {
+          window.location.replace(basePath + route + '.html');
+          return;
+        }
+
+        window.location.replace('/FitFlight/index.html');
+      })();
     </script>
   </head>
   <body style="background:#0A1628;color:#fff;font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;">
