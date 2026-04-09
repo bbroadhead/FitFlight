@@ -7,15 +7,18 @@ import * as Haptics from 'expo-haptics';
 import { Activity, CheckCircle2, CircleAlert } from 'lucide-react-native';
 import { type IntegrationService, useAuthStore, useMemberStore } from '@/lib/store';
 import { consumePendingStravaOAuth, exchangeStravaCode, mapImportedWorkouts } from '@/lib/strava';
+import { fetchAttendanceSessions, setAttendanceStatus } from '@/lib/supabaseData';
 
 export default function StravaCallbackScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ code?: string; state?: string; error?: string }>();
   const user = useAuthStore((state) => state.user);
+  const accessToken = useAuthStore((state) => state.accessToken);
   const updateUser = useAuthStore((state) => state.updateUser);
   const members = useMemberStore((state) => state.members);
   const updateMember = useMemberStore((state) => state.updateMember);
   const importWorkouts = useMemberStore((state) => state.importWorkouts);
+  const syncPTSessions = useMemberStore((state) => state.syncPTSessions);
 
   const [status, setStatus] = useState<'working' | 'success' | 'error'>('working');
   const [message, setMessage] = useState('Connecting your Strava account...');
@@ -49,7 +52,32 @@ export default function StravaCallbackScreen() {
           email: pending.email || user.email,
         });
 
-        importWorkouts(user.id, mapImportedWorkouts(result.workouts));
+        const importedWorkouts = mapImportedWorkouts(result.workouts);
+        importWorkouts(user.id, importedWorkouts);
+
+        if (accessToken && result.workouts.length > 0) {
+          const currentMember = members.find((member) => member.id === user.id);
+          const uniqueWorkoutDates = Array.from(new Set(result.workouts.map((workout) => workout.date)));
+
+          if (currentMember) {
+            await Promise.all(
+              uniqueWorkoutDates.map((date) =>
+                setAttendanceStatus({
+                  date,
+                  flight: currentMember.flight,
+                  squadron: currentMember.squadron,
+                  memberId: user.id,
+                  createdBy: user.id,
+                  isAttending: true,
+                  accessToken,
+                }).catch(() => undefined)
+              )
+            );
+
+            const nextSessions = await fetchAttendanceSessions(accessToken).catch(() => []);
+            syncPTSessions(nextSessions);
+          }
+        }
 
         const currentIntegrations: IntegrationService[] = user.connectedIntegrations ?? [];
         const nextIntegrations: IntegrationService[] = currentIntegrations.includes('strava')
@@ -102,7 +130,7 @@ export default function StravaCallbackScreen() {
     return () => {
       isMounted = false;
     };
-  }, [importWorkouts, members, params.code, params.error, params.state, router, updateMember, updateUser, user]);
+  }, [accessToken, importWorkouts, members, params.code, params.error, params.state, router, syncPTSessions, updateMember, updateUser, user]);
 
   return (
     <View className="flex-1">

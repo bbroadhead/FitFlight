@@ -7,10 +7,9 @@ import { ChevronLeft, Camera, Upload, X, Check, Clock, MapPin, Lock, Unlock, Ale
 import Animated, { FadeInDown, FadeIn, ZoomIn } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system';
 import { useMemberStore, useAuthStore, getDisplayName, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
-import { createManualWorkoutSubmission } from '@/lib/supabaseData';
+import { createManualWorkoutSubmission, uploadWorkoutProofImage } from '@/lib/supabaseData';
 
 export default function AddWorkoutScreen() {
   const router = useRouter();
@@ -27,6 +26,7 @@ export default function AddWorkoutScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const workoutTypeScrollRef = useRef<ScrollView>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [screenshotMimeType, setScreenshotMimeType] = useState<string | undefined>(undefined);
 
   const canSubmit = duration && screenshotUri;
   const webWorkoutTypeScrollProps = Platform.OS === 'web'
@@ -52,6 +52,7 @@ export default function AddWorkoutScreen() {
 
     if (!result.canceled && result.assets[0]) {
       setScreenshotUri(result.assets[0].uri);
+      setScreenshotMimeType(result.assets[0].mimeType ?? undefined);
     }
   };
 
@@ -66,34 +67,8 @@ export default function AddWorkoutScreen() {
 
     if (!result.canceled && result.assets[0]) {
       setScreenshotUri(result.assets[0].uri);
+      setScreenshotMimeType(result.assets[0].mimeType ?? undefined);
     }
-  };
-
-  const convertImageToDataUrl = async (uri: string) => {
-    if (Platform.OS === 'web') {
-      const response = await fetch(uri);
-      const blob = await response.blob();
-      const mimeType = blob.type || 'image/jpeg';
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const result = reader.result;
-          if (typeof result === 'string') {
-            resolve(result.split(',')[1] ?? '');
-            return;
-          }
-          reject(new Error('Unable to read image proof.'));
-        };
-        reader.onerror = () => reject(new Error('Unable to read image proof.'));
-        reader.readAsDataURL(blob);
-      });
-      return `data:${mimeType};base64,${base64}`;
-    }
-
-    const base64 = await FileSystem.readAsStringAsync(uri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
-    return `data:image/jpeg;base64,${base64}`;
   };
 
   const handleSubmit = () => {
@@ -104,8 +79,16 @@ export default function AddWorkoutScreen() {
       setIsSubmitting(true);
 
       try {
-        const proofImageData = await convertImageToDataUrl(screenshotUri);
+        const submissionId = `manual-workout-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        const proofImageData = await uploadWorkoutProofImage({
+          memberId: user.id,
+          submissionId,
+          localUri: screenshotUri,
+          mimeType: screenshotMimeType,
+          accessToken,
+        });
         await createManualWorkoutSubmission({
+          submissionId,
           memberId: user.id,
           memberEmail: user.email,
           memberName: getDisplayName(user),
@@ -211,7 +194,10 @@ export default function AddWorkoutScreen() {
                     resizeMode="cover"
                   />
                   <Pressable
-                    onPress={() => setScreenshotUri(null)}
+                    onPress={() => {
+                      setScreenshotUri(null);
+                      setScreenshotMimeType(undefined);
+                    }}
                     className="absolute top-2 right-2 w-8 h-8 bg-black/50 rounded-full items-center justify-center"
                   >
                     <X size={18} color="white" />

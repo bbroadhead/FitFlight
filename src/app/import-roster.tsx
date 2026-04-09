@@ -318,6 +318,7 @@ export default function ImportRosterScreen() {
         isVerified: false,
         ptlPendingApproval: false,
         monthlyPlacements: [],
+        leaderboardHistory: [],
         trophyCount: 0,
       };
       await createRosterMember(newMember, accessToken);

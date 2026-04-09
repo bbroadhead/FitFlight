@@ -1,16 +1,16 @@
 import React, { useMemo, useEffect, useState } from 'react';
-import { View, Text, Pressable, ScrollView, Image } from 'react-native';
+import { View, Text, Pressable, ScrollView, Image, Modal } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ChevronLeft, Timer, MapPin, Trophy, Lock, Unlock, TrendingUp, Shield, Camera, Dumbbell, Activity, Image as ImageIcon, BarChart3, User } from 'lucide-react-native';
+import { ChevronLeft, Timer, MapPin, Trophy, Lock, Unlock, TrendingUp, Shield, Camera, Dumbbell, Activity, Image as ImageIcon, BarChart3, User, X, Award, ClipboardList, FileText } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeInUp, useAnimatedStyle, useSharedValue, withSpring, withDelay } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { useMemberStore, useAuthStore, getDisplayName, ALL_ACHIEVEMENTS, canEditAttendance, type AccountType, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { TrophyCase, CompactTrophyBadges } from '@/components/TrophyCase';
 import { buildTrophyStats, getRarestEarnedTrophies } from '@/lib/trophies';
-import { getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
+import { formatMonthLabel, getAvailableMonthKeys, getMemberEffectiveWorkouts, getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
 
 // Workout type colors
 const WORKOUT_TYPE_COLORS: Record<WorkoutType, string> = {
@@ -33,7 +33,7 @@ function WorkoutTypeBar({
   maxPercentage,
   delay = 0,
 }: {
-  type: WorkoutType;
+  type: string;
   count: number;
   percentage: number;
   maxPercentage: number;
@@ -50,7 +50,7 @@ function WorkoutTypeBar({
     width: `${barWidth.value}%`,
   }));
 
-  const color = WORKOUT_TYPE_COLORS[type];
+  const color = type === 'Attendance' ? '#FACC15' : (WORKOUT_TYPE_COLORS[type as WorkoutType] ?? '#6B7280');
 
   return (
     <View className="mb-3">
@@ -68,14 +68,27 @@ function WorkoutTypeBar({
   );
 }
 
+function getCompetitionPosition(scores: number[], index: number): number {
+  if (index <= 0) {
+    return 1;
+  }
+
+  return scores[index] === scores[index - 1] ? getCompetitionPosition(scores, index - 1) : index + 1;
+}
+
 export default function MemberProfileScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const members = useMemberStore(s => s.members);
+  const ptSessions = useMemberStore(s => s.ptSessions);
   const currentUser = useAuthStore(s => s.user);
   const currentUserSquadron = currentUser?.squadron ?? 'Hawks';
 
   const [showTrophyCase, setShowTrophyCase] = useState(false);
+  const [selectedSummaryMonth, setSelectedSummaryMonth] = useState(getMonthKey());
+  const [showWorkoutHistoryModal, setShowWorkoutHistoryModal] = useState(false);
+  const [showPFRAHistoryModal, setShowPFRAHistoryModal] = useState(false);
+  const [showLeaderboardHistoryModal, setShowLeaderboardHistoryModal] = useState(false);
 
   const member = useMemo(() => members.find(m => m.id === id), [members, id]);
   const canViewMember =
@@ -86,14 +99,22 @@ export default function MemberProfileScreen() {
   const isOwnProfile = currentUser?.id === member?.id;
   const canViewAllWorkouts = isOwnProfile || canEditAttendance(currentUser?.accountType ?? 'standard');
 
-  // Filter workouts based on privacy - must be before early return
+  const allEffectiveWorkouts = useMemo(() => {
+    if (!member) return [];
+    return getMemberEffectiveWorkouts(member, ptSessions);
+  }, [member, ptSessions]);
+
   const visibleWorkouts = useMemo(() => {
     if (!member) return [];
     if (canViewAllWorkouts) {
-      return member.workouts;
+      return allEffectiveWorkouts;
     }
-    return member.workouts.filter(w => !w.isPrivate);
-  }, [member?.workouts, canViewAllWorkouts, member]);
+    return allEffectiveWorkouts.filter((workout) => !workout.isPrivate);
+  }, [allEffectiveWorkouts, canViewAllWorkouts, member]);
+  const uploadedVisibleWorkouts = useMemo(
+    () => visibleWorkouts.filter((workout) => ['manual', 'screenshot', 'strava'].includes(workout.source)),
+    [visibleWorkouts]
+  );
 
   // Calculate leaderboard position
   const sortedMembers = useMemo(() => {
@@ -101,34 +122,25 @@ export default function MemberProfileScreen() {
     return members
       .filter((candidate) => candidate.squadron === (member?.squadron ?? currentUserSquadron))
       .sort((a, b) => {
-      const scoreA = getMemberMonthSummary(a, currentMonthKey).score;
-      const scoreB = getMemberMonthSummary(b, currentMonthKey).score;
+      const scoreA = getMemberMonthSummary(a, currentMonthKey, ptSessions).score;
+      const scoreB = getMemberMonthSummary(b, currentMonthKey, ptSessions).score;
       return scoreB - scoreA;
     });
-  }, [currentUserSquadron, member?.squadron, members]);
+  }, [currentUserSquadron, member?.squadron, members, ptSessions]);
 
-  // Calculate workout type breakdown
-  const workoutTypeBreakdown = useMemo(() => {
-    if (!member) return [];
-    const counts: Record<WorkoutType, number> = {} as Record<WorkoutType, number>;
-    WORKOUT_TYPES.forEach(type => { counts[type] = 0; });
+  const leaderboardPosition = useMemo(() => {
+    if (!member) {
+      return 0;
+    }
 
-    member.workouts.forEach(w => {
-      counts[w.type] = (counts[w.type] || 0) + 1;
-    });
+    const index = sortedMembers.findIndex(m => m.id === member.id);
+    if (index < 0) {
+      return 0;
+    }
 
-    const total = member.workouts.length;
-    const breakdown = WORKOUT_TYPES
-      .map(type => ({
-        type,
-        count: counts[type],
-        percentage: total > 0 ? (counts[type] / total) * 100 : 0,
-      }))
-      .filter(item => item.count > 0)
-      .sort((a, b) => b.count - a.count);
-
-    return breakdown;
-  }, [member?.workouts, member]);
+    const scores = sortedMembers.map((candidate) => getMemberMonthSummary(candidate, getMonthKey(), ptSessions).score);
+    return getCompetitionPosition(scores, index);
+  }, [member, ptSessions, sortedMembers]);
 
   if (!member || !canViewMember) {
     return (
@@ -139,8 +151,39 @@ export default function MemberProfileScreen() {
   }
 
   const displayName = getDisplayName(member);
-  const leaderboardPosition = sortedMembers.findIndex(m => m.id === member.id) + 1;
-  const totalScore = getMemberMonthSummary(member, getMonthKey()).score;
+  const availableSummaryMonths = useMemo(
+    () => getAvailableMonthKeys([member], ptSessions),
+    [member, ptSessions]
+  );
+  const summaryMonth = availableSummaryMonths.includes(selectedSummaryMonth)
+    ? selectedSummaryMonth
+    : availableSummaryMonths[0] ?? getMonthKey();
+  const monthlySummary = getMemberMonthSummary(member, summaryMonth, ptSessions);
+  const totalScore = monthlySummary.score;
+  const monthVisibleWorkouts = useMemo(
+    () => visibleWorkouts.filter((workout) => workout.date.startsWith(summaryMonth)),
+    [summaryMonth, visibleWorkouts]
+  );
+  const workoutTypeBreakdown = useMemo(() => {
+    const counts = new Map<string, number>();
+    WORKOUT_TYPES.forEach((type) => counts.set(type, 0));
+    counts.set('Attendance', 0);
+
+    monthVisibleWorkouts.forEach((workout) => {
+      const label = workout.source === 'attendance' ? 'Attendance' : workout.type;
+      counts.set(label, (counts.get(label) ?? 0) + 1);
+    });
+
+    const total = monthVisibleWorkouts.length;
+    return Array.from(counts.entries())
+      .map(([type, count]) => ({
+        type,
+        count,
+        percentage: total > 0 ? (count / total) * 100 : 0,
+      }))
+      .filter((item) => item.count > 0)
+      .sort((a, b) => b.count - a.count);
+  }, [monthVisibleWorkouts]);
 
   // Get fitness assessments (check privacy)
   const canViewFitnessAssessments = isOwnProfile ||
@@ -148,8 +191,20 @@ export default function MemberProfileScreen() {
     currentUser?.accountType === 'fitflight_creator' ||
     currentUser?.accountType === 'ufpm' ||
     currentUser?.accountType === 'squadron_leadership';
-
-  const latestAssessment = member.fitnessAssessments[member.fitnessAssessments.length - 1];
+  const pfraHistory = useMemo(
+    () => [...member.fitnessAssessments].sort((a, b) => b.date.localeCompare(a.date)),
+    [member]
+  );
+  const monthlyPFRAEntries = useMemo(
+    () => pfraHistory.filter((assessment) => assessment.date.startsWith(summaryMonth)),
+    [pfraHistory, summaryMonth]
+  );
+  const latestAssessment = pfraHistory[0];
+  const latestMonthlyPFRA = monthlyPFRAEntries[0] ?? null;
+  const leaderboardHistory = useMemo(
+    () => [...member.leaderboardHistory].sort((a, b) => b.month.localeCompare(a.month)),
+    [member]
+  );
 
   const getAccountTypeLabel = (accountType: AccountType) => {
     switch (accountType) {
@@ -194,10 +249,13 @@ export default function MemberProfileScreen() {
 
   const getSourceLabel = (source: string) => {
     switch (source) {
+      case 'attendance': return 'Attendance';
       case 'screenshot': return 'Screenshot';
-      case 'apple_health': return 'Apple Health';
+      // Future integration placeholder kept intentionally disabled.
+      // case 'apple_health': return 'Apple Health';
       case 'strava': return 'Strava';
-      case 'garmin': return 'Garmin';
+      // Future integration placeholder kept intentionally disabled.
+      // case 'garmin': return 'Garmin';
       default: return 'Manual';
     }
   };
@@ -226,7 +284,7 @@ export default function MemberProfileScreen() {
           >
             <ChevronLeft size={24} color="#C0C0C0" />
           </Pressable>
-          <Text className="text-white text-xl font-bold">Profile</Text>
+          <Text className="text-white text-xl font-bold">Account</Text>
         </Animated.View>
 
         <ScrollView
@@ -269,11 +327,17 @@ export default function MemberProfileScreen() {
                   </View>
                 )}
               </View>
-              <View className="flex-row items-center justify-center flex-wrap">
-                <Text className="text-white text-2xl font-bold mr-3">{displayName}</Text>
+              <Text className="text-white text-2xl font-bold text-center">{displayName}</Text>
+              <View className="mt-2 items-center">
                 <CompactTrophyBadges trophies={rarestTrophies} overflowCount={trophyOverflowCount} />
               </View>
-              <Text className="text-af-silver">{member.flight} Flight</Text>
+              <LinearGradient
+                colors={['rgba(255,215,0,0)', 'rgba(255,215,0,0.75)', 'rgba(255,215,0,0)']}
+                start={{ x: 0, y: 0.5 }}
+                end={{ x: 1, y: 0.5 }}
+                style={{ marginTop: 12, height: 2, width: 144, borderRadius: 999 }}
+              />
+              <Text className="mt-2 text-af-silver">{member.flight} Flight</Text>
               <View className="flex-row items-center mt-2">
                 <View className={cn("px-3 py-1 rounded-full", accountColors.bg)}>
                   <Text className={cn("text-sm font-semibold", accountColors.text)}>
@@ -315,12 +379,41 @@ export default function MemberProfileScreen() {
             entering={FadeInDown.delay(200).springify()}
             className="mt-4 p-4 bg-white/5 rounded-2xl border border-white/10"
           >
-            <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">Activity Stats</Text>
+            <View className="flex-row items-center justify-between mb-3">
+              <Text className="text-white/60 text-xs uppercase tracking-wider">Monthly Summary</Text>
+              <Text className="text-af-silver text-xs">{formatMonthLabel(summaryMonth)}</Text>
+            </View>
+            {availableSummaryMonths.length > 1 && (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                className="mb-3"
+                contentContainerStyle={{ paddingRight: 12 }}
+              >
+                {availableSummaryMonths.map((monthKey) => (
+                  <Pressable
+                    key={monthKey}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      setSelectedSummaryMonth(monthKey);
+                    }}
+                    className={cn(
+                      'mr-2 rounded-full border px-3 py-1.5',
+                      summaryMonth === monthKey ? 'border-af-accent bg-af-accent/20' : 'border-white/10 bg-white/5'
+                    )}
+                  >
+                    <Text className={cn('text-xs font-semibold', summaryMonth === monthKey ? 'text-af-accent' : 'text-af-silver')}>
+                      {formatMonthLabel(monthKey)}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            )}
             <View className="flex-row justify-between">
               <View className="items-center flex-1">
                 <Timer size={24} color="#4A90D9" />
                 <Text className="text-white font-bold text-xl mt-1">
-                  {member.exerciseMinutes}
+                  {monthlySummary.minutes}
                 </Text>
                 <Text className="text-af-silver text-xs">Minutes</Text>
               </View>
@@ -328,7 +421,7 @@ export default function MemberProfileScreen() {
               <View className="items-center flex-1">
                 <MapPin size={24} color="#22C55E" />
                 <Text className="text-white font-bold text-xl mt-1">
-                  {member.distanceRun.toFixed(1)}
+                  {monthlySummary.miles.toFixed(1)}
                 </Text>
                 <Text className="text-af-silver text-xs">Miles</Text>
               </View>
@@ -336,15 +429,68 @@ export default function MemberProfileScreen() {
               <View className="items-center flex-1">
                 <Dumbbell size={24} color="#A855F7" />
                 <Text className="text-white font-bold text-xl mt-1">
-                  {member.workouts.length}
+                  {monthlySummary.workoutCount}
                 </Text>
                 <Text className="text-af-silver text-xs">Workouts</Text>
               </View>
             </View>
-            {/* Workout count */}
-            <View className="mt-3 pt-3 border-t border-white/10 flex-row items-center justify-center">
-              <Activity size={18} color="#A855F7" />
-              <Text className="text-white font-semibold ml-2">{member.workouts.length} Workouts Logged</Text>
+            <View className="mt-3 pt-3 border-t border-white/10 flex-row justify-between">
+              <View>
+                <Text className="text-white/50 text-xs uppercase tracking-wider">Monthly Score</Text>
+                <Text className="text-white font-semibold mt-1">{monthlySummary.score.toLocaleString()}</Text>
+              </View>
+              <View className="items-end">
+                <Text className="text-white/50 text-xs uppercase tracking-wider">Latest PFRA</Text>
+                <Text className="text-white font-semibold mt-1">{latestMonthlyPFRA?.overallScore ?? 'N/A'}</Text>
+              </View>
+            </View>
+          </Animated.View>
+
+          <Animated.View
+            entering={FadeInDown.delay(212).springify()}
+            className="mt-4 p-4 bg-white/5 rounded-2xl border border-white/10"
+          >
+            <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">History</Text>
+            <View className="flex-row flex-wrap" style={{ gap: 12 }}>
+              <Pressable
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setShowWorkoutHistoryModal(true);
+                }}
+                className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-white/5 p-4"
+              >
+                <View className="flex-row items-center">
+                  <ClipboardList size={18} color="#A855F7" />
+                  <Text className="ml-2 text-white font-semibold">Workout History</Text>
+                </View>
+                <Text className="text-af-silver text-xs mt-1">View logged workouts and attendance entries</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setShowPFRAHistoryModal(true);
+                }}
+                className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-white/5 p-4"
+              >
+                <View className="flex-row items-center">
+                  <FileText size={18} color="#4A90D9" />
+                  <Text className="ml-2 text-white font-semibold">PFRA History</Text>
+                </View>
+                <Text className="text-af-silver text-xs mt-1">Review previous PFRA results and details</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setShowLeaderboardHistoryModal(true);
+                }}
+                className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-white/5 p-4"
+              >
+                <View className="flex-row items-center">
+                  <Award size={18} color="#FFD700" />
+                  <Text className="ml-2 text-white font-semibold">Leaderboard History</Text>
+                </View>
+                <Text className="text-af-silver text-xs mt-1">See monthly placement and score history</Text>
+              </Pressable>
             </View>
           </Animated.View>
 
@@ -459,7 +605,7 @@ export default function MemberProfileScreen() {
               </View>
             ) : canViewFitnessAssessments ? (
               <View className="bg-white/5 rounded-2xl border border-white/10 p-6 items-center">
-                <Shield size={32} color="#C0C0C0" />
+                <FileText size={32} color="#C0C0C0" />
                 <Text className="text-af-silver mt-2">No PFRA records uploaded</Text>
               </View>
             ) : (
@@ -485,9 +631,9 @@ export default function MemberProfileScreen() {
               )}
             </View>
 
-            {visibleWorkouts.length > 0 ? (
+            {uploadedVisibleWorkouts.length > 0 ? (
               <View className="space-y-3">
-                {visibleWorkouts.slice(0, 5).map((workout) => {
+                {uploadedVisibleWorkouts.slice(0, 5).map((workout) => {
                   const WorkoutIcon = getWorkoutIcon(workout.type);
                   return (
                     <View
@@ -538,9 +684,9 @@ export default function MemberProfileScreen() {
                     </View>
                   );
                 })}
-                {visibleWorkouts.length > 5 && (
+                {uploadedVisibleWorkouts.length > 5 && (
                   <View className="items-center py-2">
-                    <Text className="text-af-silver text-sm">+{visibleWorkouts.length - 5} more workouts</Text>
+                    <Text className="text-af-silver text-sm">+{uploadedVisibleWorkouts.length - 5} more workouts</Text>
                   </View>
                 )}
               </View>
@@ -548,15 +694,164 @@ export default function MemberProfileScreen() {
               <View className="bg-white/5 rounded-2xl border border-white/10 p-6 items-center">
                 <Activity size={32} color="#C0C0C0" />
                 <Text className="text-af-silver mt-2">
-                  {member.workouts.length > 0 && !canViewAllWorkouts
-                    ? 'No public workouts'
-                    : 'No workouts recorded'}
+                  {visibleWorkouts.length > 0 && !canViewAllWorkouts
+                    ? 'No public uploaded workouts'
+                    : 'No uploaded workouts recorded'}
                 </Text>
               </View>
             )}
           </Animated.View>
 
         </ScrollView>
+
+        <Modal visible={showWorkoutHistoryModal} transparent animationType="none">
+          <Animated.View entering={FadeInDown.duration(180)} className="flex-1 bg-black/80 justify-end">
+            <Animated.View entering={FadeInUp.duration(260)} className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[85%]">
+              <View className="flex-row items-center justify-between mb-6">
+                <Text className="text-white text-xl font-bold">Workout History</Text>
+                <Pressable
+                  onPress={() => setShowWorkoutHistoryModal(false)}
+                  className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+                >
+                  <X size={20} color="#C0C0C0" />
+                </Pressable>
+              </View>
+              <ScrollView showsVerticalScrollIndicator={false}>
+                {visibleWorkouts.length === 0 ? (
+                  <Text className="text-white/40 text-center py-8">No workouts recorded yet.</Text>
+                ) : (
+                  [...visibleWorkouts]
+                    .sort((a, b) => b.date.localeCompare(a.date))
+                    .map((workout) => (
+                      <View key={workout.id} className="rounded-2xl border border-white/10 bg-white/5 p-4 mb-4">
+                        <View className="flex-row items-start justify-between">
+                          <View className="flex-1">
+                            <Text className="text-white font-semibold">{workout.title ?? workout.type}</Text>
+                            <Text className="text-af-silver text-xs mt-1">{workout.date}</Text>
+                          </View>
+                          <View className="rounded-full bg-white/10 px-3 py-1">
+                            <Text className="text-af-silver text-xs">
+                              {workout.source === 'manual'
+                                ? 'Manual'
+                                : workout.source === 'attendance'
+                                  ? 'Attendance'
+                                  : workout.source === 'strava'
+                                    ? 'Strava'
+                                    : 'Screenshot'}
+                            </Text>
+                          </View>
+                        </View>
+                        <View className="mt-3 pt-3 border-t border-white/10">
+                          {workout.source === 'attendance' ? (
+                            <Text className="text-af-silver text-sm">Logged by PFL/UFPM</Text>
+                          ) : (
+                            <>
+                              <Text className="text-af-silver text-sm">Duration: {workout.duration} min</Text>
+                              <Text className="text-af-silver text-sm mt-1">Distance: {workout.distance ? `${workout.distance.toFixed(1)} mi` : 'N/A'}</Text>
+                              <Text className="text-af-silver text-sm mt-1">Visibility: {workout.isPrivate ? 'Private' : 'Visible to squadron'}</Text>
+                            </>
+                          )}
+                        </View>
+                      </View>
+                    ))
+                )}
+              </ScrollView>
+            </Animated.View>
+          </Animated.View>
+        </Modal>
+
+        <Modal visible={showPFRAHistoryModal} transparent animationType="none">
+          <Animated.View entering={FadeInDown.duration(180)} className="flex-1 bg-black/80 justify-end">
+            <Animated.View entering={FadeInUp.duration(260)} className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[85%]">
+              <View className="flex-row items-center justify-between mb-6">
+                <Text className="text-white text-xl font-bold">PFRA History</Text>
+                <Pressable
+                  onPress={() => setShowPFRAHistoryModal(false)}
+                  className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+                >
+                  <X size={20} color="#C0C0C0" />
+                </Pressable>
+              </View>
+              {!canViewFitnessAssessments ? (
+                <Text className="text-white/40 text-center py-8">PFRA records are private.</Text>
+              ) : (
+                <ScrollView showsVerticalScrollIndicator={false}>
+                  {pfraHistory.length === 0 ? (
+                    <Text className="text-white/40 text-center py-8">No PFRA records uploaded.</Text>
+                  ) : (
+                    pfraHistory.map((assessment) => (
+                      <View key={assessment.id} className="rounded-2xl border border-white/10 bg-white/5 p-4 mb-4">
+                        <View className="flex-row items-center justify-between">
+                          <Text className="text-white font-semibold">{assessment.date}</Text>
+                          <Text className="text-af-gold font-bold">{assessment.overallScore.toFixed(1)}</Text>
+                        </View>
+                        <View className="mt-4">
+                          <View className="flex-row justify-between mb-2">
+                            <Text className="text-af-silver text-sm">Cardio</Text>
+                            <Text className="text-white text-sm">
+                              {assessment.components.cardio.exempt ? 'Exempt' : `${assessment.components.cardio.score} pts`}
+                            </Text>
+                          </View>
+                          <View className="flex-row justify-between mb-2">
+                            <Text className="text-af-silver text-sm">{assessment.components.pushups.test ?? 'Strength'}</Text>
+                            <Text className="text-white text-sm">
+                              {assessment.components.pushups.exempt ? 'Exempt' : `${assessment.components.pushups.score} pts (${assessment.components.pushups.reps} reps)`}
+                            </Text>
+                          </View>
+                          <View className="flex-row justify-between mb-2">
+                            <Text className="text-af-silver text-sm">{assessment.components.situps.test ?? 'Core'}</Text>
+                            <Text className="text-white text-sm">
+                              {assessment.components.situps.exempt ? 'Exempt' : `${assessment.components.situps.score} pts (${assessment.components.situps.time ?? `${assessment.components.situps.reps} reps`})`}
+                            </Text>
+                          </View>
+                          {assessment.components.waist ? (
+                            <View className="flex-row justify-between">
+                              <Text className="text-af-silver text-sm">Waist</Text>
+                              <Text className="text-white text-sm">
+                                {assessment.components.waist.exempt ? 'Exempt' : `${assessment.components.waist.score} pts (${assessment.components.waist.inches}")`}
+                              </Text>
+                            </View>
+                          ) : null}
+                        </View>
+                      </View>
+                    ))
+                  )}
+                </ScrollView>
+              )}
+            </Animated.View>
+          </Animated.View>
+        </Modal>
+
+        <Modal visible={showLeaderboardHistoryModal} transparent animationType="none">
+          <Animated.View entering={FadeInDown.duration(180)} className="flex-1 bg-black/80 justify-end">
+            <Animated.View entering={FadeInUp.duration(260)} className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[80%]">
+              <View className="flex-row items-center justify-between mb-6">
+                <Text className="text-white text-xl font-bold">Leaderboard History</Text>
+                <Pressable
+                  onPress={() => setShowLeaderboardHistoryModal(false)}
+                  className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+                >
+                  <X size={20} color="#C0C0C0" />
+                </Pressable>
+              </View>
+              <ScrollView showsVerticalScrollIndicator={false}>
+                {leaderboardHistory.length === 0 ? (
+                  <Text className="text-white/40 text-center py-8">No leaderboard placements recorded yet.</Text>
+                ) : (
+                  leaderboardHistory.map((entry) => (
+                    <View key={`${entry.month}-${entry.position}-${entry.score}`} className="bg-white/5 border border-white/10 rounded-2xl p-4 mb-3">
+                      <View className="flex-row items-center justify-between">
+                        <Text className="text-white font-semibold">{formatMonthLabel(entry.month)}</Text>
+                        <Text className="text-af-gold font-semibold">#{entry.position}</Text>
+                      </View>
+                      <Text className="text-af-silver text-sm mt-1">{entry.score.toLocaleString()} pts</Text>
+                    </View>
+                  ))
+                )}
+              </ScrollView>
+            </Animated.View>
+          </Animated.View>
+        </Modal>
       </SafeAreaView>
     </View>
   );

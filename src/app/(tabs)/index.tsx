@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, Text, View, Pressable, Modal, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -10,6 +10,33 @@ import { Trophy, Dumbbell, Calendar, Calculator, User, ArrowRight, FileText, Med
 import { useAuthStore, useMemberStore, getDisplayName } from '@/lib/store';
 import { LeaderboardContent } from '@/components/LeaderboardContent';
 import { getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
+import { TutorialTarget, useTutorialTour } from '@/contexts/TutorialTourContext';
+
+function getCompetitionPosition(scores: number[], index: number): number {
+  if (index <= 0) {
+    return 1;
+  }
+
+  return scores[index] === scores[index - 1] ? getCompetitionPosition(scores, index - 1) : index + 1;
+}
+
+function getOrdinalLabel(value: number): string {
+  const remainderHundred = value % 100;
+  if (remainderHundred >= 11 && remainderHundred <= 13) {
+    return `${value}th`;
+  }
+
+  switch (value % 10) {
+    case 1:
+      return `${value}st`;
+    case 2:
+      return `${value}nd`;
+    case 3:
+      return `${value}rd`;
+    default:
+      return `${value}th`;
+  }
+}
 
 function NavCard({
   title,
@@ -46,33 +73,75 @@ function NavCard({
 export default function HomeScreen() {
   const router = useRouter();
   const navigation = useNavigation<NavigationProp<ParamListBase>>();
+  const { currentTargetId, refreshCurrentTarget } = useTutorialTour();
+  const scrollViewRef = useRef<ScrollView | null>(null);
+  const tutorialTargetYRef = useRef<Record<string, number>>({});
   const [showingLeaderboard, setShowingLeaderboard] = useState(false);
   const [showInstallHelp, setShowInstallHelp] = useState(false);
   const user = useAuthStore(s => s.user);
   const members = useMemberStore(s => s.members);
+  const ptSessions = useMemberStore(s => s.ptSessions);
 
   const userName = user ? getDisplayName(user) : 'Airman';
   const squadronMembers = useMemo(
     () => members.filter(member => member.squadron === (user?.squadron ?? 'Hawks')),
     [members, user?.squadron]
   );
+  const currentMonthKey = useMemo(() => getMonthKey(), []);
+  const currentMonthSummaries = useMemo(
+    () =>
+      new Map(
+        squadronMembers.map((member) => [
+          member.id,
+          getMemberMonthSummary(member, currentMonthKey, ptSessions),
+        ])
+      ),
+    [currentMonthKey, ptSessions, squadronMembers]
+  );
   const rankedMembers = useMemo(
     () => {
-      const currentMonthKey = getMonthKey();
       return (
       [...squadronMembers]
         .map(member => ({
           id: member.id,
           name: getDisplayName(member),
-          totalScore: getMemberMonthSummary(member, currentMonthKey).score,
+          totalScore: currentMonthSummaries.get(member.id)?.score ?? 0,
         }))
         .sort((a, b) => b.totalScore - a.totalScore)
       );
     },
-    [squadronMembers]
+    [currentMonthSummaries, squadronMembers]
   );
-  const leader = rankedMembers[0];
-  const runnerUp = rankedMembers[1];
+  const leaderboardPlacements = useMemo(() => {
+    const scores = rankedMembers.map((member) => member.totalScore);
+    const placements = rankedMembers.map((member, index) => ({
+      ...member,
+      placement: getCompetitionPosition(scores, index),
+    }));
+
+    const placementGroups: Array<{
+      placement: number;
+      score: number;
+      members: typeof rankedMembers;
+    }> = [];
+
+    placements.forEach((entry) => {
+      const existing = placementGroups.find((group) => group.placement === entry.placement);
+      if (existing) {
+        existing.members.push({ id: entry.id, name: entry.name, totalScore: entry.totalScore });
+      } else {
+        placementGroups.push({
+          placement: entry.placement,
+          score: entry.totalScore,
+          members: [{ id: entry.id, name: entry.name, totalScore: entry.totalScore }],
+        });
+      }
+    });
+
+    return placementGroups.sort((left, right) => left.placement - right.placement);
+  }, [rankedMembers]);
+  const leaderGroup = leaderboardPlacements[0];
+  const runnerUpGroup = leaderboardPlacements[1];
   const averageScore = rankedMembers.length
     ? Math.round(rankedMembers.reduce((sum, member) => sum + member.totalScore, 0) / rankedMembers.length)
     : 0;
@@ -111,6 +180,24 @@ export default function HomeScreen() {
       setShowInstallHelp(true);
     }
   }, []);
+
+  useEffect(() => {
+    if (!currentTargetId || !currentTargetId.startsWith('home-')) {
+      return;
+    }
+
+    const targetY = tutorialTargetYRef.current[currentTargetId];
+    if (typeof targetY !== 'number') {
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      scrollViewRef.current?.scrollTo({ y: Math.max(targetY - 120, 0), animated: true });
+      setTimeout(() => refreshCurrentTarget(), 220);
+    }, 180);
+
+    return () => clearTimeout(timeoutId);
+  }, [currentTargetId, refreshCurrentTarget]);
 
   if (showingLeaderboard) {
     return <LeaderboardContent showBackButton onBack={closeLeaderboard} />;
@@ -154,9 +241,16 @@ export default function HomeScreen() {
         </Modal>
 
         <ScrollView
+          ref={scrollViewRef}
           className="flex-1"
           contentContainerStyle={{ paddingBottom: 120 }}
           showsVerticalScrollIndicator={false}
+          scrollEventThrottle={16}
+          onScroll={() => {
+            if (currentTargetId?.startsWith('home-')) {
+              refreshCurrentTarget();
+            }
+          }}
         >
           <Animated.View entering={FadeInDown.delay(100).springify()} className="px-6 pt-4 pb-2">
             <Text className="text-af-silver text-sm">Welcome back,</Text>
@@ -167,65 +261,96 @@ export default function HomeScreen() {
             entering={FadeInDown.delay(150).springify()}
             className="mx-6 mt-4"
           >
-            <Pressable
-              onPress={openLeaderboard}
-              className="bg-white/5 rounded-3xl border border-white/10 p-4 active:opacity-90"
+            <TutorialTarget
+              id="home-leaderboard"
+              onLayout={(event) => {
+                tutorialTargetYRef.current['home-leaderboard'] = event.nativeEvent.layout.y;
+              }}
             >
-              <View className="flex-row items-center justify-between mb-3">
-                <Text className="text-white/60 text-xs uppercase tracking-wider">Leaderboard Snapshot</Text>
-                <View className="flex-row items-center">
-                  <Text className="text-af-accent text-xs font-semibold mr-1">Open</Text>
-                  <ArrowRight size={14} color="#4A90D9" />
-                </View>
-              </View>
-
-              <View className="bg-af-gold/10 border border-af-gold/20 rounded-2xl p-3">
-                <View className="flex-row items-center">
-                  <View className="w-9 h-9 rounded-2xl bg-af-gold/20 items-center justify-center">
-                    <Crown size={18} color="#FFD700" />
-                  </View>
-                  <View className="ml-3 flex-1">
-                    <Text className="text-af-silver text-[11px]">Current Leader</Text>
-                    <Text className="text-white text-base font-bold" numberOfLines={1}>
-                      {leader?.name ?? 'No leaderboard data yet'}
-                    </Text>
-                  </View>
-                  <View className="items-end">
-                    <Text className="text-af-gold text-[11px] font-semibold">Score</Text>
-                    <Text className="text-white text-base font-bold">{leader?.totalScore ?? 0}</Text>
+              <Pressable
+                onPress={openLeaderboard}
+                className="bg-white/5 rounded-3xl border border-white/10 p-4 active:opacity-90"
+              >
+                <View className="flex-row items-center justify-between mb-3">
+                  <Text className="text-white/60 text-xs uppercase tracking-wider">Leaderboard Snapshot</Text>
+                  <View className="flex-row items-center">
+                    <Text className="text-af-accent text-xs font-semibold mr-1">Open</Text>
+                    <ArrowRight size={14} color="#4A90D9" />
                   </View>
                 </View>
 
-                <View className="flex-row mt-3 pt-3 border-t border-white/10">
-                  <View className="flex-1">
-                    <View className="flex-row items-center">
-                      <Medal size={13} color="#C0C0C0" />
-                      <Text className="text-af-silver text-[11px] ml-1">Runner-Up</Text>
+                <View className="bg-af-gold/10 border border-af-gold/20 rounded-2xl p-3">
+                  <View className="flex-row items-center">
+                    <View className="w-9 h-9 rounded-2xl bg-af-gold/20 items-center justify-center">
+                      <Crown size={18} color="#FFD700" />
                     </View>
-                    <Text className="text-white font-semibold mt-1.5" numberOfLines={1}>
-                      {runnerUp?.name ?? 'N/A'}
-                    </Text>
-                    <Text className="text-af-silver text-[11px] mt-1">{runnerUp?.totalScore ?? 0} pts</Text>
+                    <View className="ml-3 flex-1">
+                      <Text className="text-af-silver text-[11px]">
+                        {leaderGroup && leaderGroup.members.length > 1 ? `${leaderGroup.members.length} Tied for 1st` : 'Current Leader'}
+                      </Text>
+                      <Text className="text-white text-base font-bold" numberOfLines={1}>
+                        {leaderGroup
+                          ? leaderGroup.members.length > 1
+                            ? leaderGroup.members.map((member) => member.name).join(', ')
+                            : leaderGroup.members[0]?.name
+                          : 'No leaderboard data yet'}
+                      </Text>
+                    </View>
+                    <View className="items-end">
+                      <Text className="text-af-gold text-[11px] font-semibold">Score</Text>
+                      <Text className="text-white text-base font-bold">{leaderGroup?.score ?? 0}</Text>
+                    </View>
                   </View>
 
-                  <View className="w-px bg-white/10 mx-4" />
-
-                  <View className="flex-1">
-                    <View className="flex-row items-center">
-                      <Users size={13} color="#4A90D9" />
-                      <Text className="text-af-silver text-[11px] ml-1">Squadron Average</Text>
+                  <View className="flex-row mt-3 pt-3 border-t border-white/10">
+                    <View className="flex-1">
+                      <View className="flex-row items-center">
+                        <Medal size={13} color="#C0C0C0" />
+                        <Text className="text-af-silver text-[11px] ml-1">
+                          {runnerUpGroup
+                            ? runnerUpGroup.members.length > 1
+                              ? `${runnerUpGroup.members.length} Tied for ${getOrdinalLabel(runnerUpGroup.placement)}`
+                              : runnerUpGroup.placement === 2
+                                ? 'Runner-Up'
+                                : `${getOrdinalLabel(runnerUpGroup.placement)} Place`
+                            : 'Runner-Up'}
+                        </Text>
+                      </View>
+                      <Text className="text-white font-semibold mt-1.5" numberOfLines={1}>
+                        {runnerUpGroup
+                          ? runnerUpGroup.members.length > 1
+                            ? runnerUpGroup.members.map((member) => member.name).join(', ')
+                            : runnerUpGroup.members[0]?.name
+                          : 'N/A'}
+                      </Text>
+                      <Text className="text-af-silver text-[11px] mt-1">{runnerUpGroup?.score ?? 0} pts</Text>
                     </View>
-                    <Text className="text-white font-semibold mt-1.5">{averageScore}</Text>
-                    <Text className="text-af-silver text-[11px] mt-1">{rankedMembers.length} ranked members</Text>
+
+                    <View className="w-px bg-white/10 mx-4" />
+
+                    <View className="flex-1">
+                      <View className="flex-row items-center">
+                        <Users size={13} color="#4A90D9" />
+                        <Text className="text-af-silver text-[11px] ml-1">Squadron Average</Text>
+                      </View>
+                      <Text className="text-white font-semibold mt-1.5">{averageScore} pts</Text>
+                      <Text className="text-af-silver text-[11px] mt-1">{rankedMembers.length} ranked members</Text>
+                    </View>
                   </View>
                 </View>
-              </View>
-            </Pressable>
+              </Pressable>
+            </TutorialTarget>
           </Animated.View>
 
-          <Animated.View entering={FadeInDown.delay(200).springify()} className="mx-6 mt-6">
-            <Text className="text-white font-semibold text-lg mb-3">Navigate</Text>
-            <View className="flex-row flex-wrap -mx-1.5">
+          <TutorialTarget
+            id="home-navigation"
+            onLayout={(event) => {
+              tutorialTargetYRef.current['home-navigation'] = event.nativeEvent.layout.y;
+            }}
+          >
+            <Animated.View entering={FadeInDown.delay(200).springify()} className="mx-6 mt-6">
+              <Text className="text-white font-semibold text-lg mb-3">Navigate</Text>
+              <View className="flex-row flex-wrap -mx-1.5">
               <View className="w-1/2 px-1.5 mb-3">
                 <NavCard
                   title="Leaderboard"
@@ -286,8 +411,9 @@ export default function HomeScreen() {
                   onPress={() => navigate('/profile')}
                 />
               </View>
-            </View>
-          </Animated.View>
+              </View>
+            </Animated.View>
+          </TutorialTarget>
         </ScrollView>
       </SafeAreaView>
     </View>

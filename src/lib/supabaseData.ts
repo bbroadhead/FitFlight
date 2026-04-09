@@ -1,10 +1,14 @@
-import type { AccountType, Flight, Member, PTSession, SharedWorkout, Squadron, WorkoutType } from '@/lib/store';
+import type { AccountType, FitnessAssessment, Flight, Member, PTSession, ScheduledPTSession, SharedWorkout, Squadron, WorkoutType } from '@/lib/store';
 import { getValidAccessToken } from '@/lib/supabaseAuth';
+import { Platform } from 'react-native';
+import * as FileSystem from 'expo-file-system';
+import { Buffer } from 'buffer';
 
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '') ?? '';
 const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
 export const ROSTER_BACKED_SQUADRON = 'Hawks' as const;
 const DEFAULT_ROSTER_TABLE = 'roster';
+const STORAGE_BUCKET = 'fitflight-images';
 
 type SupabaseRow = Record<string, unknown>;
 type RosterColumnName =
@@ -29,6 +33,59 @@ type AttendanceSessionRow = {
 type AttendanceAttendeeRow = {
   session_id: string;
   member_id: string;
+};
+type ScheduledPTSessionRow = {
+  id: string;
+  session_date: string;
+  session_time: string;
+  description: string;
+  squadron: Squadron;
+  flights: Flight[] | null;
+  created_by: string;
+};
+type PFRARecordRow = {
+  id: string;
+  member_id: string;
+  member_email: string;
+  squadron: Squadron;
+  assessment_date: string;
+  overall_score: number;
+  is_private: boolean;
+  cardio_score: number;
+  cardio_time: string | null;
+  cardio_laps: number | null;
+  cardio_test: string | null;
+  cardio_exempt: boolean;
+  strength_score: number;
+  strength_reps: number | null;
+  strength_test: string | null;
+  strength_exempt: boolean;
+  core_score: number;
+  core_reps: number | null;
+  core_time: string | null;
+  core_test: string | null;
+  core_exempt: boolean;
+  waist_score: number | null;
+  waist_inches: number | null;
+  waist_exempt: boolean;
+  created_at: string;
+};
+type AppNotificationRow = {
+  id: string;
+  sender_member_id: string;
+  sender_email: string;
+  sender_name: string;
+  recipient_member_id: string | null;
+  recipient_email: string;
+  squadron: Squadron;
+  type: string;
+  title: string;
+  message: string;
+  action_type: string | null;
+  action_target_id: string | null;
+  action_payload: Record<string, unknown> | null;
+  read_at: string | null;
+  created_at: string;
 };
 type SupportThreadRow = {
   id: string;
@@ -150,6 +207,24 @@ export type ManualWorkoutSubmission = {
   updatedAt: string;
 };
 
+export type AppNotification = {
+  id: string;
+  senderMemberId: string;
+  senderEmail: string;
+  senderName: string;
+  recipientMemberId: string | null;
+  recipientEmail: string;
+  squadron: Squadron;
+  type: string;
+  title: string;
+  message: string;
+  actionType: string | null;
+  actionTargetId: string | null;
+  actionPayload: Record<string, unknown>;
+  readAt: string | null;
+  createdAt: string;
+};
+
 type RosterPasswordStatus = {
   mustChangePassword: boolean;
   hasLoggedIntoApp: boolean;
@@ -229,6 +304,206 @@ function createSupportId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function encodeStoragePath(path: string) {
+  return path
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+}
+
+function inferExtensionFromMimeType(mimeType?: string) {
+  const normalized = mimeType?.toLowerCase().trim();
+  switch (normalized) {
+    case 'image/png':
+      return 'png';
+    case 'image/webp':
+      return 'webp';
+    case 'image/gif':
+      return 'gif';
+    default:
+      return 'jpg';
+  }
+}
+
+function inferMimeTypeFromUri(uri: string) {
+  const normalized = uri.toLowerCase();
+  if (normalized.endsWith('.png')) {
+    return 'image/png';
+  }
+  if (normalized.endsWith('.webp')) {
+    return 'image/webp';
+  }
+  if (normalized.endsWith('.gif')) {
+    return 'image/gif';
+  }
+  return 'image/jpeg';
+}
+
+function getStoragePublicBaseUrl() {
+  return `${SUPABASE_URL}/storage/v1/object/public/${STORAGE_BUCKET}/`;
+}
+
+function extractStoragePath(value?: string) {
+  if (!value?.trim()) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  const publicBaseUrl = getStoragePublicBaseUrl();
+  if (trimmed.startsWith(publicBaseUrl)) {
+    return decodeURIComponent(trimmed.slice(publicBaseUrl.length));
+  }
+
+  if (/^(data:|https?:|blob:|file:|content:)/i.test(trimmed)) {
+    return null;
+  }
+
+  return trimmed;
+}
+
+function serializeImageReference(value?: string) {
+  const storagePath = extractStoragePath(value);
+  return storagePath ?? value?.trim() ?? '';
+}
+
+export function getDisplayImageUri(value?: string) {
+  if (!value?.trim()) {
+    return undefined;
+  }
+
+  const storagePath = extractStoragePath(value);
+  if (!storagePath) {
+    return value.trim();
+  }
+
+  return `${getStoragePublicBaseUrl()}${encodeStoragePath(storagePath)}`;
+}
+
+async function uploadImageToStorage(params: {
+  localUri: string;
+  storagePath: string;
+  mimeType?: string;
+  accessToken?: string;
+}) {
+  const headers = await getHeaders(params.accessToken);
+  let body: Blob | Buffer;
+  let contentType = params.mimeType || inferMimeTypeFromUri(params.localUri);
+
+  if (params.localUri.startsWith('data:')) {
+    const match = params.localUri.match(/^data:([^;]+);base64,(.+)$/);
+    if (!match) {
+      throw new Error('Unable to read image data for upload.');
+    }
+
+    contentType = match[1] || contentType;
+    body = Buffer.from(match[2], 'base64');
+  } else if (Platform.OS === 'web') {
+    const sourceResponse = await fetch(params.localUri);
+    if (!sourceResponse.ok) {
+      throw new Error('Unable to read image for upload.');
+    }
+
+    const blob = await sourceResponse.blob();
+    contentType = blob.type || contentType;
+    body = blob;
+  } else {
+    const base64 = await FileSystem.readAsStringAsync(params.localUri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    body = Buffer.from(base64, 'base64');
+  }
+
+  const response = await fetch(
+    `${SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}/${encodeStoragePath(params.storagePath)}`,
+    {
+      method: 'POST',
+      headers: {
+        ...headers,
+        'Content-Type': contentType,
+        'x-upsert': 'true',
+      },
+      body,
+    }
+  );
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown; error?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : typeof (payload as { message?: unknown; error?: unknown }).error === 'string'
+          ? (payload as { error: string }).error
+          : 'Unable to upload image to Supabase storage.';
+    throw new Error(message);
+  }
+
+  return getDisplayImageUri(params.storagePath) ?? params.storagePath;
+}
+
+export async function uploadProfileImage(params: {
+  memberId: string;
+  localUri: string;
+  mimeType?: string;
+  accessToken?: string;
+}) {
+  const extension = inferExtensionFromMimeType(params.mimeType);
+  const storagePath = `avatars/${slugify(params.memberId)}-${Date.now()}.${extension}`;
+  return uploadImageToStorage({
+    localUri: params.localUri,
+    storagePath,
+    mimeType: params.mimeType,
+    accessToken: params.accessToken,
+  });
+}
+
+export async function uploadWorkoutProofImage(params: {
+  memberId: string;
+  submissionId: string;
+  localUri: string;
+  mimeType?: string;
+  accessToken?: string;
+}) {
+  const extension = inferExtensionFromMimeType(params.mimeType);
+  const storagePath = `workout-proofs/${slugify(params.memberId)}/${slugify(params.submissionId)}.${extension}`;
+  return uploadImageToStorage({
+    localUri: params.localUri,
+    storagePath,
+    mimeType: params.mimeType,
+    accessToken: params.accessToken,
+  });
+}
+
+export async function resetUserPasswordAsAdmin(params: {
+  targetEmail: string;
+  newPassword: string;
+  accessToken?: string;
+}) {
+  const response = await fetch(`${SUPABASE_URL}/functions/v1/reset-user-password`, {
+    method: 'POST',
+    headers: {
+      ...(await getHeaders(params.accessToken)),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      targetEmail: params.targetEmail.trim().toLowerCase(),
+      newPassword: params.newPassword,
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message =
+      typeof (payload as { error?: unknown; message?: unknown }).error === 'string'
+        ? (payload as { error: string }).error
+        : typeof (payload as { error?: unknown; message?: unknown }).message === 'string'
+          ? (payload as { message: string }).message
+          : 'Unable to reset that user password.';
+    throw new Error(message);
+  }
+
+  return payload as { success: true };
+}
+
 function normalizeSharedWorkoutRow(row: SharedWorkoutRow): SharedWorkout {
   return {
     id: row.id,
@@ -262,7 +537,7 @@ function normalizeManualWorkoutSubmissionRow(row: ManualWorkoutSubmissionRow): M
     duration: row.duration,
     distance: typeof row.distance === 'number' ? row.distance : undefined,
     isPrivate: row.is_private,
-    proofImageData: row.proof_image_data,
+    proofImageData: getDisplayImageUri(row.proof_image_data) ?? row.proof_image_data,
     status: row.status,
     reviewerMemberId: row.reviewer_member_id,
     reviewerName: row.reviewer_name,
@@ -271,6 +546,82 @@ function normalizeManualWorkoutSubmissionRow(row: ManualWorkoutSubmissionRow): M
     reviewerRead: row.reviewer_read,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function normalizeScheduledPTSessionRow(row: ScheduledPTSessionRow): ScheduledPTSession {
+  return {
+    id: row.id,
+    date: row.session_date,
+    time: row.session_time,
+    description: row.description,
+    squadron: row.squadron,
+    flights: row.flights ?? [],
+    createdBy: row.created_by,
+  };
+}
+
+function normalizePFRARecordRow(row: PFRARecordRow): FitnessAssessment {
+  return {
+    id: row.id,
+    date: row.assessment_date,
+    overallScore: row.overall_score,
+    isPrivate: row.is_private,
+    components: {
+      cardio: row.cardio_laps !== null
+        ? {
+            score: row.cardio_score,
+            laps: row.cardio_laps,
+            test: row.cardio_test ?? undefined,
+            exempt: row.cardio_exempt,
+          }
+        : {
+            score: row.cardio_score,
+            time: row.cardio_time ?? undefined,
+            test: row.cardio_test ?? undefined,
+            exempt: row.cardio_exempt,
+          },
+      pushups: {
+        score: row.strength_score,
+        reps: row.strength_reps ?? 0,
+        test: row.strength_test ?? undefined,
+        exempt: row.strength_exempt,
+      },
+      situps: {
+        score: row.core_score,
+        reps: row.core_reps ?? 0,
+        time: row.core_time ?? undefined,
+        test: row.core_test ?? undefined,
+        exempt: row.core_exempt,
+      },
+      waist: row.waist_score !== null || row.waist_inches !== null || row.waist_exempt
+        ? {
+            score: row.waist_score ?? 0,
+            inches: row.waist_inches ?? 0,
+            exempt: row.waist_exempt,
+          }
+        : undefined,
+    },
+  };
+}
+
+function normalizeAppNotificationRow(row: AppNotificationRow): AppNotification {
+  return {
+    id: row.id,
+    senderMemberId: row.sender_member_id,
+    senderEmail: row.sender_email,
+    senderName: row.sender_name,
+    recipientMemberId: row.recipient_member_id,
+    recipientEmail: row.recipient_email,
+    squadron: row.squadron,
+    type: row.type,
+    title: row.title,
+    message: row.message,
+    actionType: row.action_type,
+    actionTargetId: row.action_target_id,
+    actionPayload: row.action_payload ?? {},
+    readAt: row.read_at,
+    createdAt: row.created_at,
   };
 }
 
@@ -437,14 +788,19 @@ function getRosterPayload(
     RANK: RANK_TO_ROSTER[member.rank] ?? member.rank.toUpperCase(),
     EMAIL: member.email.toLowerCase(),
     'FLT-DET': getRosterFlight(member),
-    PROFILE_PICTURE: member.profilePicture ?? '',
+    PROFILE_PICTURE: serializeImageReference(member.profilePicture),
     MUST_CHANGE_PASSWORD: member.mustChangePassword ?? false,
     HAS_LOGGED_INTO_APP: member.hasLoggedIntoApp ?? false,
   };
 }
 
-function buildRosterFilter(member: Pick<Member, 'firstName' | 'lastName' | 'rank' | 'flight'>) {
+function buildRosterFilter(member: Pick<Member, 'firstName' | 'lastName' | 'rank' | 'flight' | 'email'>) {
   const params = new URLSearchParams();
+  if (member.email?.trim()) {
+    params.set('EMAIL', `eq.${member.email.toLowerCase()}`);
+    return params.toString();
+  }
+
   params.set('FULL_NAME', `eq.${getRosterFullName(member)}`);
   params.set('RANK', `eq.${RANK_TO_ROSTER[member.rank] ?? member.rank.toUpperCase()}`);
   params.set('FLT-DET', `eq.${getRosterFlight(member)}`);
@@ -473,16 +829,12 @@ function normalizeRosterRow(row: SupabaseRow): Member | null {
     return null;
   }
 
-  if (firstName.toLowerCase() === 'benjamin' && lastName.toLowerCase() === 'broadhead') {
-    return null;
-  }
-
   const squadron = 'Hawks' as Squadron;
   const email = buildEmail(row, firstName, lastName);
   const stableId = getStringValue(row, ['id', 'member_id']) || `roster-${slugify(`${rank}-${lastName}-${firstName}-${flight}`)}`;
   const mustChangePassword = getBooleanValue(row, ['must_change_password', 'MUST_CHANGE_PASSWORD']) ?? false;
   const hasLoggedIntoApp = getBooleanValue(row, ['has_logged_into_app', 'HAS_LOGGED_INTO_APP', 'has_logged_in', 'HAS_LOGGED_IN']) ?? false;
-  const profilePicture = getStringValue(row, ['profile_picture', 'PROFILE_PICTURE']) || undefined;
+  const profilePicture = getDisplayImageUri(getStringValue(row, ['profile_picture', 'PROFILE_PICTURE'])) || undefined;
 
   return {
     id: stableId,
@@ -503,6 +855,7 @@ function normalizeRosterRow(row: SupabaseRow): Member | null {
     isVerified: false,
     ptlPendingApproval: false,
     monthlyPlacements: [],
+    leaderboardHistory: [],
     trophyCount: 0,
     hasSeenTutorial: false,
     mustChangePassword,
@@ -577,6 +930,309 @@ export async function fetchAttendanceSessions(accessToken?: string) {
     createdBy: session.created_by,
     attendees: attendeeMap.get(session.id) ?? [],
   })).filter((session) => session.attendees.length > 0) as PTSession[];
+}
+
+export async function fetchScheduledPTSessions(accessToken?: string, squadron?: Squadron) {
+  const query = new URLSearchParams();
+  query.set('select', 'id,session_date,session_time,description,squadron,flights,created_by');
+  query.set('order', 'session_date.asc,session_time.asc');
+  if (squadron) {
+    query.set('squadron', `eq.${squadron}`);
+  }
+
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/scheduled_pt_sessions?${query.toString()}`, {
+    method: 'GET',
+    headers: await getHeaders(accessToken),
+  });
+
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to load scheduled PT sessions from Supabase.';
+    throw new Error(message);
+  }
+
+  return (payload as ScheduledPTSessionRow[]).map(normalizeScheduledPTSessionRow);
+}
+
+export async function createScheduledPTSession(session: ScheduledPTSession, accessToken?: string) {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/scheduled_pt_sessions`, {
+    method: 'POST',
+    headers: {
+      ...(await getHeaders(accessToken)),
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify({
+      id: session.id,
+      session_date: session.date,
+      session_time: session.time,
+      description: session.description,
+      squadron: session.squadron,
+      flights: session.flights,
+      created_by: session.createdBy,
+    }),
+  });
+
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to create scheduled PT session.';
+    throw new Error(message);
+  }
+
+  return normalizeScheduledPTSessionRow((payload as ScheduledPTSessionRow[])[0]);
+}
+
+export async function updateScheduledPTSession(session: ScheduledPTSession, accessToken?: string) {
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/scheduled_pt_sessions?id=eq.${encodeURIComponent(session.id)}`,
+    {
+      method: 'PATCH',
+      headers: {
+        ...(await getHeaders(accessToken)),
+        'Content-Type': 'application/json',
+        Prefer: 'return=representation',
+      },
+      body: JSON.stringify({
+        session_date: session.date,
+        session_time: session.time,
+        description: session.description,
+        squadron: session.squadron,
+        flights: session.flights,
+      }),
+    }
+  );
+
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to update scheduled PT session.';
+    throw new Error(message);
+  }
+
+  return normalizeScheduledPTSessionRow((payload as ScheduledPTSessionRow[])[0]);
+}
+
+export async function deleteScheduledPTSession(id: string, accessToken?: string) {
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/scheduled_pt_sessions?id=eq.${encodeURIComponent(id)}`,
+    {
+      method: 'DELETE',
+      headers: await getHeaders(accessToken),
+    }
+  );
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to delete scheduled PT session.';
+    throw new Error(message);
+  }
+}
+
+export async function fetchPFRARecords(accessToken?: string, squadron?: Squadron) {
+  const query = new URLSearchParams();
+  query.set('select', '*');
+  query.set('order', 'assessment_date.desc,created_at.desc');
+  if (squadron) {
+    query.set('squadron', `eq.${squadron}`);
+  }
+
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/pfra_records?${query.toString()}`, {
+    method: 'GET',
+    headers: await getHeaders(accessToken),
+  });
+
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to load PFRA records from Supabase.';
+    throw new Error(message);
+  }
+
+  const grouped = new Map<string, { memberId?: string; memberEmail?: string; assessments: FitnessAssessment[] }>();
+  (payload as PFRARecordRow[]).forEach((row) => {
+    const assessment = normalizePFRARecordRow(row);
+    const key = row.member_id || row.member_email.toLowerCase();
+    const current = grouped.get(key) ?? {
+      memberId: row.member_id,
+      memberEmail: row.member_email.toLowerCase(),
+      assessments: [],
+    };
+    current.assessments.push(assessment);
+    grouped.set(key, current);
+  });
+
+  return Array.from(grouped.values()).map((entry) => ({
+    ...entry,
+    assessments: entry.assessments.sort((left, right) => left.date.localeCompare(right.date)),
+  }));
+}
+
+export async function savePFRARecord(params: {
+  memberId: string;
+  memberEmail: string;
+  squadron: Squadron;
+  assessment: FitnessAssessment;
+  accessToken?: string;
+}) {
+  const waist = params.assessment.components.waist;
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/pfra_records`, {
+    method: 'POST',
+    headers: {
+      ...(await getHeaders(params.accessToken)),
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify({
+      id: params.assessment.id,
+      member_id: params.memberId,
+      member_email: params.memberEmail.toLowerCase(),
+      squadron: params.squadron,
+      assessment_date: params.assessment.date,
+      overall_score: params.assessment.overallScore,
+      is_private: params.assessment.isPrivate,
+      cardio_score: params.assessment.components.cardio.score,
+      cardio_time: params.assessment.components.cardio.time ?? null,
+      cardio_laps: params.assessment.components.cardio.laps ?? null,
+      cardio_test: params.assessment.components.cardio.test ?? null,
+      cardio_exempt: params.assessment.components.cardio.exempt ?? false,
+      strength_score: params.assessment.components.pushups.score,
+      strength_reps: params.assessment.components.pushups.reps,
+      strength_test: params.assessment.components.pushups.test ?? null,
+      strength_exempt: params.assessment.components.pushups.exempt ?? false,
+      core_score: params.assessment.components.situps.score,
+      core_reps: params.assessment.components.situps.reps,
+      core_time: params.assessment.components.situps.time ?? null,
+      core_test: params.assessment.components.situps.test ?? null,
+      core_exempt: params.assessment.components.situps.exempt ?? false,
+      waist_score: waist?.score ?? null,
+      waist_inches: waist?.inches ?? null,
+      waist_exempt: waist?.exempt ?? false,
+    }),
+  });
+
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to save PFRA record.';
+    throw new Error(message);
+  }
+
+  return normalizePFRARecordRow((payload as PFRARecordRow[])[0]);
+}
+
+export async function fetchAppNotifications(params: {
+  recipientEmail: string;
+  accessToken?: string;
+}) {
+  const query = new URLSearchParams();
+  query.set('select', '*');
+  query.set('recipient_email', `eq.${params.recipientEmail.toLowerCase()}`);
+  query.set('order', 'created_at.desc');
+
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/app_notifications?${query.toString()}`, {
+    method: 'GET',
+    headers: await getHeaders(params.accessToken),
+  });
+
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to load app notifications.';
+    throw new Error(message);
+  }
+
+  return (payload as AppNotificationRow[]).map(normalizeAppNotificationRow);
+}
+
+export async function sendAppNotification(params: {
+  senderMemberId: string;
+  senderEmail: string;
+  senderName: string;
+  recipientEmail: string;
+  recipientMemberId?: string | null;
+  squadron: Squadron;
+  type: string;
+  title: string;
+  message: string;
+  actionType?: string | null;
+  actionTargetId?: string | null;
+  actionPayload?: Record<string, unknown>;
+  accessToken?: string;
+}) {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/app_notifications`, {
+    method: 'POST',
+    headers: {
+      ...(await getHeaders(params.accessToken)),
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify({
+      id: createSupportId('app-notification'),
+      sender_member_id: params.senderMemberId,
+      sender_email: params.senderEmail.toLowerCase(),
+      sender_name: params.senderName,
+      recipient_member_id: params.recipientMemberId ?? null,
+      recipient_email: params.recipientEmail.toLowerCase(),
+      squadron: params.squadron,
+      type: params.type,
+      title: params.title,
+      message: params.message,
+      action_type: params.actionType ?? null,
+      action_target_id: params.actionTargetId ?? null,
+      action_payload: params.actionPayload ?? {},
+    }),
+  });
+
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to send app notification.';
+    throw new Error(message);
+  }
+
+  return normalizeAppNotificationRow((payload as AppNotificationRow[])[0]);
+}
+
+export async function markAppNotificationRead(id: string, accessToken?: string) {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/app_notifications?id=eq.${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: {
+      ...(await getHeaders(accessToken)),
+      'Content-Type': 'application/json',
+      Prefer: 'return=minimal',
+    },
+    body: JSON.stringify({
+      read_at: new Date().toISOString(),
+    }),
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to mark app notification as read.';
+    throw new Error(message);
+  }
 }
 
 export async function fetchSharedWorkouts(accessToken?: string, squadron?: Squadron) {
@@ -1441,10 +2097,11 @@ export async function createManualWorkoutSubmission(params: {
   distance?: number;
   isPrivate: boolean;
   proofImageData: string;
+  submissionId?: string;
   accessToken?: string;
 }) {
   const now = new Date().toISOString();
-  const id = createSupportId('manual-workout');
+  const id = params.submissionId ?? createSupportId('manual-workout');
   const response = await fetch(`${SUPABASE_URL}/rest/v1/manual_workout_submissions`, {
     method: 'POST',
     headers: {
@@ -1465,7 +2122,7 @@ export async function createManualWorkoutSubmission(params: {
       duration: params.duration,
       distance: params.distance ?? null,
       is_private: params.isPrivate,
-      proof_image_data: params.proofImageData,
+      proof_image_data: serializeImageReference(params.proofImageData),
       status: 'pending',
       reviewer_member_id: null,
       reviewer_name: null,

@@ -58,7 +58,7 @@ function WorkoutTypeBar({
   maxPercentage,
   delay = 0,
 }: {
-  type: WorkoutType;
+  type: string;
   count: number;
   percentage: number;
   maxPercentage: number;
@@ -75,7 +75,7 @@ function WorkoutTypeBar({
     width: `${barWidth.value}%`,
   }));
 
-  const color = WORKOUT_TYPE_COLORS[type];
+  const color = type === 'Attendance' ? '#4A90D9' : WORKOUT_TYPE_COLORS[type as WorkoutType];
 
   return (
     <View className="mb-2">
@@ -177,22 +177,24 @@ export default function AnalyticsScreen() {
       : 0;
 
     // Workout type breakdown
-    const workoutTypeCounts: Record<WorkoutType, number> = {} as Record<WorkoutType, number>;
-    WORKOUT_TYPES.forEach(type => { workoutTypeCounts[type] = 0; });
+    const workoutTypeCounts = new Map<string, number>();
+    WORKOUT_TYPES.forEach(type => { workoutTypeCounts.set(type, 0); });
+    workoutTypeCounts.set('Attendance', 0);
 
     let totalWorkouts = 0;
     members.forEach(member => {
       getMemberMonthSummary(member, activeMonthKey).workouts.forEach(workout => {
-        workoutTypeCounts[workout.type] = (workoutTypeCounts[workout.type] || 0) + 1;
+        const label = workout.source === 'attendance' ? 'Attendance' : workout.type;
+        workoutTypeCounts.set(label, (workoutTypeCounts.get(label) ?? 0) + 1);
         totalWorkouts++;
       });
     });
 
-    const workoutTypeBreakdown = WORKOUT_TYPES
-      .map(type => ({
+    const workoutTypeBreakdown = Array.from(workoutTypeCounts.entries())
+      .map(([type, count]) => ({
         type,
-        count: workoutTypeCounts[type],
-        percentage: totalWorkouts > 0 ? (workoutTypeCounts[type] / totalWorkouts) * 100 : 0,
+        count,
+        percentage: totalWorkouts > 0 ? (count / totalWorkouts) * 100 : 0,
       }))
       .filter(item => item.count > 0)
       .sort((a, b) => b.count - a.count);
@@ -226,7 +228,7 @@ export default function AnalyticsScreen() {
     const workoutsByType = WORKOUT_TYPES
       .map((type) => ({
         type,
-        count: workoutTypeCounts[type],
+        count: workoutTypeCounts.get(type) ?? 0,
       }))
       .filter((item) => item.count > 0)
       .sort((left, right) => right.count - left.count);

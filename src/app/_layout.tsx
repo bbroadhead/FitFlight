@@ -8,6 +8,7 @@ import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { useEffect } from 'react';
 import { useMemberStore, ALL_ACHIEVEMENTS } from '@/lib/store';
 import { AchievementCelebration } from '@/components/AchievementCelebration';
+import { TutorialTourProvider } from '@/contexts/TutorialTourContext';
 
 export const unstable_settings = {
   initialRouteName: 'login',
@@ -44,7 +45,7 @@ function RootLayoutNav() {
 
   return (
     <ThemeProvider value={AirForceDarkTheme}>
-      <>
+      <TutorialTourProvider>
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="login" options={{ headerShown: false }} />
           <Stack.Screen name="reset-password" options={{ headerShown: false }} />
@@ -68,7 +69,7 @@ function RootLayoutNav() {
             onDismiss={dismissAchievementCelebration}
           />
         ) : null}
-      </>
+      </TutorialTourProvider>
     </ThemeProvider>
   );
 }

@@ -9,6 +9,7 @@ import * as Haptics from 'expo-haptics';
 import { cn } from '@/lib/cn';
 import { useAuthStore, useMemberStore, type FitnessAssessment } from '@/lib/store';
 import { type Gender } from '@/lib/pfraScoring2026';
+import { savePFRARecord } from '@/lib/supabaseData';
 
 type CardioTest = 'run_2mile' | 'hamr_20m' | 'walk_2k';
 type StrengthTest = 'pushups' | 'hand_release_pushups';
@@ -30,6 +31,7 @@ function ExemptToggle({ checked, onPress }: { checked: boolean; onPress: () => v
 export default function UploadFitnessTrackerScreen() {
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
+  const accessToken = useAuthStore((s) => s.accessToken);
   const members = useMemberStore((s) => s.members);
   const updateMember = useMemberStore((s) => s.updateMember);
   const awardAchievement = useMemberStore((s) => s.awardAchievement);
@@ -77,56 +79,70 @@ export default function UploadFitnessTrackerScreen() {
   );
 
   const handleSubmit = () => {
-    if (!user || !overallScore || !currentMember) return;
+    const run = async () => {
+      if (!user || !overallScore || !currentMember) return;
 
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-    const score = parseFloat(overallScore) || 0;
-    const assessment: FitnessAssessment = {
-      id: `pfra-${Date.now()}`,
-      date: new Date().toISOString().split('T')[0],
-      overallScore: score,
-      components: {
-        cardio: cardioTest === 'hamr_20m'
-          ? { score: parseFloat(cardioScore) || 0, laps: parseInt(cardioValue, 10) || 0, test: '20m HAMR', exempt: cardioExempt }
-          : { score: parseFloat(cardioScore) || 0, time: cardioValue || undefined, test: cardioTest === 'run_2mile' ? '2-mile Run' : '2K Walk', exempt: cardioExempt },
-        pushups: {
-          score: parseFloat(strengthScore) || 0,
-          reps: parseInt(strengthValue, 10) || 0,
-          test: strengthTest === 'pushups' ? 'Push-ups' : 'Hand-release Push-ups',
-          exempt: strengthExempt,
+      const score = parseFloat(overallScore) || 0;
+      const assessment: FitnessAssessment = {
+        id: `pfra-${Date.now()}`,
+        date: new Date().toISOString().split('T')[0],
+        overallScore: score,
+        components: {
+          cardio: cardioTest === 'hamr_20m'
+            ? { score: parseFloat(cardioScore) || 0, laps: parseInt(cardioValue, 10) || 0, test: '20m HAMR', exempt: cardioExempt }
+            : { score: parseFloat(cardioScore) || 0, time: cardioValue || undefined, test: cardioTest === 'run_2mile' ? '2-mile Run' : '2K Walk', exempt: cardioExempt },
+          pushups: {
+            score: parseFloat(strengthScore) || 0,
+            reps: parseInt(strengthValue, 10) || 0,
+            test: strengthTest === 'pushups' ? 'Push-ups' : 'Hand-release Push-ups',
+            exempt: strengthExempt,
+          },
+          situps: {
+            score: parseFloat(coreScore) || 0,
+            reps: coreTest === 'plank' ? 0 : parseInt(coreValue, 10) || 0,
+            time: coreTest === 'plank' ? coreValue || undefined : undefined,
+            test: coreTest === 'situps' ? 'Sit-ups' : coreTest === 'cross_leg_reverse_crunch' ? 'Cross-leg Reverse Crunch' : 'Plank',
+            exempt: coreExempt,
+          },
+          waist: {
+            score: parseFloat(waistScore) || 0,
+            inches: parseFloat(waistValue) || 0,
+            exempt: waistExempt,
+          },
         },
-        situps: {
-          score: parseFloat(coreScore) || 0,
-          reps: coreTest === 'plank' ? 0 : parseInt(coreValue, 10) || 0,
-          time: coreTest === 'plank' ? coreValue || undefined : undefined,
-          test: coreTest === 'situps' ? 'Sit-ups' : coreTest === 'cross_leg_reverse_crunch' ? 'Cross-leg Reverse Crunch' : 'Plank',
-          exempt: coreExempt,
-        },
-        waist: {
-          score: parseFloat(waistScore) || 0,
-          inches: parseFloat(waistValue) || 0,
-          exempt: waistExempt,
-        },
-      },
-      isPrivate: false,
+        isPrivate: false,
+      };
+
+      if (accessToken) {
+        await savePFRARecord({
+          memberId: user.id,
+          memberEmail: user.email,
+          squadron: user.squadron,
+          assessment,
+          accessToken,
+        });
+      }
+
+      updateMember(user.id, {
+        fitnessAssessments: [
+          ...currentMember.fitnessAssessments,
+          assessment,
+        ],
+      });
+
+      if (score >= 90) {
+        awardAchievement(user.id, 'excellent_fa');
+      }
+      if (score === 100) {
+        awardAchievement(user.id, 'perfect_fa');
+      }
+
+      router.back();
     };
 
-    updateMember(user.id, {
-      fitnessAssessments: [
-        ...currentMember.fitnessAssessments,
-        assessment,
-      ],
-    });
-
-    if (score >= 90) {
-      awardAchievement(user.id, 'excellent_fa');
-    }
-    if (score === 100) {
-      awardAchievement(user.id, 'perfect_fa');
-    }
-
-    router.back();
+    void run();
   };
 
   return (

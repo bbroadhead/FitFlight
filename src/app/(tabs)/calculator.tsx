@@ -13,7 +13,9 @@ import Svg, { Circle } from 'react-native-svg';
 import { Buffer } from 'buffer';
 
 import SmartSlider from '@/components/SmartSlider';
+import { TutorialTarget } from '@/contexts/TutorialTourContext';
 import { useAuthStore, useMemberStore } from '@/lib/store';
+import { savePFRARecord } from '@/lib/supabaseData';
 import {
   HAND_RELEASE_PUSHUP_ROWS,
   HAMR_20M_ROWS,
@@ -188,6 +190,17 @@ function parseMMSS(input: string): number | null {
   return mins * 60 + secs;
 }
 
+function ConfirmValueButton({ onPress }: { onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      className="ml-2 h-10 w-10 items-center justify-center rounded-xl border border-af-accent/35 bg-af-accent/15"
+    >
+      <Ionicons name="checkmark" size={18} color="#4A90D9" />
+    </Pressable>
+  );
+}
+
 function scoreStatus(total: number | null, meetsMinimums: boolean, walkPass: boolean) {
   if (total === null) {
     return walkPass
@@ -254,22 +267,37 @@ function BoundNumberField({ value, onChange, min, max, step = 1, decimals = 0, c
     setDraft(formatNumber(value, decimals));
   }, [value, decimals]);
 
+  const commitDraft = () => {
+    const normalized = draft.replace(/[^0-9.]/g, '');
+    if (!normalized || normalized === '.') {
+      setDraft(formatNumber(value, decimals));
+      return;
+    }
+
+    const parsed = Number(normalized);
+    if (Number.isNaN(parsed)) {
+      setDraft(formatNumber(value, decimals));
+      return;
+    }
+
+    const nextValue = roundToStep(clamp(parsed, min, max), step);
+    onChange(nextValue);
+    setDraft(formatNumber(nextValue, decimals));
+  };
+
   return (
-    <TextInput
-      value={draft}
-      onChangeText={(text) => {
-        setDraft(text);
-        const normalized = text.replace(/[^0-9.]/g, '');
-        if (!normalized || normalized === '.') return;
-        const parsed = Number(normalized);
-        if (Number.isNaN(parsed)) return;
-        onChange(roundToStep(clamp(parsed, min, max), step));
-      }}
-      onBlur={() => setDraft(formatNumber(value, decimals))}
-      keyboardType={Platform.OS === 'ios' ? 'decimal-pad' : 'numeric'}
-      className={`${className} rounded-xl border border-white/15 bg-white/10 py-2 text-right text-white`}
-      placeholderTextColor="rgba(255,255,255,0.45)"
-    />
+    <View className="flex-row items-center">
+      <TextInput
+        value={draft}
+        onChangeText={setDraft}
+        onBlur={commitDraft}
+        onSubmitEditing={commitDraft}
+        keyboardType={Platform.OS === 'ios' ? 'decimal-pad' : 'numeric'}
+        className={`${className} rounded-xl border border-white/15 bg-white/10 py-2 text-right text-white`}
+        placeholderTextColor="rgba(255,255,255,0.45)"
+      />
+      <ConfirmValueButton onPress={commitDraft} />
+    </View>
   );
 }
 
@@ -280,21 +308,32 @@ function BoundTimeField({ valueSec, onChange, minSec, maxSec }: { valueSec: numb
     setDraft(formatMMSS(valueSec));
   }, [valueSec]);
 
+  const commitDraft = () => {
+    const parsed = parseMMSS(draft);
+    if (parsed === null) {
+      setDraft(formatMMSS(valueSec));
+      return;
+    }
+
+    const nextValue = clamp(parsed, minSec, maxSec);
+    onChange(nextValue);
+    setDraft(formatMMSS(nextValue));
+  };
+
   return (
-    <TextInput
-      value={draft}
-      onChangeText={(text) => {
-        setDraft(text);
-        const parsed = parseMMSS(text);
-        if (parsed === null) return;
-        onChange(clamp(parsed, minSec, maxSec));
-      }}
-      onBlur={() => setDraft(formatMMSS(valueSec))}
-      keyboardType={Platform.OS === 'ios' ? 'numbers-and-punctuation' : 'numeric'}
-      className="min-w-[88px] rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-right text-white"
-      placeholder="mm:ss"
-      placeholderTextColor="rgba(255,255,255,0.45)"
-    />
+    <View className="flex-row items-center">
+      <TextInput
+        value={draft}
+        onChangeText={setDraft}
+        onBlur={commitDraft}
+        onSubmitEditing={commitDraft}
+        keyboardType={Platform.OS === 'ios' ? 'numbers-and-punctuation' : 'numeric'}
+        className="min-w-[88px] rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-right text-white"
+        placeholder="mm:ss"
+        placeholderTextColor="rgba(255,255,255,0.45)"
+      />
+      <ConfirmValueButton onPress={commitDraft} />
+    </View>
   );
 }
 
@@ -691,6 +730,7 @@ export default function CalculatorScreen() {
   const members = useMemberStore((s) => s.members);
   const awardAchievement = useMemberStore((s) => s.awardAchievement);
   const user = useAuthStore((s) => s.user);
+  const accessToken = useAuthStore((s) => s.accessToken);
   const currentMember = user ? members.find((member) => member.id === user.id) : null;
   const [savePfRADate, setSavePfRADate] = useState(new Date());
   const [showSavePfRADatePicker, setShowSavePfRADatePicker] = useState(false);
@@ -1142,36 +1182,48 @@ export default function CalculatorScreen() {
           ? { score: scores.cardio, laps: hamrShuttles, test: '20m HAMR', exempt: cardioExempt }
           : { score: cardioTest === 'walk_2k' ? (walkPass ? 50 : 0) : scores.cardio, time: cardioTest === 'run_2mile' ? formatMMSS(runSec) : formatMMSS(walkSec), test: cardioTest === 'run_2mile' ? '2-mile Run' : '2K Walk', exempt: cardioExempt };
 
+      const assessment = {
+        id: `pfra-${Date.now()}`,
+        date: assessmentDate,
+        overallScore: officialTotal ?? 0,
+        components: {
+          cardio: cardioComponent,
+          pushups: {
+            score: scores.strength,
+            reps: pushupReps,
+            test: strengthTest === 'pushups' ? 'Push-ups' : 'Hand-release Push-ups',
+            exempt: strengthExempt,
+          },
+          situps: {
+            score: scores.core,
+            reps: coreTest === 'plank' ? 0 : coreReps,
+            time: coreTest === 'plank' ? formatMMSS(plankSec) : undefined,
+            test: coreTest === 'situps' ? 'Sit-ups' : coreTest === 'cross_leg_reverse_crunch' ? 'Cross-leg Reverse Crunch' : 'Plank',
+            exempt: coreExempt,
+          },
+          waist: {
+            score: scores.waist,
+            inches: waistIn,
+            exempt: waistExempt,
+          },
+        },
+        isPrivate: false,
+      };
+
+      if (accessToken) {
+        await savePFRARecord({
+          memberId: user.id,
+          memberEmail: user.email,
+          squadron: user.squadron,
+          assessment,
+          accessToken,
+        });
+      }
+
       updateMember(user.id, {
         fitnessAssessments: [
           ...currentMember.fitnessAssessments,
-          {
-            id: `pfra-${Date.now()}`,
-            date: assessmentDate,
-            overallScore: officialTotal ?? 0,
-            components: {
-              cardio: cardioComponent,
-              pushups: {
-                score: scores.strength,
-                reps: pushupReps,
-                test: strengthTest === 'pushups' ? 'Push-ups' : 'Hand-release Push-ups',
-                exempt: strengthExempt,
-              },
-              situps: {
-                score: scores.core,
-                reps: coreTest === 'plank' ? 0 : coreReps,
-                time: coreTest === 'plank' ? formatMMSS(plankSec) : undefined,
-                test: coreTest === 'situps' ? 'Sit-ups' : coreTest === 'cross_leg_reverse_crunch' ? 'Cross-leg Reverse Crunch' : 'Plank',
-                exempt: coreExempt,
-              },
-              waist: {
-                score: scores.waist,
-                inches: waistIn,
-                exempt: waistExempt,
-              },
-            },
-            isPrivate: false,
-          },
+          assessment,
         ],
       });
 
@@ -1239,9 +1291,9 @@ export default function CalculatorScreen() {
         <SegmentedOption selected={strengthTest === 'pushups'} label="Push-ups" onPress={() => setStrengthTest('pushups')} theme={THEMES.strength} />
         <SegmentedOption selected={strengthTest === 'hand_release_pushups'} label="Hand-release" onPress={() => setStrengthTest('hand_release_pushups')} theme={THEMES.strength} />
       </View>
-      <LabeledSlider label="Reps" valueLabel={`${pushupReps} reps`} theme={THEMES.strength} input={<BoundNumberField value={pushupReps} onChange={(v) => setPushupReps(Math.round(v))} min={0} max={100} step={1} />} markers={strengthMarkers} markerMin={0} markerMax={100}>
-        <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={pushupReps} onValueChange={(v) => setPushupReps(Math.round(v as number))} minimumValue={0} maximumValue={100} step={1} />
-      </LabeledSlider>
+        <LabeledSlider label="Reps" valueLabel={`${pushupReps} reps`} theme={THEMES.strength} input={<BoundNumberField value={pushupReps} onChange={(v) => setPushupReps(Math.round(v))} min={0} max={99} step={1} />} markers={strengthMarkers} markerMin={0} markerMax={100}>
+          <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={pushupReps} onValueChange={(v) => setPushupReps(Math.round(v as number))} minimumValue={0} maximumValue={99} step={1} />
+        </LabeledSlider>
     </View>
   );
 
@@ -1261,9 +1313,9 @@ export default function CalculatorScreen() {
           <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={plankSec} onValueChange={(v) => setPlankSec(Math.round(v as number))} minimumValue={0} maximumValue={300} step={1} />
         </LabeledSlider>
       ) : (
-        <LabeledSlider label="Reps" valueLabel={`${coreReps} reps`} theme={THEMES.core} input={<BoundNumberField value={coreReps} onChange={(v) => setCoreReps(Math.round(v))} min={0} max={100} step={1} />} markers={coreMarkers} markerMin={0} markerMax={100}>
-          <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={coreReps} onValueChange={(v) => setCoreReps(Math.round(v as number))} minimumValue={0} maximumValue={100} step={1} />
-        </LabeledSlider>
+          <LabeledSlider label="Reps" valueLabel={`${coreReps} reps`} theme={THEMES.core} input={<BoundNumberField value={coreReps} onChange={(v) => setCoreReps(Math.round(v))} min={0} max={99} step={1} />} markers={coreMarkers} markerMin={0} markerMax={100}>
+            <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={coreReps} onValueChange={(v) => setCoreReps(Math.round(v as number))} minimumValue={0} maximumValue={99} step={1} />
+          </LabeledSlider>
       )}
     </View>
   );
@@ -1291,8 +1343,8 @@ export default function CalculatorScreen() {
       )}
       {cardioTest === 'hamr_20m' && (
         <>
-          <LabeledSlider label="HAMR shuttles" valueLabel={`${hamrShuttles} shuttles`} theme={THEMES.cardio} input={<BoundNumberField value={hamrShuttles} onChange={(v) => setHamrShuttles(Math.round(v))} min={0} max={120} step={1} />} markers={hamrMarkers} markerMin={0} markerMax={120}>
-            <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={hamrShuttles} onValueChange={(v) => setHamrShuttles(Math.round(v as number))} minimumValue={0} maximumValue={120} step={1} />
+          <LabeledSlider label="HAMR shuttles" valueLabel={`${hamrShuttles} shuttles`} theme={THEMES.cardio} input={<BoundNumberField value={hamrShuttles} onChange={(v) => setHamrShuttles(Math.round(v))} min={0} max={155} step={1} />} markers={hamrMarkers} markerMin={0} markerMax={120}>
+            <SmartSlider onSlidingStart={disableSwipe} onSlidingComplete={enableSwipe} value={hamrShuttles} onValueChange={(v) => setHamrShuttles(Math.round(v as number))} minimumValue={0} maximumValue={155} step={1} />
           </LabeledSlider>
           {selectedHamrStage ? (
             <View className="rounded-xl border border-white/10 bg-white/5 px-3 py-3">
@@ -1338,20 +1390,22 @@ export default function CalculatorScreen() {
                 <Text className="text-2xl font-bold text-white">PFRA Calculator</Text>
                 <Text className="mt-1 text-sm text-af-silver">Based on PFRA Scoring Charts released on 1 MAR 2026</Text>
               </View>
-              <View className="items-end gap-2">
-                <Pressable
-                  onPress={() => setShowSaveModal(true)}
-                  className="rounded-xl border border-af-accent/50 bg-af-accent/15 px-4 py-2.5"
-                >
-                  <Text className="font-semibold text-af-accent">Export Results</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => setShowOfficialSaveModal(true)}
-                  className="rounded-xl border border-af-gold/50 bg-af-gold/15 px-4 py-2.5"
-                >
-                  <Text className="font-semibold text-af-gold">Save PFRA to Account</Text>
-                </Pressable>
-              </View>
+              <TutorialTarget id="calculator-actions">
+                <View className="items-end gap-2">
+                  <Pressable
+                    onPress={() => setShowSaveModal(true)}
+                    className="rounded-xl border border-af-accent/50 bg-af-accent/15 px-4 py-2.5"
+                  >
+                    <Text className="font-semibold text-af-accent">Export Results</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => setShowOfficialSaveModal(true)}
+                    className="rounded-xl border border-af-gold/50 bg-af-gold/15 px-4 py-2.5"
+                  >
+                    <Text className="font-semibold text-af-gold">Save PFRA to Account</Text>
+                  </Pressable>
+                </View>
+              </TutorialTarget>
             </View>
           </View>
 
@@ -1400,10 +1454,12 @@ export default function CalculatorScreen() {
                       </View>
                     </View>
                   </View>
-                  {renderAudioCard('mt-6')}
                 </View>
 
-                <View style={{ flex: 1 }}>{metricsCard}</View>
+                <View style={{ flex: 1 }}>
+                  {metricsCard}
+                  {renderAudioCard('mt-4')}
+                </View>
                 <View style={{ flex: 1 }}>{bodyCompCard}</View>
               </View>
 
@@ -1465,8 +1521,8 @@ export default function CalculatorScreen() {
               </View>,
 
               <View key="mobile-content" style={{ width: '100%', maxWidth: contentMaxWidth, alignSelf: 'center' }} className="px-6">
-                {renderAudioCard('mt-6')}
-                <View className="mt-6">{metricsCard}</View>
+                {renderAudioCard('mt-4')}
+                <View className="mt-4">{metricsCard}</View>
                 <View className="mt-6">{bodyCompCard}</View>
                 <View className="mt-6">{strengthCard}</View>
                 <View className="mt-6">{coreCard}</View>

@@ -1,24 +1,35 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, Text, Pressable, ScrollView, TextInput, Modal, KeyboardAvoidingView, Platform } from 'react-native';
+import { Alert, View, Text, Pressable, ScrollView, TextInput, Modal, KeyboardAvoidingView, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Plus, Search, X, ThumbsUp, ThumbsDown, Star, Trash2, Clock, Flame, ChevronDown, Check, ListOrdered, Filter } from 'lucide-react-native';
+import { Plus, Search, X, ThumbsUp, ThumbsDown, Star, Trash2, Clock, Flame, ChevronDown, Check, ListOrdered, Filter, Pencil } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeInRight } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import SmartSlider from "../../components/SmartSlider";
-import { useMemberStore, useAuthStore, getDisplayName, type WorkoutType, type SharedWorkout, type Squadron, WORKOUT_TYPES, isAdmin } from '@/lib/store';
+import { useMemberStore, useAuthStore, getDisplayName, type WorkoutType, type SharedWorkout, type Squadron, WORKOUT_TYPES, isAdmin, canEditAttendance } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { createSharedWorkout, deleteSharedWorkoutFromSupabase, fetchSharedWorkouts, updateSharedWorkout } from '@/lib/supabaseData';
+import { TutorialTarget } from '@/contexts/TutorialTourContext';
 
 type FilterType = 'all' | 'favorites' | 'mine';
 type SortType = 'newest' | 'popular' | 'duration';
+
+function getSharedWorkoutErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : 'Unable to reach shared workouts right now.';
+  if (message.includes('public.shared_workouts') || message.includes('shared_workouts') || message.includes('schema cache')) {
+    return 'Shared workouts are not set up in Supabase yet. Run the SQL in supabase/sql/shared_workouts.sql, then try again.';
+  }
+  return message;
+}
 
 function WorkoutCard({
   workout,
   currentUserId,
   onRate,
   onToggleFavorite,
+  onEdit,
   onDelete,
+  canEdit,
   canDelete,
   creatorName,
 }: {
@@ -26,7 +37,9 @@ function WorkoutCard({
   currentUserId: string;
   onRate: (rating: 'up' | 'down' | 'none') => void;
   onToggleFavorite: () => void;
+  onEdit: () => void;
   onDelete: () => void;
+  canEdit: boolean;
   canDelete: boolean;
   creatorName: string;
 }) {
@@ -94,6 +107,17 @@ function WorkoutCard({
                 fill={isFavorited ? '#FFD700' : 'transparent'}
               />
             </Pressable>
+            {canEdit && (
+              <Pressable
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  onEdit();
+                }}
+                className="w-9 h-9 items-center justify-center"
+              >
+                <Pencil size={17} color="#4A90D9" />
+              </Pressable>
+            )}
             {canDelete && (
               <Pressable
                 onPress={() => {
@@ -223,6 +247,7 @@ export default function WorkoutsScreen() {
   const previewAchievementCelebration = useMemberStore(s => s.previewAchievementCelebration);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editingWorkoutId, setEditingWorkoutId] = useState<string | null>(null);
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<FilterType>('all');
@@ -237,10 +262,12 @@ export default function WorkoutsScreen() {
   const [newDescription, setNewDescription] = useState('');
   const [isMultiStep, setIsMultiStep] = useState(false);
   const [steps, setSteps] = useState<string[]>(['']);
+  const [sharedWorkoutError, setSharedWorkoutError] = useState<string | null>(null);
 
   const currentUserId = user?.id ?? '';
   const userAccountType = user?.accountType ?? 'standard';
   const userSquadron: Squadron = (user?.squadron as Squadron) ?? 'Hawks';
+  const canManageSharedWorkouts = canEditAttendance(userAccountType);
 
   useEffect(() => {
     if (!accessToken || !userSquadron) {
@@ -253,9 +280,13 @@ export default function WorkoutsScreen() {
       try {
         const workouts = await fetchSharedWorkouts(accessToken, userSquadron);
         if (!isCancelled) {
+          setSharedWorkoutError(null);
           syncSharedWorkouts(workouts);
         }
       } catch (error) {
+        if (!isCancelled) {
+          setSharedWorkoutError(getSharedWorkoutErrorMessage(error));
+        }
         console.error('Unable to sync shared workouts from Supabase.', error);
       }
     };
@@ -315,6 +346,7 @@ export default function WorkoutsScreen() {
   }, [sharedWorkouts, userSquadron, searchQuery, selectedWorkoutType, filterType, sortType, currentUserId]);
 
   const resetCreateForm = () => {
+    setEditingWorkoutId(null);
     setNewName('');
     setNewType('Strength');
     setNewDuration('30');
@@ -322,6 +354,23 @@ export default function WorkoutsScreen() {
     setNewDescription('');
     setIsMultiStep(false);
     setSteps(['']);
+  };
+
+  const openCreateModal = () => {
+    resetCreateForm();
+    setShowCreateModal(true);
+  };
+
+  const openEditModal = (workout: SharedWorkout) => {
+    setEditingWorkoutId(workout.id);
+    setNewName(workout.name);
+    setNewType(workout.type);
+    setNewDuration(`${workout.duration}`);
+    setNewIntensity(workout.intensity);
+    setNewDescription(workout.description);
+    setIsMultiStep(workout.isMultiStep);
+    setSteps(workout.isMultiStep && workout.steps.length > 0 ? [...workout.steps] : ['']);
+    setShowCreateModal(true);
   };
 
   const handleAddStep = () => {
@@ -346,32 +395,64 @@ export default function WorkoutsScreen() {
         return;
       }
 
-      const newWorkout: SharedWorkout = {
-        id: Date.now().toString() + Math.random().toString(36).substring(2, 9),
-        name: newName.trim(),
-        type: newType,
-        duration: parseInt(newDuration) || 30,
-        intensity: newIntensity,
-        description: newDescription.trim(),
-        isMultiStep,
-        steps: isMultiStep ? steps.filter(s => s.trim()) : [],
-        createdBy: user.id,
-        createdAt: new Date().toISOString(),
-        squadron: userSquadron,
-        thumbsUp: [],
-        thumbsDown: [],
-        favoritedBy: [],
-      };
+      try {
+        const duration = parseInt(newDuration) || 30;
+        const trimmedSteps = isMultiStep ? steps.filter(s => s.trim()) : [];
 
-      const createdWorkout = await createSharedWorkout(newWorkout, accessToken);
-      const alreadyHadCreatorTrophy = members.find((member) => member.id === user.id)?.achievements.includes('shared_workout_creator') ?? false;
-      addSharedWorkout(createdWorkout);
-      if (!alreadyHadCreatorTrophy) {
-        previewAchievementCelebration('shared_workout_creator');
+        if (editingWorkoutId) {
+          const existingWorkout = sharedWorkouts.find((workout) => workout.id === editingWorkoutId);
+          if (!existingWorkout) {
+            throw new Error('Unable to find that workout to edit.');
+          }
+
+          const updatedWorkout = await updateSharedWorkout({
+            ...existingWorkout,
+            name: newName.trim(),
+            type: newType,
+            duration,
+            intensity: newIntensity,
+            description: newDescription.trim(),
+            isMultiStep,
+            steps: trimmedSteps,
+          }, accessToken);
+
+          syncSharedWorkouts(
+            sharedWorkouts.map((candidate) => candidate.id === updatedWorkout.id ? updatedWorkout : candidate)
+          );
+        } else {
+          const newWorkout: SharedWorkout = {
+            id: Date.now().toString() + Math.random().toString(36).substring(2, 9),
+            name: newName.trim(),
+            type: newType,
+            duration,
+            intensity: newIntensity,
+            description: newDescription.trim(),
+            isMultiStep,
+            steps: trimmedSteps,
+            createdBy: user.id,
+            createdAt: new Date().toISOString(),
+            squadron: userSquadron,
+            thumbsUp: [],
+            thumbsDown: [],
+            favoritedBy: [],
+          };
+
+          const createdWorkout = await createSharedWorkout(newWorkout, accessToken);
+          const alreadyHadCreatorTrophy = members.find((member) => member.id === user.id)?.achievements.includes('shared_workout_creator') ?? false;
+          addSharedWorkout(createdWorkout);
+          if (!alreadyHadCreatorTrophy) {
+            previewAchievementCelebration('shared_workout_creator');
+          }
+        }
+        setSharedWorkoutError(null);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        setShowCreateModal(false);
+        resetCreateForm();
+      } catch (error) {
+        const message = getSharedWorkoutErrorMessage(error);
+        setSharedWorkoutError(message);
+        Alert.alert(editingWorkoutId ? 'Unable to update workout' : 'Unable to submit workout', message);
       }
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setShowCreateModal(false);
-      resetCreateForm();
     };
 
     void run();
@@ -382,8 +463,15 @@ export default function WorkoutsScreen() {
       if (!accessToken) {
         return;
       }
-      await deleteSharedWorkoutFromSupabase(workoutId, accessToken);
-      deleteSharedWorkout(workoutId);
+      try {
+        await deleteSharedWorkoutFromSupabase(workoutId, accessToken);
+        deleteSharedWorkout(workoutId);
+        setSharedWorkoutError(null);
+      } catch (error) {
+        const message = getSharedWorkoutErrorMessage(error);
+        setSharedWorkoutError(message);
+        Alert.alert('Unable to delete workout', message);
+      }
     };
 
     void run();
@@ -395,24 +483,31 @@ export default function WorkoutsScreen() {
         return;
       }
 
-      const newThumbsUp = workout.thumbsUp.filter(id => id !== currentUserId);
-      const newThumbsDown = workout.thumbsDown.filter(id => id !== currentUserId);
-      if (rating === 'up') {
-        newThumbsUp.push(currentUserId);
-      } else if (rating === 'down') {
-        newThumbsDown.push(currentUserId);
+      try {
+        const newThumbsUp = workout.thumbsUp.filter(id => id !== currentUserId);
+        const newThumbsDown = workout.thumbsDown.filter(id => id !== currentUserId);
+        if (rating === 'up') {
+          newThumbsUp.push(currentUserId);
+        } else if (rating === 'down') {
+          newThumbsDown.push(currentUserId);
+        }
+
+        const updatedWorkout = await updateSharedWorkout({
+          ...workout,
+          thumbsUp: newThumbsUp,
+          thumbsDown: newThumbsDown,
+        }, accessToken);
+
+        rateSharedWorkout(workout.id, currentUserId, rating);
+        setSharedWorkoutError(null);
+        syncSharedWorkouts(
+          sharedWorkouts.map((candidate) => candidate.id === workout.id ? updatedWorkout : candidate)
+        );
+      } catch (error) {
+        const message = getSharedWorkoutErrorMessage(error);
+        setSharedWorkoutError(message);
+        Alert.alert('Unable to update workout rating', message);
       }
-
-      const updatedWorkout = await updateSharedWorkout({
-        ...workout,
-        thumbsUp: newThumbsUp,
-        thumbsDown: newThumbsDown,
-      }, accessToken);
-
-      rateSharedWorkout(workout.id, currentUserId, rating);
-      syncSharedWorkouts(
-        sharedWorkouts.map((candidate) => candidate.id === workout.id ? updatedWorkout : candidate)
-      );
     };
 
     void run();
@@ -424,18 +519,25 @@ export default function WorkoutsScreen() {
         return;
       }
 
-      const isFavorited = workout.favoritedBy.includes(currentUserId);
-      const updatedWorkout = await updateSharedWorkout({
-        ...workout,
-        favoritedBy: isFavorited
-          ? workout.favoritedBy.filter(id => id !== currentUserId)
-          : [...workout.favoritedBy, currentUserId],
-      }, accessToken);
+      try {
+        const isFavorited = workout.favoritedBy.includes(currentUserId);
+        const updatedWorkout = await updateSharedWorkout({
+          ...workout,
+          favoritedBy: isFavorited
+            ? workout.favoritedBy.filter(id => id !== currentUserId)
+            : [...workout.favoritedBy, currentUserId],
+        }, accessToken);
 
-      toggleFavoriteWorkout(workout.id, currentUserId);
-      syncSharedWorkouts(
-        sharedWorkouts.map((candidate) => candidate.id === workout.id ? updatedWorkout : candidate)
-      );
+        toggleFavoriteWorkout(workout.id, currentUserId);
+        setSharedWorkoutError(null);
+        syncSharedWorkouts(
+          sharedWorkouts.map((candidate) => candidate.id === workout.id ? updatedWorkout : candidate)
+        );
+      } catch (error) {
+        const message = getSharedWorkoutErrorMessage(error);
+        setSharedWorkoutError(message);
+        Alert.alert('Unable to update favorites', message);
+      }
     };
 
     void run();
@@ -463,25 +565,36 @@ export default function WorkoutsScreen() {
               <Text className="text-white text-2xl font-bold">Workouts</Text>
               <Text className="text-af-silver text-sm">{filteredWorkouts.length} workouts available</Text>
             </View>
-            <Pressable
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                setShowCreateModal(true);
-              }}
-              className="bg-af-accent px-4 py-2 rounded-xl flex-row items-center"
-            >
-              <Plus size={18} color="white" />
-              <Text className="text-white font-semibold ml-1">New</Text>
-            </Pressable>
+            <TutorialTarget id="workouts-new">
+                <Pressable
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    openCreateModal();
+                  }}
+                  className="bg-af-accent px-4 py-2 rounded-xl flex-row items-center"
+                >
+                <Plus size={18} color="white" />
+                <Text className="text-white font-semibold ml-1">New</Text>
+              </Pressable>
+            </TutorialTarget>
           </View>
         </Animated.View>
 
+        {sharedWorkoutError ? (
+          <View className="px-6 pt-2">
+            <View className="rounded-xl border border-af-warning/30 bg-af-warning/10 p-4">
+              <Text className="text-af-warning text-sm text-center">{sharedWorkoutError}</Text>
+            </View>
+          </View>
+        ) : null}
+
         {/* Search & Filter Bar */}
-        <Animated.View
-          entering={FadeInDown.delay(150).springify()}
-          className="px-6 mt-2"
-        >
-          <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10">
+        <TutorialTarget id="workouts-search">
+          <Animated.View
+            entering={FadeInDown.delay(150).springify()}
+            className="px-6 mt-2"
+          >
+            <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10">
             <Search size={20} color="#C0C0C0" />
             <TextInput
               value={searchQuery}
@@ -534,7 +647,8 @@ export default function WorkoutsScreen() {
               </Pressable>
             ))}
           </ScrollView>
-        </Animated.View>
+          </Animated.View>
+        </TutorialTarget>
 
         {/* Workouts List */}
         <ScrollView
@@ -558,7 +672,9 @@ export default function WorkoutsScreen() {
                 creatorName={getMemberName(workout.createdBy)}
                 onRate={(rating) => handleRateWorkout(workout, rating)}
                 onToggleFavorite={() => handleToggleFavorite(workout)}
+                onEdit={() => openEditModal(workout)}
                 onDelete={() => handleDeleteWorkout(workout.id)}
+                canEdit={workout.createdBy === currentUserId || canManageSharedWorkouts}
                 canDelete={workout.createdBy === currentUserId || isAdmin(userAccountType)}
               />
             ))
@@ -566,7 +682,7 @@ export default function WorkoutsScreen() {
         </ScrollView>
       </SafeAreaView>
 
-      {/* Create Workout Modal */}
+      {/* Create/Edit Workout Modal */}
       <Modal visible={showCreateModal} transparent animationType="slide">
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -574,8 +690,8 @@ export default function WorkoutsScreen() {
         >
           <View className="flex-1 bg-black/80 justify-end">
             <View className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[90%]">
-              <View className="flex-row items-center justify-between mb-6">
-                <Text className="text-white text-xl font-bold">Create Workout</Text>
+                <View className="flex-row items-center justify-between mb-6">
+                <Text className="text-white text-xl font-bold">{editingWorkoutId ? 'Edit Workout' : 'Create Workout'}</Text>
                 <Pressable
                   onPress={() => {
                     setShowCreateModal(false);
@@ -743,13 +859,13 @@ export default function WorkoutsScreen() {
                     canSubmit ? "bg-af-accent" : "bg-white/10"
                   )}
                 >
-                  <Text className={cn(
-                    "font-bold text-center",
-                    canSubmit ? "text-white" : "text-white/40"
-                  )}>
-                    Submit Workout
-                  </Text>
-                </Pressable>
+                    <Text className={cn(
+                      "font-bold text-center",
+                      canSubmit ? "text-white" : "text-white/40"
+                    )}>
+                    {editingWorkoutId ? 'Save Changes' : 'Submit Workout'}
+                    </Text>
+                  </Pressable>
               </ScrollView>
             </View>
           </View>

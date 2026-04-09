@@ -1,15 +1,15 @@
 import React, { useMemo, useState } from 'react';
-import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Trophy, Timer, ChevronDown, ChevronUp, Crown, Medal, Search, Building2, X, Activity, Award, BarChart3, Dumbbell, ArrowLeft } from 'lucide-react-native';
+import { Trophy, Timer, ChevronDown, ChevronUp, Crown, Medal, Search, Building2, X, Activity, Award, BarChart3, Dumbbell, ArrowLeft, CircleHelp } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeInRight, useAnimatedStyle, useSharedValue, withDelay, withSpring } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { ALL_ACHIEVEMENTS, getDisplayName, getEffectiveAchievementIds, type Flight, useAuthStore, useMemberStore, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
-import { getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
+import { ATTENDANCE_CHECK_IN_POINTS, getMemberMonthSummary, getMonthKey, WORKOUT_POINTS_PER_MILE, WORKOUT_POINTS_PER_MINUTE } from '@/lib/monthlyStats';
 
 const WORKOUT_TYPE_COLORS: Record<WorkoutType, string> = {
   Running: '#22C55E',
@@ -29,13 +29,13 @@ function RunningIcon({ size, color }: { size: number; color: string }) {
 }
 
 function WorkoutTypeAnalyticsBar({
-  type,
+  label,
   count,
   percentage,
   maxPercentage,
   delay = 0,
 }: {
-  type: WorkoutType;
+  label: string;
   count: number;
   percentage: number;
   maxPercentage: number;
@@ -52,14 +52,14 @@ function WorkoutTypeAnalyticsBar({
     width: `${barWidth.value}%`,
   }));
 
-  const color = WORKOUT_TYPE_COLORS[type];
+  const color = label === 'Attendance' ? '#4A90D9' : WORKOUT_TYPE_COLORS[label as WorkoutType] ?? '#6B7280';
 
   return (
     <View className="mb-2">
       <View className="flex-row items-center justify-between mb-1">
         <View className="flex-row items-center">
           <View className="w-2 h-2 rounded-full mr-2" style={{ backgroundColor: color }} />
-          <Text className="text-white text-xs">{type}</Text>
+          <Text className="text-white text-xs">{label}</Text>
         </View>
         <Text className="text-af-silver text-xs">{count} ({percentage.toFixed(0)}%)</Text>
       </View>
@@ -85,6 +85,14 @@ interface LeaderboardMember {
   totalScore: number;
   trophyCount: number;
   hardAchievements: { id: string; name: string }[];
+}
+
+function getCompetitionPosition(scores: number[], index: number): number {
+  if (index <= 0) {
+    return 1;
+  }
+
+  return scores[index] === scores[index - 1] ? getCompetitionPosition(scores, index - 1) : index + 1;
 }
 
 function MiniBarChart({
@@ -251,8 +259,10 @@ export function LeaderboardContent({
   const router = useRouter();
   const [isExpanded, setIsExpanded] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [showScoringHelp, setShowScoringHelp] = useState(false);
   const [selectedFlight] = useState<Flight | 'all'>('all');
   const members = useMemberStore(s => s.members);
+  const ptSessions = useMemberStore(s => s.ptSessions);
   const user = useAuthStore(s => s.user);
 
   const userName = user ? getDisplayName(user) : 'Airman';
@@ -262,8 +272,17 @@ export function LeaderboardContent({
     return members.filter(m => m.squadron === userSquadron);
   }, [members, userSquadron]);
 
+  const currentMonthKey = useMemo(() => getMonthKey(), []);
+  const currentMonthSummaries = useMemo(() => {
+    return new Map(
+      squadronMembers.map((member) => [
+        member.id,
+        getMemberMonthSummary(member, currentMonthKey, ptSessions),
+      ])
+    );
+  }, [currentMonthKey, ptSessions, squadronMembers]);
+
   const sortedMembers = useMemo<LeaderboardMember[]>(() => {
-    const currentMonthKey = getMonthKey();
     let filtered = squadronMembers;
 
     if (searchQuery.trim()) {
@@ -281,55 +300,65 @@ export function LeaderboardContent({
     }
 
     return filtered
-      .map(m => ({
+      .map(m => {
+        const summary = currentMonthSummaries.get(m.id) ?? getMemberMonthSummary(m, currentMonthKey, ptSessions);
+        return {
         id: m.id,
         rank: m.rank,
         firstName: m.firstName,
         lastName: m.lastName,
         flight: m.flight,
-        exerciseMinutes: getMemberMonthSummary(m, currentMonthKey).minutes,
-        distanceRun: getMemberMonthSummary(m, currentMonthKey).miles,
-        workoutCount: getMemberMonthSummary(m, currentMonthKey).workoutCount,
-        totalScore: getMemberMonthSummary(m, currentMonthKey).score,
+        exerciseMinutes: summary.minutes,
+        distanceRun: summary.miles,
+        workoutCount: summary.workoutCount,
+        totalScore: summary.score,
         trophyCount: m.trophyCount,
         hardAchievements: ALL_ACHIEVEMENTS
           .filter(a => a.isHard && getEffectiveAchievementIds(m).includes(a.id))
           .map(a => ({ id: a.id, name: a.name })),
-      }))
+        };
+      })
       .sort((a, b) => b.totalScore - a.totalScore);
-  }, [searchQuery, selectedFlight, squadronMembers]);
+  }, [currentMonthKey, currentMonthSummaries, ptSessions, searchQuery, selectedFlight, squadronMembers]);
 
   const maxValues = useMemo(() => ({
-    minutes: Math.max(...squadronMembers.map(m => getMemberMonthSummary(m, getMonthKey()).minutes), 1),
-    distance: Math.max(...squadronMembers.map(m => getMemberMonthSummary(m, getMonthKey()).miles), 1),
-    workouts: Math.max(...squadronMembers.map(m => getMemberMonthSummary(m, getMonthKey()).workoutCount), 1),
-  }), [squadronMembers]);
+    minutes: Math.max(...squadronMembers.map(m => currentMonthSummaries.get(m.id)?.minutes ?? 0), 1),
+    distance: Math.max(...squadronMembers.map(m => currentMonthSummaries.get(m.id)?.miles ?? 0), 1),
+    workouts: Math.max(...squadronMembers.map(m => currentMonthSummaries.get(m.id)?.workoutCount ?? 0), 1),
+  }), [currentMonthSummaries, squadronMembers]);
 
   const squadronWorkoutBreakdown = useMemo(() => {
-    const counts: Record<WorkoutType, number> = {} as Record<WorkoutType, number>;
-    WORKOUT_TYPES.forEach(type => { counts[type] = 0; });
+    const counts = new Map<string, number>();
+    WORKOUT_TYPES.forEach(type => { counts.set(type, 0); });
+    counts.set('Attendance', 0);
 
     let totalWorkouts = 0;
     squadronMembers.forEach(member => {
-      getMemberMonthSummary(member, getMonthKey()).workouts.forEach(workout => {
-        counts[workout.type] = (counts[workout.type] || 0) + 1;
+      const summary = currentMonthSummaries.get(member.id) ?? getMemberMonthSummary(member, currentMonthKey, ptSessions);
+      summary.workouts.forEach(workout => {
+        const label = workout.source === 'attendance' ? 'Attendance' : workout.type;
+        counts.set(label, (counts.get(label) ?? 0) + 1);
         totalWorkouts++;
       });
     });
 
-    const breakdown = WORKOUT_TYPES
-      .map(type => ({
-        type,
-        count: counts[type],
-        percentage: totalWorkouts > 0 ? (counts[type] / totalWorkouts) * 100 : 0,
+    const breakdown = Array.from(counts.entries())
+      .map(([label, count]) => ({
+        label,
+        count,
+        percentage: totalWorkouts > 0 ? (count / totalWorkouts) * 100 : 0,
       }))
       .filter(item => item.count > 0)
       .sort((a, b) => b.count - a.count);
 
     return { breakdown, totalWorkouts };
-  }, [squadronMembers]);
+  }, [currentMonthKey, currentMonthSummaries, ptSessions, squadronMembers]);
 
   const displayedMembers = isExpanded ? sortedMembers : sortedMembers.slice(0, 10);
+  const displayedPositions = useMemo(() => {
+    const scores = displayedMembers.map((member) => member.totalScore);
+    return scores.map((_, index) => getCompetitionPosition(scores, index));
+  }, [displayedMembers]);
 
   const toggleExpand = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -358,117 +387,203 @@ export function LeaderboardContent({
           </View>
         </View>
 
-        <Animated.View entering={FadeInDown.delay(100).springify()} className="px-6 pt-4 pb-2">
-          {showBackButton && (
-            <Pressable
-              onPress={onBack}
-              className="flex-row items-center self-start mb-4"
-            >
-              <ArrowLeft size={18} color="#C0C0C0" />
-              <Text className="text-af-silver font-medium ml-2">Back to Home</Text>
-            </Pressable>
-          )}
+        <ScrollView className="flex-1" contentContainerStyle={{ paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
+          <Animated.View entering={FadeInDown.delay(100).springify()} className="px-6 pt-4 pb-2">
+            <View className="flex-row items-center justify-between mb-4">
+              {showBackButton ? (
+                <Pressable
+                  onPress={onBack}
+                  className="flex-row items-center self-start"
+                >
+                  <ArrowLeft size={18} color="#C0C0C0" />
+                  <Text className="text-af-silver font-medium ml-2">Back to Home</Text>
+                </Pressable>
+              ) : (
+                <View />
+              )}
+            </View>
 
-          <View className="flex-row items-center justify-between">
+            <View className="flex-row items-center justify-between">
             <View className="flex-1 mr-3">
               <Text className="text-white text-xl font-bold" numberOfLines={1}>{userName}</Text>
             </View>
-            <View className="flex-row items-center bg-af-gold/20 px-3 py-2 rounded-full flex-shrink-0">
-              <Trophy size={16} color="#FFD700" />
-              <Text className="text-af-gold font-bold text-sm ml-1">Leaderboard</Text>
-            </View>
-          </View>
-        </Animated.View>
-
-        <Animated.View entering={FadeInDown.delay(150).springify()} className="mx-6 mt-2">
-          <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10">
-            <Search size={20} color="#C0C0C0" />
-            <TextInput
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              placeholder="Search by name or flight..."
-              placeholderTextColor="#ffffff40"
-              className="flex-1 ml-3 text-white text-base"
-            />
-            {searchQuery.length > 0 && (
-              <Pressable onPress={() => setSearchQuery('')}>
-                <X size={18} color="#C0C0C0" />
+            <View className="flex-row items-center flex-shrink-0">
+              <Pressable
+                onPress={() => {
+                  Haptics.selectionAsync();
+                  setShowScoringHelp(true);
+                }}
+                className="mr-2 items-center justify-center"
+                hitSlop={8}
+              >
+                <CircleHelp size={14} color="#C0C0C0" />
               </Pressable>
-            )}
-          </View>
-        </Animated.View>
-
-        <Animated.View entering={FadeInDown.delay(200).springify()} className="mx-6 mt-4 p-4 bg-white/5 rounded-2xl border border-white/10">
-          <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">Squadron Totals This Month</Text>
-          <View className="flex-row justify-between">
-            <View className="items-center flex-1">
-              <Timer size={24} color="#4A90D9" />
-              <Text className="text-white font-bold text-xl mt-1">{Math.round(squadronMembers.reduce((acc, m) => acc + getMemberMonthSummary(m, getMonthKey()).minutes, 0) / 60)}</Text>
-              <Text className="text-af-silver text-xs">Hours</Text>
-            </View>
-            <View className="w-px bg-white/10" />
-            <View className="items-center flex-1">
-                  <RunningIcon size={24} color="#22C55E" />
-              <Text className="text-white font-bold text-xl mt-1">{squadronMembers.reduce((acc, m) => acc + getMemberMonthSummary(m, getMonthKey()).miles, 0).toFixed(0)}</Text>
-              <Text className="text-af-silver text-xs">Miles</Text>
-            </View>
-            <View className="w-px bg-white/10" />
-            <View className="items-center flex-1">
-              <Dumbbell size={24} color="#A855F7" />
-              <Text className="text-white font-bold text-xl mt-1">{squadronMembers.reduce((acc, m) => acc + getMemberMonthSummary(m, getMonthKey()).workoutCount, 0)}</Text>
-              <Text className="text-af-silver text-xs">Workouts</Text>
-            </View>
-          </View>
-        </Animated.View>
-
-        {squadronWorkoutBreakdown.totalWorkouts > 0 && (
-          <Animated.View entering={FadeInDown.delay(250).springify()} className="mx-6 mt-4 p-4 bg-white/5 rounded-2xl border border-white/10">
-            <View className="flex-row items-center justify-between mb-3">
-              <View className="flex-row items-center">
-                <BarChart3 size={16} color="#A855F7" />
-                <Text className="text-white/60 text-xs uppercase tracking-wider ml-2">Workout Types</Text>
+              <View className="flex-row items-center bg-af-gold/20 px-3 py-2 rounded-full">
+                <Trophy size={16} color="#FFD700" />
+                <Text className="text-af-gold font-bold text-sm ml-1">Leaderboard</Text>
               </View>
-              <Text className="text-af-silver text-xs">{squadronWorkoutBreakdown.totalWorkouts} total</Text>
             </View>
-            {squadronWorkoutBreakdown.breakdown.slice(0, 5).map((item, index) => (
-              <WorkoutTypeAnalyticsBar
-                key={item.type}
-                type={item.type}
-                count={item.count}
-                percentage={item.percentage}
-                maxPercentage={squadronWorkoutBreakdown.breakdown[0]?.percentage ?? 100}
-                delay={250 + index * 50}
+          </View>
+        </Animated.View>
+
+          <Animated.View entering={FadeInDown.delay(150).springify()} className="mx-6 mt-2">
+            <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10">
+              <Search size={20} color="#C0C0C0" />
+              <TextInput
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                placeholder="Search by name or flight..."
+                placeholderTextColor="#ffffff40"
+                className="flex-1 ml-3 text-white text-base"
               />
-            ))}
-            {squadronWorkoutBreakdown.breakdown.length > 5 && (
-              <Text className="text-white/40 text-xs text-center mt-2">
-                +{squadronWorkoutBreakdown.breakdown.length - 5} more types
-              </Text>
-            )}
+              {searchQuery.length > 0 && (
+                <Pressable onPress={() => setSearchQuery('')}>
+                  <X size={18} color="#C0C0C0" />
+                </Pressable>
+              )}
+            </View>
           </Animated.View>
-        )}
 
-        <View className="flex-row items-center justify-between px-6 mt-6 mb-3">
-          <Text className="text-white font-semibold text-lg">{isExpanded ? 'All Members' : 'Top 10 Performers'}</Text>
-          <Pressable onPress={toggleExpand} className="flex-row items-center bg-white/10 px-3 py-1.5 rounded-full">
-            <Text className="text-af-silver text-sm mr-1">{isExpanded ? 'Show Less' : 'Show All'}</Text>
-            {isExpanded ? <ChevronUp size={16} color="#C0C0C0" /> : <ChevronDown size={16} color="#C0C0C0" />}
-          </Pressable>
-        </View>
+          <Animated.View entering={FadeInDown.delay(200).springify()} className="mx-6 mt-4 px-4 py-3 bg-white/5 rounded-2xl border border-white/10">
+            <Text className="text-white/60 text-xs uppercase tracking-wider mb-2">Squadron Totals This Month</Text>
+            <View className="flex-row justify-between">
+              <View className="items-center flex-1">
+                <Timer size={20} color="#4A90D9" />
+                <Text className="text-white font-bold text-lg mt-1">{Math.round(squadronMembers.reduce((acc, m) => acc + (currentMonthSummaries.get(m.id)?.minutes ?? 0), 0) / 60)}</Text>
+                <Text className="text-af-silver text-xs">Hours</Text>
+              </View>
+              <View className="w-px bg-white/10" />
+              <View className="items-center flex-1">
+                <RunningIcon size={20} color="#22C55E" />
+                <Text className="text-white font-bold text-lg mt-1">{squadronMembers.reduce((acc, m) => acc + (currentMonthSummaries.get(m.id)?.miles ?? 0), 0).toFixed(0)}</Text>
+                <Text className="text-af-silver text-xs">Miles</Text>
+              </View>
+              <View className="w-px bg-white/10" />
+              <View className="items-center flex-1">
+                <Dumbbell size={20} color="#A855F7" />
+                <Text className="text-white font-bold text-lg mt-1">{squadronMembers.reduce((acc, m) => acc + (currentMonthSummaries.get(m.id)?.workoutCount ?? 0), 0)}</Text>
+                <Text className="text-af-silver text-xs">Workouts</Text>
+              </View>
+            </View>
+          </Animated.View>
 
-        <ScrollView className="flex-1 px-6" contentContainerStyle={{ paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
-          {displayedMembers.map((member, index) => (
+          {squadronWorkoutBreakdown.totalWorkouts > 0 && (
+            <Animated.View entering={FadeInDown.delay(250).springify()} className="mx-6 mt-4 p-4 bg-white/5 rounded-2xl border border-white/10">
+              <View className="flex-row items-center justify-between mb-3">
+                <View className="flex-row items-center">
+                  <BarChart3 size={16} color="#A855F7" />
+                  <Text className="text-white/60 text-xs uppercase tracking-wider ml-2">Workout Types</Text>
+                </View>
+                <Text className="text-af-silver text-xs text-right">
+                  {squadronWorkoutBreakdown.breakdown.length} {squadronWorkoutBreakdown.breakdown.length === 1 ? 'type' : 'types'} | {squadronWorkoutBreakdown.totalWorkouts} total {squadronWorkoutBreakdown.totalWorkouts === 1 ? 'workout' : 'workouts'}
+                </Text>
+              </View>
+              {squadronWorkoutBreakdown.breakdown.slice(0, 5).map((item, index) => (
+                <WorkoutTypeAnalyticsBar
+                  key={item.label}
+                  label={item.label}
+                  count={item.count}
+                  percentage={item.percentage}
+                  maxPercentage={squadronWorkoutBreakdown.breakdown[0]?.percentage ?? 100}
+                  delay={250 + index * 50}
+                />
+              ))}
+              {squadronWorkoutBreakdown.breakdown.length > 5 && (
+                <Text className="text-white/40 text-xs text-center mt-2">
+                  +{squadronWorkoutBreakdown.breakdown.length - 5} more {(squadronWorkoutBreakdown.breakdown.length - 5) === 1 ? 'type' : 'types'}
+                </Text>
+              )}
+            </Animated.View>
+          )}
+
+          <View className="flex-row items-center justify-between px-6 mt-6 mb-3">
+            <Text className="text-white font-semibold text-lg">{isExpanded ? 'All Members' : 'Top 10 Performers'}</Text>
+            <Pressable onPress={toggleExpand} className="flex-row items-center bg-white/10 px-3 py-1.5 rounded-full">
+              <Text className="text-af-silver text-sm mr-1">{isExpanded ? 'Show Less' : 'Show All'}</Text>
+              {isExpanded ? <ChevronUp size={16} color="#C0C0C0" /> : <ChevronDown size={16} color="#C0C0C0" />}
+            </Pressable>
+          </View>
+
+          <View className="px-6">
+            {displayedMembers.map((member, index) => (
             <LeaderboardCard
               key={member.id}
               member={member}
-              position={index + 1}
+              position={displayedPositions[index] ?? index + 1}
               maxValues={maxValues}
               delay={300 + index * 50}
               onPress={() => handleMemberPress(member.id)}
             />
-          ))}
+            ))}
+          </View>
         </ScrollView>
+
+        <Modal
+          visible={showScoringHelp}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowScoringHelp(false)}
+        >
+          <View className="flex-1 bg-black/75 justify-center px-6">
+            <View className="rounded-3xl border border-white/10 bg-af-navy p-6">
+              <View className="flex-row items-center justify-between">
+                <Text className="text-white text-xl font-bold">How Points Work</Text>
+                <Pressable
+                  onPress={() => {
+                    Haptics.selectionAsync();
+                    setShowScoringHelp(false);
+                  }}
+                  className="w-9 h-9 rounded-full bg-white/5 border border-white/10 items-center justify-center"
+                >
+                  <X size={18} color="#C0C0C0" />
+                </Pressable>
+              </View>
+
+              <Text className="text-af-silver text-sm mt-4">
+                The leaderboard uses monthly points. Attendance is worth the fewest points, and workouts earn points based on whichever is stronger: time or distance.
+              </Text>
+
+              <View className="mt-5 space-y-3">
+                <View className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <Text className="text-white font-semibold">Attendance</Text>
+                  <Text className="text-af-silver text-sm mt-1">
+                    Marked attendance on the Attendance tab earns {ATTENDANCE_CHECK_IN_POINTS} points per check-in.
+                  </Text>
+                </View>
+
+                <View className="rounded-2xl border border-white/10 bg-white/5 p-4 mt-3">
+                  <Text className="text-white font-semibold">Workout Points</Text>
+                  <Text className="text-af-silver text-sm mt-1">
+                    Each workout earns the higher of:
+                  </Text>
+                  <Text className="text-white text-sm mt-2">{WORKOUT_POINTS_PER_MINUTE} point per minute</Text>
+                  <Text className="text-white text-sm mt-1">{WORKOUT_POINTS_PER_MILE} points per mile</Text>
+                </View>
+
+                <View className="rounded-2xl border border-af-accent/20 bg-af-accent/10 p-4 mt-3">
+                  <Text className="text-white font-semibold">Examples</Text>
+                  <Text className="text-af-silver text-sm mt-1">30-minute strength workout = 30 points</Text>
+                  <Text className="text-af-silver text-sm mt-1">2-mile run = 30 points</Text>
+                  <Text className="text-af-silver text-sm mt-1">45-minute workout = 45 points</Text>
+                  <Text className="text-af-silver text-sm mt-1">3-mile run = 45 points</Text>
+                </View>
+              </View>
+
+              <Pressable
+                onPress={() => {
+                  Haptics.selectionAsync();
+                  setShowScoringHelp(false);
+                }}
+                className="mt-6 self-end rounded-full border border-af-accent/40 bg-af-accent/20 px-4 py-2"
+              >
+                <Text className="text-white font-semibold">Got it</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
       </SafeAreaView>
     </View>
   );
 }
+
+

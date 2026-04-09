@@ -10,10 +10,11 @@ import * as Haptics from 'expo-haptics';
 import { useAuthStore, useMemberStore, type AccountType, type Flight, type Member, type Squadron, type User as UserType, getDisplayName, SQUADRONS } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { clearUrlHashSession, getUserForAccessToken, readSessionFromUrlHash, requestPasswordReset, signInWithPassword, signUpWithPassword } from '@/lib/supabaseAuth';
-import { createRosterMember, ensureMemberRole, fetchRoleForEmail, fetchRosterMembers } from '@/lib/supabaseData';
+import { createRosterMember, ensureMemberRole, fetchRoleForEmail, fetchRosterMembers, sendAppNotification, updateRosterMember } from '@/lib/supabaseData';
 
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
 const RANKS = ['AB', 'Amn', 'A1C', 'SrA', 'SSgt', 'TSgt', 'MSgt', 'SMSgt', 'CMSgt'];
+const EMAIL_RATE_LIMIT_MESSAGE = "The server's hourly email limit has been reached. Please try again in 1 hour.";
 
 function normalizeSpecialMemberName(firstName: string, lastName: string) {
   const normalizedFirstName = firstName.trim().toLowerCase();
@@ -83,6 +84,81 @@ function getPostLoginRoute(member: Pick<Member, 'mustChangePassword' | 'hasLogge
   return member.hasLoggedIntoApp ? '/' : '/welcome';
 }
 
+function getFriendlyEmailSendError(error: unknown, fallbackMessage: string) {
+  const message = error instanceof Error ? error.message : fallbackMessage;
+  const normalizedMessage = message.toLowerCase();
+
+  if (
+    normalizedMessage.includes('rate limit') ||
+    normalizedMessage.includes('email rate') ||
+    normalizedMessage.includes('security purposes') ||
+    normalizedMessage.includes('try again later') ||
+    normalizedMessage.includes('only request this after')
+  ) {
+    return EMAIL_RATE_LIMIT_MESSAGE;
+  }
+
+  return message;
+}
+
+async function syncRosterMemberAfterRegistration(
+  nextMember: Member,
+  accessToken?: string,
+  previousMember?: Member | null
+) {
+  if (!accessToken) {
+    return;
+  }
+
+  if (previousMember) {
+    try {
+      await updateRosterMember(previousMember, nextMember, accessToken);
+      return;
+    } catch {
+      // Fall back to create in case this member exists only locally or the old match shape changed.
+    }
+  }
+
+  await createRosterMember(nextMember, accessToken).catch(() => undefined);
+}
+
+async function sendPtlRequestNotifications(params: {
+  requester: Member;
+  accessToken?: string;
+}) {
+  if (!params.accessToken || !params.requester.ptlPendingApproval) {
+    return;
+  }
+
+  const rosterMembers = await fetchRosterMembers(params.accessToken, params.requester.squadron).catch(() => []);
+  const recipients = rosterMembers.filter((member) =>
+    member.email.toLowerCase() !== params.requester.email.toLowerCase() &&
+    ['fitflight_creator', 'ufpm', 'squadron_leadership'].includes(member.accountType)
+  );
+
+  await Promise.all(
+    recipients.map((recipient) =>
+      sendAppNotification({
+        senderMemberId: params.requester.id,
+        senderEmail: params.requester.email,
+        senderName: getDisplayName(params.requester),
+        recipientEmail: recipient.email,
+        recipientMemberId: recipient.id,
+        squadron: params.requester.squadron,
+        type: 'ptl_request',
+        title: 'PFL Request',
+        message: `${getDisplayName(params.requester)} requested PFL access.`,
+        actionType: 'review_ptl_request',
+        actionTargetId: params.requester.id,
+        actionPayload: {
+          memberId: params.requester.id,
+        },
+        accessToken: params.accessToken,
+      }).catch(() => undefined)
+    )
+  );
+}
+
 export default function LoginScreen() {
   const router = useRouter();
   const login = useAuthStore(s => s.login);
@@ -92,8 +168,6 @@ export default function LoginScreen() {
   const members = useMemberStore(s => s.members);
   const addMember = useMemberStore(s => s.addMember);
   const updateMember = useMemberStore(s => s.updateMember);
-  const addNotification = useMemberStore(s => s.addNotification);
-  const attendanceRecords = useMemberStore(s => s.attendanceRecords);
 
   const [isSignUp, setIsSignUp] = useState(false);
   const [firstName, setFirstName] = useState('');
@@ -106,12 +180,10 @@ export default function LoginScreen() {
   const [wantsPTL, setWantsPTL] = useState(false);
   const [stayLoggedIn, setStayLoggedIn] = useState(true);
   const [error, setError] = useState('');
-  const [showLinkModal, setShowLinkModal] = useState(false);
   const [showVerificationModal, setShowVerificationModal] = useState(false);
   const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false);
   const [resetEmail, setResetEmail] = useState('');
   const [resetMessage, setResetMessage] = useState('');
-  const [matchingAttendance, setMatchingAttendance] = useState<typeof attendanceRecords[0] | null>(null);
 
   const validateEmail = (emailToValidate: string): boolean => {
     return emailToValidate.toLowerCase().endsWith('@us.af.mil');
@@ -188,8 +260,9 @@ export default function LoginScreen() {
               achievements: [] as string[],
               requiredPTSessionsPerWeek: 3,
               isVerified: true,
-              ptlPendingApproval: false,
+              ptlPendingApproval: Boolean(metadata.wantsPTL),
               monthlyPlacements: [],
+              leaderboardHistory: [],
               trophyCount: 0,
               hasSeenTutorial: false,
               mustChangePassword: false,
@@ -219,6 +292,12 @@ export default function LoginScreen() {
             profilePicture: member.profilePicture,
           });
         }
+
+        await syncRosterMemberAfterRegistration(member, sessionFromHash.accessToken, rosterExistingMember ?? existingMember);
+        await sendPtlRequestNotifications({
+          requester: member,
+          accessToken: sessionFromHash.accessToken,
+        }).catch(() => undefined);
 
         await ensureMemberRole(normalizedEmail, member.accountType, sessionFromHash.accessToken).catch(() => undefined);
 
@@ -323,6 +402,7 @@ export default function LoginScreen() {
             isVerified: true,
             ptlPendingApproval: false,
             monthlyPlacements: [],
+            leaderboardHistory: [],
             trophyCount: 0,
             hasSeenTutorial: false,
             mustChangePassword: false,
@@ -352,6 +432,8 @@ export default function LoginScreen() {
           profilePicture: member.profilePicture,
         });
       }
+
+      await syncRosterMemberAfterRegistration(member, response.access_token, rosterExistingMember ?? existingMember);
 
       await ensureMemberRole(normalizedEmail, member.accountType, response.access_token).catch(() => undefined);
 
@@ -386,31 +468,32 @@ export default function LoginScreen() {
     });
   };
 
-  const completeSignUp = async (
-    linkedAttendanceId: string | null,
-    existingMemberOverride: typeof members[number] | null
-  ) => {
-    const result = await signUpWithPassword({
-      email: email.toLowerCase(),
-      password,
-      metadata: {
-        firstName: firstName.trim(),
-        lastName: lastName.trim(),
-        rank: selectedRank,
-        flight: selectedFlight,
-        squadron: selectedSquadron,
-      },
-    });
+  const completeSignUp = async (existingMemberOverride: typeof members[number] | null) => {
+    let result;
+    try {
+      result = await signUpWithPassword({
+        email: email.toLowerCase(),
+        password,
+        metadata: {
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          rank: selectedRank,
+          flight: selectedFlight,
+          squadron: selectedSquadron,
+          wantsPTL,
+        },
+      });
+    } catch (error) {
+      throw new Error(getFriendlyEmailSendError(error, 'Unable to create account.'));
+    }
 
     if (!result.session) {
-      setShowLinkModal(false);
       setShowVerificationModal(true);
       return;
     }
 
     createAccount(
       existingMemberOverride,
-      linkedAttendanceId,
       result.session.access_token,
       result.session.refresh_token,
       result.user?.id ?? result.session.user.id
@@ -436,30 +519,19 @@ export default function LoginScreen() {
       return;
     }
 
-    const matching = attendanceRecords.find(
-      r => r.firstName.toLowerCase() === firstName.toLowerCase() &&
-           r.lastName.toLowerCase() === lastName.toLowerCase()
-    );
     const existingMember = findMatchingMember(members, {
       email: email.toLowerCase(),
       firstName,
       lastName,
     });
 
-    if (matching) {
-      setMatchingAttendance(matching);
-      setShowLinkModal(true);
-      return;
-    }
-
-    completeSignUp(null, existingMember).catch((error) => {
-      setError(error instanceof Error ? error.message : 'Unable to create account.');
+    completeSignUp(existingMember).catch((error) => {
+      setError(getFriendlyEmailSendError(error, 'Unable to create account.'));
     });
   };
 
   const createAccount = (
     existingMemberOverride: typeof members[number] | null,
-    linkedAttendanceId: string | null,
     accessToken?: string,
     refreshToken?: string,
     authUserId?: string
@@ -487,8 +559,8 @@ export default function LoginScreen() {
       requiredPTSessionsPerWeek: 3,
       isVerified: true, // For now, auto-verify (no email service)
       ptlPendingApproval: wantsPTL,
-      linkedAttendanceId: linkedAttendanceId ?? undefined,
       monthlyPlacements: [],
+      leaderboardHistory: [],
       trophyCount: 0,
       hasSeenTutorial: false,
       mustChangePassword: false,
@@ -507,24 +579,17 @@ export default function LoginScreen() {
         email: newMember.email,
         isVerified: true,
         ptlPendingApproval: wantsPTL,
-        linkedAttendanceId: linkedAttendanceId ?? existingMemberOverride.linkedAttendanceId,
       });
     } else {
       addMember(newMember);
-      if (accessToken) {
-        void createRosterMember(newMember, accessToken).catch(() => undefined);
-      }
     }
 
-    // If requesting PFL, notify owner and UFPM
-    if (wantsPTL) {
-      addNotification({
-        type: 'ptl_request',
-        title: 'PFL Request',
-        message: `${selectedRank} ${firstName} ${lastName} signed up as a PFL. Open the app to authorize or reject.`,
-      data: { memberId: newMemberId },
-      });
-    }
+    void syncRosterMemberAfterRegistration(newMember, accessToken, existingMemberOverride);
+
+    void sendPtlRequestNotifications({
+      requester: newMember,
+      accessToken,
+    });
 
     // Log in the new user
     const user: UserType = {
@@ -550,7 +615,6 @@ export default function LoginScreen() {
       refreshToken: refreshToken ?? null,
     });
     login(user, { rememberSession: stayLoggedIn });
-    setShowLinkModal(false);
     router.replace('/welcome'); // Redirect to tutorial for new users
   };
 
@@ -584,11 +648,7 @@ export default function LoginScreen() {
     };
 
     run().catch((forgotPasswordError) => {
-      setError(
-        forgotPasswordError instanceof Error
-          ? forgotPasswordError.message
-          : 'Unable to send password reset email.'
-      );
+      setError(getFriendlyEmailSendError(forgotPasswordError, 'Unable to send password reset email.'));
     });
   };
 
@@ -908,51 +968,6 @@ export default function LoginScreen() {
           </ScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
-
-      {/* Link Attendance Modal */}
-      <Modal visible={showLinkModal} transparent animationType="fade">
-        <View className="flex-1 bg-black/80 items-center justify-center p-6">
-          <View className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20">
-            <Text className="text-white text-xl font-bold mb-4">Existing PT Records Found</Text>
-            <Text className="text-af-silver mb-6">
-              We found PT attendance records for {matchingAttendance?.rank} {matchingAttendance?.firstName} {matchingAttendance?.lastName}.
-              Would you like to link these records to your new account?
-            </Text>
-            <View className="flex-row space-x-3">
-              <Pressable
-                onPress={() => {
-                  const existingMember = findMatchingMember(members, {
-                    email: email.toLowerCase(),
-                    firstName,
-                    lastName,
-                  });
-                  completeSignUp(null, existingMember).catch((error) => {
-                    setError(error instanceof Error ? error.message : 'Unable to create account.');
-                  });
-                }}
-                className="flex-1 bg-white/10 py-3 rounded-xl mr-2"
-              >
-                <Text className="text-white text-center font-semibold">No Thanks</Text>
-              </Pressable>
-              <Pressable
-                onPress={() => {
-                  const existingMember = findMatchingMember(members, {
-                    email: email.toLowerCase(),
-                    firstName,
-                    lastName,
-                  });
-                  completeSignUp(matchingAttendance?.id ?? null, existingMember).catch((error) => {
-                    setError(error instanceof Error ? error.message : 'Unable to create account.');
-                  });
-                }}
-                className="flex-1 bg-af-accent py-3 rounded-xl ml-2"
-              >
-                <Text className="text-white text-center font-semibold">Link Records</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
 
       <Modal visible={showVerificationModal} transparent animationType="fade">
         <View className="flex-1 bg-black/80 items-center justify-center p-6">

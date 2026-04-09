@@ -1,24 +1,27 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, Pressable, ScrollView, TextInput, Modal, Image, Platform } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { User, Shield, LogOut, LogIn, UserPlus, Trash2, Users, Activity, X, Check, Bell, Crown, Settings, Plus, Camera, FileText, Calendar, Building2, AlertTriangle, Upload, Dumbbell, ImageIcon, HelpCircle, Mail, ChevronDown, ChevronUp, Pencil, Search, Star, MessageSquare } from 'lucide-react-native';
-import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
+import { User, Shield, LogOut, LogIn, UserPlus, Trash2, Users, Activity, X, Check, Bell, Crown, Settings, Plus, Camera, FileText, Calendar, Building2, AlertTriangle, Upload, Dumbbell, ImageIcon, HelpCircle, Mail, ChevronDown, ChevronUp, Pencil, Search, Star, MessageSquare, Trophy } from 'lucide-react-native';
+import Animated, { FadeIn, FadeInDown, FadeInUp, SlideInDown } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { useAuthStore, useMemberStore, type Flight, type Member, type AccountType, type Squadron, type IntegrationService, getDisplayName, canEditAttendance, canManagePTL, isAdmin, SQUADRONS, ALL_ACHIEVEMENTS } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { TrophyCase, CompactTrophyBadges } from '@/components/TrophyCase';
+import { TutorialTarget, useTutorialTour } from '@/contexts/TutorialTourContext';
 import { canUseStravaSync, disconnectStrava, getStravaSetupError, mapImportedWorkouts, startStravaConnect, syncStravaWorkouts } from '@/lib/strava';
 import { signOutFromSupabase } from '@/lib/supabaseAuth';
 import { buildTrophyStats, getRarestEarnedTrophies } from '@/lib/trophies';
-import { formatMonthLabel, getAvailableMonthKeys, getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
+import { formatMonthLabel, getAvailableMonthKeys, getMemberEffectiveWorkouts, getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
 import {
+  fetchAppNotifications,
   fetchApprovedManualWorkouts,
   fetchAttendanceSessions,
   fetchManualWorkoutSubmissions,
+  markAppNotificationRead,
   assignUFPMRole,
   createRosterMember,
   deleteRosterMember,
@@ -28,13 +31,17 @@ import {
   fetchSupportThreads,
   markSupportMessagesRead,
   reviewManualWorkoutSubmission,
+  resetUserPasswordAsAdmin,
   sendSupportMessage,
+  sendAppNotification,
   setAttendanceStatus,
+  type AppNotification,
   type ManualWorkoutSubmission,
   type SupportMessage,
   type SupportThreadSummary,
   updateMemberRole,
   updateRosterMember,
+  uploadProfileImage,
 } from '@/lib/supabaseData';
 
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
@@ -59,12 +66,19 @@ type ManualWorkoutNotificationItem = {
   isReview: boolean;
 };
 
+type BackendNotificationItem = AppNotification & {
+  unread: boolean;
+};
+
 function RunningIcon({ size, color }: { size: number; color: string }) {
   return <MaterialCommunityIcons name="run-fast" size={size} color={color} />;
 }
 
 export default function ProfileScreen() {
   const router = useRouter();
+  const { currentTargetId, refreshCurrentTarget } = useTutorialTour();
+  const scrollViewRef = useRef<ScrollView | null>(null);
+  const tutorialTargetYRef = useRef<Record<string, number>>({});
   const user = useAuthStore(s => s.user);
   const logout = useAuthStore(s => s.logout);
   const accessToken = useAuthStore(s => s.accessToken);
@@ -72,14 +86,13 @@ export default function ProfileScreen() {
   const addMember = useMemberStore(s => s.addMember);
   const removeMember = useMemberStore(s => s.removeMember);
   const importWorkouts = useMemberStore(s => s.importWorkouts);
-  const notifications = useMemberStore(s => s.notifications);
   const syncPTSessions = useMemberStore(s => s.syncPTSessions);
+  const ptSessions = useMemberStore(s => s.ptSessions);
   const syncApprovedManualWorkouts = useMemberStore(s => s.syncApprovedManualWorkouts);
   const approvePTL = useMemberStore(s => s.approvePTL);
   const rejectPTL = useMemberStore(s => s.rejectPTL);
   const revokePTL = useMemberStore(s => s.revokePTL);
   const setUFPM = useMemberStore(s => s.setUFPM);
-  const markNotificationRead = useMemberStore(s => s.markNotificationRead);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [showManageModal, setShowManageModal] = useState(false);
@@ -92,8 +105,11 @@ export default function ProfileScreen() {
   const [showDeveloperMessageModal, setShowDeveloperMessageModal] = useState(false);
   const [showSupportInboxModal, setShowSupportInboxModal] = useState(false);
   const [showInstallModal, setShowInstallModal] = useState(false);
+  const [isUpdatingProfilePicture, setIsUpdatingProfilePicture] = useState(false);
   const [showUFPMModal, setShowUFPMModal] = useState(false);
+  const [memberPendingDeleteId, setMemberPendingDeleteId] = useState<string | null>(null);
   const [showUFPMConfirmModal, setShowUFPMConfirmModal] = useState(false);
+  const [showResetUserPasswordModal, setShowResetUserPasswordModal] = useState(false);
   const [showTrophyCase, setShowTrophyCase] = useState(false);
   const [showWorkoutReviewModal, setShowWorkoutReviewModal] = useState(false);
   const [showWorkoutHistoryModal, setShowWorkoutHistoryModal] = useState(false);
@@ -115,6 +131,12 @@ export default function ProfileScreen() {
   const [memberSearchQuery, setMemberSearchQuery] = useState('');
   const [ufpmSearchQuery, setUFPMSearchQuery] = useState('');
   const [selectedUFPMMemberId, setSelectedUFPMMemberId] = useState<string | null>(null);
+  const [resetPasswordSearchQuery, setResetPasswordSearchQuery] = useState('');
+  const [selectedResetPasswordMemberId, setSelectedResetPasswordMemberId] = useState<string | null>(null);
+  const [adminResetPasswordValue, setAdminResetPasswordValue] = useState('');
+  const [adminResetPasswordConfirm, setAdminResetPasswordConfirm] = useState('');
+  const [adminResetPasswordError, setAdminResetPasswordError] = useState('');
+  const [isAdminResettingPassword, setIsAdminResettingPassword] = useState(false);
   const [installPromptEvent, setInstallPromptEvent] = useState<any>(null);
   const [supportThreads, setSupportThreads] = useState<SupportThreadSummary[]>([]);
   const [activeSupportThreadId, setActiveSupportThreadId] = useState<string | null>(null);
@@ -132,6 +154,9 @@ export default function ProfileScreen() {
   const [manualWorkoutError, setManualWorkoutError] = useState<string | null>(null);
   const [manualWorkoutLoading, setManualWorkoutLoading] = useState(false);
   const [manualWorkoutSubmitting, setManualWorkoutSubmitting] = useState(false);
+  const [appNotifications, setAppNotifications] = useState<BackendNotificationItem[]>([]);
+  const [appNotificationsLoading, setAppNotificationsLoading] = useState(false);
+  const [showLeaderboardHistoryModal, setShowLeaderboardHistoryModal] = useState(false);
 
   const isAuthenticated = useAuthStore(s => s.isAuthenticated);
   const updateUser = useAuthStore(s => s.updateUser);
@@ -143,14 +168,38 @@ export default function ProfileScreen() {
   const hasAdminAccess = isAdmin(userAccountType);
   const canManageMembers = canEditAttendance(userAccountType);
   const canReviewManualWorkouts = canEditAttendance(userAccountType);
+  const canResetUserPasswords = userAccountType === 'fitflight_creator' || userAccountType === 'ufpm';
   const isOwnerReviewer = user?.email?.toLowerCase() === OWNER_EMAIL;
 
-  const unreadNotifications = notifications.filter(n => !n.read);
-  const ptlRequests = notifications.filter(n => n.type === 'ptl_request' && !n.read);
+  const unreadNotifications = appNotifications.filter((notification) => !notification.readAt);
+  const ptlRequests = appNotifications.filter((notification) => notification.type === 'ptl_request' && !notification.readAt);
   const currentUFPM = members.find((member) => member.accountType === 'ufpm') ?? null;
   const normalizedMemberSearch = memberSearchQuery.trim().toLowerCase();
   const normalizedUFPMSearch = ufpmSearchQuery.trim().toLowerCase();
+  const normalizedResetPasswordSearch = resetPasswordSearchQuery.trim().toLowerCase();
   const memberSquadron = user?.squadron ?? 'Hawks';
+
+  useEffect(() => {
+    if (!currentTargetId || !currentTargetId.startsWith('account-')) {
+      return;
+    }
+
+    const scrollAnchorId =
+      currentTargetId === 'account-password-reset' || currentTargetId === 'account-analytics'
+        ? 'account-admin'
+        : currentTargetId;
+    const targetY = tutorialTargetYRef.current[scrollAnchorId];
+    if (typeof targetY !== 'number') {
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      scrollViewRef.current?.scrollTo({ y: Math.max(targetY - 120, 0), animated: true });
+      setTimeout(() => refreshCurrentTarget(), 220);
+    }, 180);
+
+    return () => clearTimeout(timeoutId);
+  }, [currentTargetId, refreshCurrentTarget]);
   const isWeb = Platform.OS === 'web';
   const isStandalonePwa = isWeb && typeof window !== 'undefined'
     ? window.matchMedia?.('(display-mode: standalone)')?.matches || ((window.navigator as Navigator & { standalone?: boolean }).standalone ?? false)
@@ -197,6 +246,30 @@ export default function ProfileScreen() {
       return haystack.includes(normalizedMemberSearch);
     });
   }, [memberSquadron, members, normalizedMemberSearch]);
+
+  const memberPendingDelete = useMemo(
+    () => members.find((member) => member.id === memberPendingDeleteId) ?? null,
+    [memberPendingDeleteId, members]
+  );
+  const resetPasswordCandidates = useMemo(() => {
+    const inSquadron = members
+      .filter((member) => member.squadron === memberSquadron)
+      .sort((left, right) => `${left.lastName} ${left.firstName}`.localeCompare(`${right.lastName} ${right.firstName}`));
+
+    if (!normalizedResetPasswordSearch) {
+      return inSquadron;
+    }
+
+    return inSquadron.filter((member) => {
+      const haystack = `${member.rank} ${member.firstName} ${member.lastName} ${member.email}`.toLowerCase();
+      return haystack.includes(normalizedResetPasswordSearch);
+    });
+  }, [memberSquadron, members, normalizedResetPasswordSearch]);
+
+  const selectedResetPasswordMember = useMemo(
+    () => members.find((member) => member.id === selectedResetPasswordMemberId) ?? null,
+    [members, selectedResetPasswordMemberId]
+  );
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof window === 'undefined') {
@@ -307,6 +380,31 @@ export default function ProfileScreen() {
     }
   };
 
+  const loadAppNotifications = async () => {
+    if (!user?.email || !accessToken) {
+      setAppNotifications([]);
+      return;
+    }
+
+    setAppNotificationsLoading(true);
+    try {
+      const nextNotifications = await fetchAppNotifications({
+        recipientEmail: user.email,
+        accessToken,
+      });
+      setAppNotifications(
+        nextNotifications.map((notification) => ({
+          ...notification,
+          unread: !notification.readAt,
+        }))
+      );
+    } catch {
+      setAppNotifications([]);
+    } finally {
+      setAppNotificationsLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (!user?.email || !accessToken) {
       setSupportThreads([]);
@@ -339,6 +437,21 @@ export default function ProfileScreen() {
 
     return () => clearInterval(pollId);
   }, [accessToken, canReviewManualWorkouts, memberSquadron, user?.id]);
+
+  useEffect(() => {
+    if (!user?.email || !accessToken) {
+      setAppNotifications([]);
+      return;
+    }
+
+    void loadAppNotifications();
+
+    const pollId = setInterval(() => {
+      void loadAppNotifications();
+    }, 15000);
+
+    return () => clearInterval(pollId);
+  }, [accessToken, user?.email]);
 
   useEffect(() => {
     if (!activeSupportThreadId || !showDeveloperMessageModal && !showSupportInboxModal) {
@@ -423,8 +536,8 @@ export default function ProfileScreen() {
         requiredPTSessionsPerWeek: previousMember?.requiredPTSessionsPerWeek ?? 3,
         isVerified: previousMember?.isVerified ?? false,
         ptlPendingApproval: previousMember?.ptlPendingApproval ?? false,
-        linkedAttendanceId: previousMember?.linkedAttendanceId,
         monthlyPlacements: previousMember?.monthlyPlacements ?? [],
+        leaderboardHistory: previousMember?.leaderboardHistory ?? [],
         trophyCount: previousMember?.trophyCount ?? 0,
         hasSeenTutorial: previousMember?.hasSeenTutorial ?? false,
         profilePicture: previousMember?.profilePicture,
@@ -483,6 +596,84 @@ export default function ProfileScreen() {
     run().catch((error) => {
       setMemberActionError(error instanceof Error ? error.message : 'Unable to remove member.');
     });
+  };
+
+  const confirmRemoveMember = (memberId: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setMemberPendingDeleteId(memberId);
+  };
+
+  const closeRemoveMemberConfirmation = () => {
+    setMemberPendingDeleteId(null);
+  };
+
+  const openResetUserPasswordModal = () => {
+    setResetPasswordSearchQuery('');
+    setSelectedResetPasswordMemberId(null);
+    setAdminResetPasswordValue('');
+    setAdminResetPasswordConfirm('');
+    setAdminResetPasswordError('');
+    setShowResetUserPasswordModal(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+
+  const closeResetUserPasswordModal = () => {
+    setShowResetUserPasswordModal(false);
+    setAdminResetPasswordError('');
+    setAdminResetPasswordValue('');
+    setAdminResetPasswordConfirm('');
+    setSelectedResetPasswordMemberId(null);
+    setResetPasswordSearchQuery('');
+  };
+
+  const handleAdminResetUserPassword = () => {
+    const run = async () => {
+      if (!canResetUserPasswords) {
+        setAdminResetPasswordError('Only Owner and UFPM can reset user passwords.');
+        return;
+      }
+
+      if (!accessToken) {
+        setAdminResetPasswordError('You must be signed in to reset a user password.');
+        return;
+      }
+
+      if (!selectedResetPasswordMember) {
+        setAdminResetPasswordError('Select a member first.');
+        return;
+      }
+
+      if (adminResetPasswordValue.length < 8) {
+        setAdminResetPasswordError('New password must be at least 8 characters long.');
+        return;
+      }
+
+      if (adminResetPasswordValue !== adminResetPasswordConfirm) {
+        setAdminResetPasswordError('Passwords do not match.');
+        return;
+      }
+
+      setIsAdminResettingPassword(true);
+      setAdminResetPasswordError('');
+
+      try {
+        await resetUserPasswordAsAdmin({
+          targetEmail: selectedResetPasswordMember.email,
+          newPassword: adminResetPasswordValue,
+          accessToken,
+        });
+
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        closeResetUserPasswordModal();
+      } catch (error) {
+        setAdminResetPasswordError(error instanceof Error ? error.message : 'Unable to reset user password.');
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      } finally {
+        setIsAdminResettingPassword(false);
+      }
+    };
+
+    void run();
   };
 
   const resetForm = () => {
@@ -575,24 +766,99 @@ export default function ProfileScreen() {
   };
 
   const handlePTLRequest = (memberId: string, approve: boolean) => {
-    Haptics.notificationAsync(
-      approve
-        ? Haptics.NotificationFeedbackType.Success
-        : Haptics.NotificationFeedbackType.Warning
-    );
+    const run = async () => {
+      const member = members.find((candidate) => candidate.id === memberId);
+      if (!member || !user || !accessToken) {
+        return;
+      }
 
-    if (approve) {
-      approvePTL(memberId);
-    } else {
-      rejectPTL(memberId);
-    }
-    setShowPTLRequestModal(false);
-    setSelectedPTLRequest(null);
+      Haptics.notificationAsync(
+        approve
+          ? Haptics.NotificationFeedbackType.Success
+          : Haptics.NotificationFeedbackType.Warning
+      );
+
+      await updateMemberRole(member.email, approve ? 'ptl' : 'standard', accessToken).catch(() => undefined);
+
+      if (approve) {
+        approvePTL(memberId);
+      } else {
+        rejectPTL(memberId);
+      }
+
+      const pendingRequest = appNotifications.find(
+        (notification) =>
+          notification.type === 'ptl_request' &&
+          ((notification.actionTargetId === memberId) ||
+            (typeof notification.actionPayload?.memberId === 'string' && notification.actionPayload.memberId === memberId))
+      );
+
+      if (pendingRequest) {
+        await markAppNotificationRead(pendingRequest.id, accessToken).catch(() => undefined);
+        setAppNotifications((current) =>
+          current.map((notification) =>
+            notification.id === pendingRequest.id
+              ? { ...notification, readAt: new Date().toISOString(), unread: false }
+              : notification
+          )
+        );
+      }
+
+      await sendAppNotification({
+        senderMemberId: user.id,
+        senderEmail: user.email,
+        senderName: getDisplayName(user),
+        recipientEmail: member.email,
+        recipientMemberId: member.id,
+        squadron: member.squadron,
+        type: 'ptl_request_result',
+        title: approve ? 'PFL access approved' : 'PFL access denied',
+        message: approve
+          ? 'Your PFL request was approved.'
+          : 'Your PFL request was denied.',
+        actionType: 'open_account',
+        actionTargetId: member.id,
+        actionPayload: {
+          approved: approve,
+        },
+        accessToken,
+      }).catch(() => undefined);
+
+      setShowPTLRequestModal(false);
+      setSelectedPTLRequest(null);
+      void loadAppNotifications();
+    };
+
+    void run();
   };
 
   const handleRevokePTL = (memberId: string) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    revokePTL(memberId);
+    const run = async () => {
+      const member = members.find((candidate) => candidate.id === memberId);
+      if (!member || !user || !accessToken) {
+        return;
+      }
+
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+      await updateMemberRole(member.email, 'standard', accessToken).catch(() => undefined);
+      revokePTL(memberId);
+      await sendAppNotification({
+        senderMemberId: user.id,
+        senderEmail: user.email,
+        senderName: getDisplayName(user),
+        recipientEmail: member.email,
+        recipientMemberId: member.id,
+        squadron: member.squadron,
+        type: 'ptl_revoked',
+        title: 'PFL access removed',
+        message: 'Your PFL access was removed.',
+        actionType: 'open_account',
+        actionTargetId: member.id,
+        accessToken,
+      }).catch(() => undefined);
+    };
+
+    void run();
   };
 
   const handleSetUFPM = (memberId: string) => {
@@ -654,14 +920,17 @@ export default function ProfileScreen() {
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.8,
-        base64: true,
       });
 
       if (!result.canceled && result.assets[0] && user) {
         const asset = result.assets[0];
-        const imageUri = asset.base64
-          ? `data:${asset.mimeType ?? 'image/jpeg'};base64,${asset.base64}`
-          : asset.uri;
+        setIsUpdatingProfilePicture(true);
+        const imageUri = await uploadProfileImage({
+          memberId: user.id,
+          localUri: asset.uri,
+          mimeType: asset.mimeType ?? undefined,
+          accessToken: accessToken ?? undefined,
+        });
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         await persistProfilePicture(imageUri);
 
@@ -669,6 +938,8 @@ export default function ProfileScreen() {
       }
     } catch (error) {
       setMemberActionError(error instanceof Error ? error.message : 'Unable to update profile picture.');
+    } finally {
+      setIsUpdatingProfilePicture(false);
     }
   };
 
@@ -681,14 +952,17 @@ export default function ProfileScreen() {
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.8,
-        base64: true,
       });
 
       if (!result.canceled && result.assets[0] && user) {
         const asset = result.assets[0];
-        const imageUri = asset.base64
-          ? `data:${asset.mimeType ?? 'image/jpeg'};base64,${asset.base64}`
-          : asset.uri;
+        setIsUpdatingProfilePicture(true);
+        const imageUri = await uploadProfileImage({
+          memberId: user.id,
+          localUri: asset.uri,
+          mimeType: asset.mimeType ?? undefined,
+          accessToken: accessToken ?? undefined,
+        });
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         await persistProfilePicture(imageUri);
 
@@ -696,6 +970,8 @@ export default function ProfileScreen() {
       }
     } catch (error) {
       setMemberActionError(error instanceof Error ? error.message : 'Unable to update profile picture.');
+    } finally {
+      setIsUpdatingProfilePicture(false);
     }
   };
 
@@ -781,8 +1057,30 @@ export default function ProfileScreen() {
       setStravaMessage(null);
       const result = await syncStravaWorkouts({ userId: user.id, email: user.email });
 
-      importWorkouts(user.id, mapImportedWorkouts(result.workouts));
-      setIntegrationConnection('strava', true, result.connection);
+      const importedWorkouts = mapImportedWorkouts(result.workouts);
+      importWorkouts(user.id, importedWorkouts);
+
+      if (result.workouts.length > 0) {
+        const uniqueWorkoutDates = Array.from(new Set(result.workouts.map((workout) => workout.date)));
+        await Promise.all(
+          uniqueWorkoutDates.map((date) =>
+            setAttendanceStatus({
+              date,
+              flight: user.flight,
+              squadron: user.squadron,
+              memberId: user.id,
+              createdBy: user.id,
+              isAttending: true,
+              accessToken: accessToken ?? undefined,
+            }).catch(() => undefined)
+          )
+        );
+
+        const nextSessions = await fetchAttendanceSessions(accessToken ?? undefined).catch(() => []);
+        syncPTSessions(nextSessions);
+      }
+
+      setIntegrationConnection('strava', true, result.connection ?? undefined);
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setStravaMessage(
@@ -834,16 +1132,17 @@ export default function ProfileScreen() {
 
   const getIntegrationLabel = (service: IntegrationService) => {
     switch (service) {
-      case 'apple_health': return 'Apple Health';
+      // Future integration placeholder kept intentionally disabled.
+      // case 'apple_health': return 'Apple Health';
       case 'strava': return 'Strava';
-      case 'garmin': return 'Garmin';
+      // Future integration placeholder kept intentionally disabled.
+      // case 'garmin': return 'Garmin';
       default: return service;
     }
   };
 
   const handleViewTutorial = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    updateUser({ hasSeenTutorial: false });
     router.push('/welcome');
   };
 
@@ -933,6 +1232,41 @@ export default function ProfileScreen() {
         )));
       }).catch(() => undefined);
     }
+  };
+
+  const handleOpenAppNotification = (notification: BackendNotificationItem) => {
+    const run = async () => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+      if (!notification.readAt && accessToken) {
+        await markAppNotificationRead(notification.id, accessToken).catch(() => undefined);
+        setAppNotifications((current) =>
+          current.map((entry) =>
+            entry.id === notification.id
+              ? { ...entry, readAt: new Date().toISOString(), unread: false }
+              : entry
+          )
+        );
+      }
+
+      if (notification.type === 'ptl_request') {
+        const memberId =
+          typeof notification.actionPayload?.memberId === 'string'
+            ? notification.actionPayload.memberId
+            : notification.actionTargetId;
+
+        if (memberId) {
+          setSelectedPTLRequest(memberId);
+          setShowPTLRequestModal(true);
+          setShowNotificationsModal(false);
+          return;
+        }
+      }
+
+      setShowNotificationsModal(false);
+    };
+
+    void run();
   };
 
   const handleReviewManualWorkout = (approved: boolean) => {
@@ -1076,7 +1410,7 @@ export default function ProfileScreen() {
     ? selectedSummaryMonth
     : availableSummaryMonths[0] ?? getMonthKey();
   const monthlyUserSummary = userStats && 'workouts' in userStats
-    ? getMemberMonthSummary(userStats as Member, summaryMonth)
+    ? getMemberMonthSummary(userStats as Member, summaryMonth, ptSessions)
     : { workoutCount: 0, minutes: 0, miles: 0, score: 0 };
   const monthlyPFRAEntries = userStats && 'fitnessAssessments' in userStats
     ? (userStats as Member).fitnessAssessments.filter((assessment) => assessment.date.startsWith(summaryMonth))
@@ -1095,11 +1429,22 @@ export default function ProfileScreen() {
     [members, userStats]
   );
   const workoutHistory = useMemo(
-    () => (userStats && 'workouts' in userStats ? [...(userStats as Member).workouts].sort((a, b) => b.date.localeCompare(a.date)) : []),
-    [userStats]
+    () => {
+      if (!(userStats && 'workouts' in userStats)) {
+        return [];
+      }
+
+      return getMemberEffectiveWorkouts(userStats as Member, ptSessions)
+        .sort((a, b) => b.date.localeCompare(a.date));
+    },
+    [ptSessions, userStats]
   );
   const pfraHistory = useMemo(
     () => (userStats && 'fitnessAssessments' in userStats ? [...(userStats as Member).fitnessAssessments].sort((a, b) => b.date.localeCompare(a.date)) : []),
+    [userStats]
+  );
+  const leaderboardHistory = useMemo(
+    () => (userStats && 'leaderboardHistory' in userStats ? [...(userStats as Member).leaderboardHistory].sort((a, b) => b.month.localeCompare(a.month)) : []),
     [userStats]
   );
   const rarestTrophies = useMemo(
@@ -1216,6 +1561,10 @@ export default function ProfileScreen() {
     ],
     [manualWorkoutReviewQueue, manualWorkoutSubmissions]
   );
+  const backendNotifications = useMemo<BackendNotificationItem[]>(
+    () => appNotifications,
+    [appNotifications]
+  );
 
   const userDisplayName = user ? getDisplayName(user) : 'Unknown';
   const accountColors = getAccountTypeColor(userAccountType);
@@ -1231,9 +1580,16 @@ export default function ProfileScreen() {
 
       <SafeAreaView edges={['top']} className="flex-1">
         <ScrollView
+          ref={scrollViewRef}
           className="flex-1"
           contentContainerStyle={{ paddingBottom: 120 }}
           showsVerticalScrollIndicator={false}
+          scrollEventThrottle={16}
+          onScroll={() => {
+            if (currentTargetId?.startsWith('account-')) {
+              refreshCurrentTarget();
+            }
+          }}
         >
           {/* Header */}
           <Animated.View
@@ -1265,10 +1621,16 @@ export default function ProfileScreen() {
           </Animated.View>
 
           {/* User Card */}
-          <Animated.View
-            entering={FadeInDown.delay(150).springify()}
-            className="mx-6 mt-4 p-6 bg-white/10 rounded-3xl border border-white/20"
+          <TutorialTarget
+            id="account-summary"
+            onLayout={(event) => {
+              tutorialTargetYRef.current['account-summary'] = event.nativeEvent.layout.y;
+            }}
           >
+            <Animated.View
+              entering={FadeInDown.delay(150).springify()}
+              className="mx-6 mt-4 p-6 bg-white/10 rounded-3xl border border-white/20"
+            >
             <View className="flex-row items-center">
               <Pressable
                 onPress={() => {
@@ -1296,15 +1658,25 @@ export default function ProfileScreen() {
                   <Camera size={12} color="white" />
                 </View>
               </Pressable>
-              <View className="flex-1">
-                <Text className="text-white text-xl font-bold">{userDisplayName}</Text>
-                <CompactTrophyBadges trophies={rarestTrophies} overflowCount={trophyOverflowCount} />
-                <Text className="text-af-silver">{user?.email}</Text>
-                <View className="flex-row items-center mt-1">
-                  <View className={cn(
-                    "px-2 py-0.5 rounded-full mr-2",
-                    accountColors.bg
-                  )}>
+                <View className="flex-1">
+                  <Text className="text-white text-xl font-bold">{userDisplayName}</Text>
+                  <View className="mt-2 items-center">
+                    <CompactTrophyBadges trophies={rarestTrophies} overflowCount={trophyOverflowCount} />
+                  </View>
+                  <View className="items-center">
+                    <LinearGradient
+                      colors={['rgba(74,144,217,0)', 'rgba(74,144,217,0.8)', 'rgba(74,144,217,0)']}
+                      start={{ x: 0, y: 0.5 }}
+                      end={{ x: 1, y: 0.5 }}
+                      style={{ marginTop: 12, height: 2, width: 144, borderRadius: 999 }}
+                    />
+                  </View>
+                  <Text className="mt-2 text-af-silver text-center">{user?.email}</Text>
+                  <View className="flex-row items-center justify-center mt-1">
+                    <View className={cn(
+                      "px-2 py-0.5 rounded-full mr-2",
+                      accountColors.bg
+                    )}>
                     <Text className={cn(
                       "text-xs font-semibold",
                       accountColors.text
@@ -1312,9 +1684,9 @@ export default function ProfileScreen() {
                       {getAccountTypeLabel(userAccountType)}
                     </Text>
                   </View>
-                  <Text className="text-af-silver text-sm">{user?.flight} Flight</Text>
+                    <Text className="text-af-silver text-sm">{user?.flight} Flight</Text>
+                  </View>
                 </View>
-              </View>
             </View>
 
             <TrophyCase
@@ -1325,7 +1697,8 @@ export default function ProfileScreen() {
               }}
               trophies={trophyStats}
             />
-          </Animated.View>
+            </Animated.View>
+          </TutorialTarget>
 
           {/* Stats Card */}
           <Animated.View
@@ -1402,39 +1775,74 @@ export default function ProfileScreen() {
             </View>
           </Animated.View>
 
-          <Animated.View
-            entering={FadeInDown.delay(210).springify()}
-            className="mx-6 mt-4"
+          <TutorialTarget
+            id="account-history"
+            onLayout={(event) => {
+              tutorialTargetYRef.current['account-history'] = event.nativeEvent.layout.y;
+            }}
           >
-            <View className="flex-row" style={{ gap: 12 }}>
-              <Pressable
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  setShowWorkoutHistoryModal(true);
-                }}
-                className="flex-1 rounded-2xl border border-white/10 bg-white/5 p-4"
-              >
-                <Text className="text-white font-semibold">Workout History</Text>
-                <Text className="text-af-silver text-xs mt-1">View all logged workouts and details</Text>
-              </Pressable>
-              <Pressable
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  setShowPFRAHistoryModal(true);
-                }}
-                className="flex-1 rounded-2xl border border-white/10 bg-white/5 p-4"
-              >
-                <Text className="text-white font-semibold">PFRA History</Text>
-                <Text className="text-af-silver text-xs mt-1">Review previous PFRA records and scores</Text>
-              </Pressable>
-            </View>
-          </Animated.View>
+            <Animated.View
+              entering={FadeInDown.delay(210).springify()}
+              className="mx-6 mt-4"
+            >
+              <View className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">History</Text>
+                <View className="flex-row flex-wrap" style={{ gap: 12 }}>
+                  <Pressable
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      setShowWorkoutHistoryModal(true);
+                    }}
+                    className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-black/10 p-4"
+                  >
+                    <View className="flex-row items-center">
+                      <Activity size={18} color="#A855F7" />
+                      <Text className="ml-2 text-white font-semibold">Workout History</Text>
+                    </View>
+                    <Text className="text-af-silver text-xs mt-1">View all logged workouts and details</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      setShowPFRAHistoryModal(true);
+                    }}
+                    className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-black/10 p-4"
+                  >
+                    <View className="flex-row items-center">
+                      <FileText size={18} color="#4A90D9" />
+                      <Text className="ml-2 text-white font-semibold">PFRA History</Text>
+                    </View>
+                    <Text className="text-af-silver text-xs mt-1">Review previous PFRA records and scores</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      setShowLeaderboardHistoryModal(true);
+                    }}
+                    className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-black/10 p-4"
+                  >
+                    <View className="flex-row items-center">
+                      <Trophy size={18} color="#FFD700" />
+                      <Text className="ml-2 text-white font-semibold">Leaderboard History</Text>
+                    </View>
+                    <Text className="text-af-silver text-xs mt-1">See your monthly placement and score history</Text>
+                  </Pressable>
+                </View>
+              </View>
+            </Animated.View>
+          </TutorialTarget>
 
           {/* Quick Actions */}
-          <Animated.View
-            entering={FadeInDown.delay(225).springify()}
-            className="mx-6 mt-4"
+          <TutorialTarget
+            id="account-quick-actions"
+            onLayout={(event) => {
+              tutorialTargetYRef.current['account-quick-actions'] = event.nativeEvent.layout.y;
+            }}
           >
+            <Animated.View
+              entering={FadeInDown.delay(225).springify()}
+              className="mx-6 mt-4"
+            >
             <Text className="text-white font-semibold text-lg mb-3">Quick Actions</Text>
             <View className="flex-row">
               <Pressable
@@ -1476,13 +1884,20 @@ export default function ProfileScreen() {
                 </Pressable>
               )}
             </View>
-          </Animated.View>
+            </Animated.View>
+          </TutorialTarget>
 
           {/* Connected Apps */}
-          <Animated.View
-            entering={FadeInDown.delay(250).springify()}
-            className="mx-6 mt-4"
+          <TutorialTarget
+            id="account-connected-apps"
+            onLayout={(event) => {
+              tutorialTargetYRef.current['account-connected-apps'] = event.nativeEvent.layout.y;
+            }}
           >
+            <Animated.View
+              entering={FadeInDown.delay(250).springify()}
+              className="mx-6 mt-4"
+            >
             <Text className="text-white font-semibold text-lg mb-3">Connected Apps</Text>
             <View className="bg-white/5 rounded-2xl border border-white/10 p-4">
               {stravaMessage && (
@@ -1569,14 +1984,21 @@ export default function ProfileScreen() {
                 Configure `EXPO_PUBLIC_APP_URL`, `EXPO_PUBLIC_SUPABASE_URL`, and your Supabase Strava Edge Functions to enable Strava sync.
               </Text>
             )}
-          </Animated.View>
+            </Animated.View>
+          </TutorialTarget>
 
           {/* Admin Actions */}
           {hasAdminAccess && (
-            <Animated.View
-              entering={FadeInDown.delay(300).springify()}
-              className="mx-6 mt-6"
+            <TutorialTarget
+              id="account-admin"
+              onLayout={(event) => {
+                tutorialTargetYRef.current['account-admin'] = event.nativeEvent.layout.y;
+              }}
             >
+              <Animated.View
+                entering={FadeInDown.delay(300).springify()}
+                className="mx-6 mt-6"
+              >
               <Text className="text-white font-semibold text-lg mb-3">Admin Actions</Text>
 
               <Pressable
@@ -1615,20 +2037,47 @@ export default function ProfileScreen() {
                 </View>
               </Pressable>
 
-              {userAccountType === 'fitflight_creator' && (
-                <Pressable
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    router.push('/analytics');
+              {canResetUserPasswords && (
+                <TutorialTarget
+                  id="account-password-reset"
+                  onLayout={(event) => {
+                    tutorialTargetYRef.current['account-password-reset'] = event.nativeEvent.layout.y;
                   }}
-                  className="flex-row items-center bg-purple-500/20 border border-purple-500/50 rounded-xl p-4 mb-3"
                 >
-                  <Settings size={24} color="#A855F7" />
-                  <View className="ml-3 flex-1">
-                    <Text className="text-white font-semibold">Squadron Analytics</Text>
-                    <Text className="text-af-silver text-xs">View detailed reports & export data</Text>
-                  </View>
-                </Pressable>
+                  <Pressable
+                    onPress={openResetUserPasswordModal}
+                    className="flex-row items-center bg-af-warning/20 border border-af-warning/40 rounded-xl p-4 mb-3"
+                  >
+                    <Shield size={24} color="#F59E0B" />
+                    <View className="ml-3 flex-1">
+                      <Text className="text-white font-semibold">Reset User Password</Text>
+                      <Text className="text-af-silver text-xs">Owner and UFPM can set a new password for a member</Text>
+                    </View>
+                  </Pressable>
+                </TutorialTarget>
+              )}
+
+              {userAccountType === 'fitflight_creator' && (
+                <TutorialTarget
+                  id="account-analytics"
+                  onLayout={(event) => {
+                    tutorialTargetYRef.current['account-analytics'] = event.nativeEvent.layout.y;
+                  }}
+                >
+                  <Pressable
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      router.push('/analytics');
+                    }}
+                    className="flex-row items-center bg-purple-500/20 border border-purple-500/50 rounded-xl p-4 mb-3"
+                  >
+                    <Settings size={24} color="#A855F7" />
+                    <View className="ml-3 flex-1">
+                      <Text className="text-white font-semibold">Squadron Analytics</Text>
+                      <Text className="text-af-silver text-xs">View detailed reports & export data</Text>
+                    </View>
+                  </Pressable>
+                </TutorialTarget>
               )}
 
               {userAccountType === 'fitflight_creator' && (
@@ -1646,15 +2095,22 @@ export default function ProfileScreen() {
                   </View>
                 </Pressable>
               )}
-            </Animated.View>
+              </Animated.View>
+            </TutorialTarget>
           )}
 
           {/* PFL Actions (for PFLs only, not admins) */}
           {canEditAttendance(userAccountType) && !hasAdminAccess && (
-            <Animated.View
-              entering={FadeInDown.delay(300).springify()}
-              className="mx-6 mt-6"
+            <TutorialTarget
+              id="account-admin"
+              onLayout={(event) => {
+                tutorialTargetYRef.current['account-admin'] = event.nativeEvent.layout.y;
+              }}
             >
+              <Animated.View
+                entering={FadeInDown.delay(300).springify()}
+                className="mx-6 mt-6"
+              >
               <Text className="text-white font-semibold text-lg mb-3">PFL Actions</Text>
               <Pressable
                 onPress={openAddMemberModal}
@@ -1676,14 +2132,21 @@ export default function ProfileScreen() {
                   <Text className="text-af-silver text-xs">Edit or remove roster members</Text>
                 </View>
               </Pressable>
-            </Animated.View>
+              </Animated.View>
+            </TutorialTarget>
           )}
 
           {/* Help & Tutorial */}
-          <Animated.View
-            entering={FadeInDown.delay(325).springify()}
-            className="mx-6 mt-6"
+          <TutorialTarget
+            id="account-help"
+            onLayout={(event) => {
+              tutorialTargetYRef.current['account-help'] = event.nativeEvent.layout.y;
+            }}
           >
+            <Animated.View
+              entering={FadeInDown.delay(325).springify()}
+              className="mx-6 mt-6"
+            >
             <Text className="text-white font-semibold text-lg mb-3">Help</Text>
             <Pressable
               onPress={handleViewTutorial}
@@ -1775,7 +2238,8 @@ export default function ProfileScreen() {
                 </View>
               )}
             </Pressable>
-          </Animated.View>
+            </Animated.View>
+          </TutorialTarget>
 
           {/* Logout */}
           <Animated.View
@@ -2075,7 +2539,7 @@ export default function ProfileScreen() {
                             <Pencil size={15} color="#C0C0C0" />
                           </Pressable>
                           <Pressable
-                            onPress={() => handleRemoveMember(member.id)}
+                            onPress={() => confirmRemoveMember(member.id)}
                             className="w-9 h-9 bg-af-danger/20 rounded-full items-center justify-center"
                           >
                             <Trash2 size={16} color="#EF4444" />
@@ -2106,6 +2570,55 @@ export default function ProfileScreen() {
                 </View>
               )}
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={Boolean(memberPendingDelete)} transparent animationType="fade">
+        <View className="flex-1 bg-black/80 items-center justify-center p-6">
+          <View className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20">
+            <View className="flex-row items-center justify-between mb-4">
+              <Text className="text-white text-xl font-bold">Delete Member</Text>
+              <Pressable
+                onPress={closeRemoveMemberConfirmation}
+                className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+              >
+                <X size={20} color="#C0C0C0" />
+              </Pressable>
+            </View>
+
+            <View className="bg-af-danger/10 border border-af-danger/30 rounded-2xl p-4 mb-4">
+              <Text className="text-white font-semibold">
+                {memberPendingDelete ? getDisplayName(memberPendingDelete) : 'Selected member'}
+              </Text>
+              <Text className="text-af-silver text-sm mt-2">
+                This will remove the member from the roster and FitFlight tracking.
+              </Text>
+              <Text className="text-af-danger text-sm font-medium mt-3">
+                This action cannot be undone.
+              </Text>
+            </View>
+
+            <View className="flex-row">
+              <Pressable
+                onPress={closeRemoveMemberConfirmation}
+                className="flex-1 bg-white/10 py-3 rounded-xl mr-2"
+              >
+                <Text className="text-white text-center font-semibold">Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  if (!memberPendingDeleteId) {
+                    return;
+                  }
+                  closeRemoveMemberConfirmation();
+                  handleRemoveMember(memberPendingDeleteId);
+                }}
+                className="flex-1 bg-af-danger py-3 rounded-xl ml-2"
+              >
+                <Text className="text-white text-center font-semibold">Delete Member</Text>
+              </Pressable>
+            </View>
           </View>
         </View>
       </Modal>
@@ -2163,6 +2676,125 @@ export default function ProfileScreen() {
                   </View>
                 </Pressable>
               ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showResetUserPasswordModal} transparent animationType="slide">
+        <View className="flex-1 bg-black/80 justify-end">
+          <View className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[85%]">
+            <View className="flex-row items-center justify-between mb-6">
+              <Text className="text-white text-xl font-bold">Reset User Password</Text>
+              <Pressable
+                onPress={closeResetUserPasswordModal}
+                className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+              >
+                <X size={20} color="#C0C0C0" />
+              </Pressable>
+            </View>
+
+            {adminResetPasswordError ? (
+              <View className="bg-red-500/20 border border-red-500/40 rounded-xl px-4 py-3 mb-4">
+                <Text className="text-red-300">{adminResetPasswordError}</Text>
+              </View>
+            ) : null}
+
+            <View className="bg-af-warning/10 border border-af-warning/30 rounded-xl p-4 mb-4">
+              <Text className="text-white text-sm leading-5">
+                This sets a brand new password for the selected member immediately. Choose a strong password and share it securely.
+              </Text>
+            </View>
+
+            <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10 mb-4">
+              <Search size={18} color="#C0C0C0" />
+              <TextInput
+                value={resetPasswordSearchQuery}
+                onChangeText={setResetPasswordSearchQuery}
+                placeholder="Search members"
+                placeholderTextColor="#ffffff40"
+                autoCapitalize="none"
+                className="flex-1 ml-3 text-white"
+              />
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <View className="mb-4">
+                {resetPasswordCandidates.map((member) => {
+                  const isSelected = member.id === selectedResetPasswordMemberId;
+                  return (
+                    <Pressable
+                      key={member.id}
+                      onPress={() => {
+                        Haptics.selectionAsync();
+                        setSelectedResetPasswordMemberId(member.id);
+                      }}
+                      className={cn(
+                        "rounded-2xl border p-4 mb-3",
+                        isSelected ? "bg-af-accent/20 border-af-accent/50" : "bg-white/5 border-white/10"
+                      )}
+                    >
+                      <Text className="text-white font-semibold">{getDisplayName(member)}</Text>
+                      <Text className="text-af-silver text-xs mt-1">{member.email}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              {selectedResetPasswordMember ? (
+                <View className="bg-white/5 border border-white/10 rounded-2xl p-4">
+                  <Text className="text-white font-semibold">Selected Member</Text>
+                  <Text className="text-af-silver text-sm mt-1">{getDisplayName(selectedResetPasswordMember)}</Text>
+                  <Text className="text-af-silver text-xs mt-1">{selectedResetPasswordMember.email}</Text>
+
+                  <Text className="text-white/60 text-sm mt-4 mb-2">New Password</Text>
+                  <View className="bg-white/10 rounded-xl px-4 py-3 border border-white/10">
+                    <TextInput
+                      value={adminResetPasswordValue}
+                      onChangeText={setAdminResetPasswordValue}
+                      placeholder="Enter new password"
+                      placeholderTextColor="#ffffff40"
+                      secureTextEntry
+                      autoCapitalize="none"
+                      className="text-white"
+                    />
+                  </View>
+
+                  <Text className="text-white/60 text-sm mt-4 mb-2">Confirm New Password</Text>
+                  <View className="bg-white/10 rounded-xl px-4 py-3 border border-white/10">
+                    <TextInput
+                      value={adminResetPasswordConfirm}
+                      onChangeText={setAdminResetPasswordConfirm}
+                      placeholder="Re-enter new password"
+                      placeholderTextColor="#ffffff40"
+                      secureTextEntry
+                      autoCapitalize="none"
+                      className="text-white"
+                    />
+                  </View>
+
+                  <Pressable
+                    onPress={handleAdminResetUserPassword}
+                    disabled={isAdminResettingPassword}
+                    className={cn(
+                      "py-4 rounded-xl mt-5",
+                      isAdminResettingPassword ? "bg-white/10" : "bg-af-warning"
+                    )}
+                  >
+                    <Text className="text-white font-bold text-center">
+                      {isAdminResettingPassword ? 'Resetting...' : 'Reset Password'}
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <View className="bg-white/5 border border-white/10 rounded-2xl p-6 items-center">
+                  <Shield size={28} color="#C0C0C0" />
+                  <Text className="text-white font-semibold mt-3">Select a Member</Text>
+                  <Text className="text-af-silver text-sm mt-1 text-center">
+                    Choose a member above to set their new password.
+                  </Text>
+                </View>
+              )}
             </ScrollView>
           </View>
         </View>
@@ -2533,9 +3165,9 @@ export default function ProfileScreen() {
       </Modal>
 
       {/* Notifications Modal */}
-      <Modal visible={showNotificationsModal} transparent animationType="slide">
-        <View className="flex-1 bg-black/80 justify-end">
-          <View className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[80%]">
+      <Modal visible={showNotificationsModal} transparent animationType="none">
+        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View entering={SlideInDown.duration(260)} className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[80%]">
             <View className="flex-row items-center justify-between mb-6">
               <Text className="text-white text-xl font-bold">Notifications</Text>
               <Pressable
@@ -2547,10 +3179,13 @@ export default function ProfileScreen() {
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false}>
-              {notifications.length === 0 && supportNotifications.length === 0 && manualWorkoutNotifications.length === 0 ? (
+              {backendNotifications.length === 0 && supportNotifications.length === 0 && manualWorkoutNotifications.length === 0 && !appNotificationsLoading ? (
                 <Text className="text-white/40 text-center py-8">No notifications</Text>
               ) : (
                 <>
+                  {appNotificationsLoading && backendNotifications.length === 0 ? (
+                    <Text className="text-af-silver text-center py-4">Loading notifications...</Text>
+                  ) : null}
                   {manualWorkoutNotifications.map((notification) => (
                     <Pressable
                       key={notification.id}
@@ -2581,27 +3216,20 @@ export default function ProfileScreen() {
                     </Pressable>
                   ))}
 
-                  {notifications.map((notification) => {
+                  {backendNotifications.map((notification) => {
                     const isPTLRequest = notification.type === 'ptl_request';
                     return (
                       <Pressable
                         key={notification.id}
-                        onPress={() => {
-                          if (isPTLRequest && notification.data?.memberId) {
-                            setSelectedPTLRequest(notification.data.memberId as string);
-                            setShowPTLRequestModal(true);
-                            setShowNotificationsModal(false);
-                          }
-                          markNotificationRead(notification.id);
-                        }}
+                        onPress={() => handleOpenAppNotification(notification)}
                         className={cn(
                           "p-4 rounded-xl mb-3 border",
-                          notification.read ? "bg-white/5 border-white/10" : "bg-af-accent/10 border-af-accent/30"
+                          notification.readAt ? "bg-white/5 border-white/10" : "bg-af-accent/10 border-af-accent/30"
                         )}
                       >
                         <Text className="text-white font-semibold">{notification.title}</Text>
                         <Text className="text-af-silver text-sm mt-1">{notification.message}</Text>
-                        {isPTLRequest && !notification.read && (
+                        {isPTLRequest && !notification.readAt && (
                           <Text className="text-af-accent text-xs mt-2">Tap to review</Text>
                         )}
                       </Pressable>
@@ -2610,8 +3238,8 @@ export default function ProfileScreen() {
                 </>
               )}
             </ScrollView>
-          </View>
-        </View>
+            </Animated.View>
+        </Animated.View>
       </Modal>
 
       {/* PFL Request Review Modal */}
@@ -2776,10 +3404,22 @@ export default function ProfileScreen() {
               )}
             </View>
 
+            {isUpdatingProfilePicture && (
+              <View className="mb-4 rounded-xl border border-af-accent/30 bg-af-accent/10 px-4 py-3">
+                <Text className="text-af-silver text-sm">Uploading image...</Text>
+              </View>
+            )}
+
             {/* Action Buttons */}
             <Pressable
               onPress={takeProfilePhoto}
-              className="flex-row items-center bg-af-accent/20 border border-af-accent/50 rounded-xl p-4 mb-3"
+              disabled={isUpdatingProfilePicture}
+              className={cn(
+                "flex-row items-center rounded-xl p-4 mb-3",
+                isUpdatingProfilePicture
+                  ? "bg-white/5 border border-white/10 opacity-60"
+                  : "bg-af-accent/20 border border-af-accent/50"
+              )}
             >
               <Camera size={24} color="#4A90D9" />
               <Text className="text-white font-semibold ml-3">Take Photo</Text>
@@ -2787,7 +3427,13 @@ export default function ProfileScreen() {
 
             <Pressable
               onPress={pickProfilePicture}
-              className="flex-row items-center bg-white/5 border border-white/10 rounded-xl p-4 mb-3"
+              disabled={isUpdatingProfilePicture}
+              className={cn(
+                "flex-row items-center rounded-xl p-4 mb-3",
+                isUpdatingProfilePicture
+                  ? "bg-white/5 border border-white/10 opacity-60"
+                  : "bg-white/5 border border-white/10"
+              )}
             >
               <ImageIcon size={24} color="#C0C0C0" />
               <Text className="text-white font-semibold ml-3">Choose from Gallery</Text>
@@ -2796,7 +3442,13 @@ export default function ProfileScreen() {
             {user?.profilePicture && (
               <Pressable
                 onPress={removeProfilePicture}
-                className="flex-row items-center bg-af-danger/20 border border-af-danger/50 rounded-xl p-4"
+                disabled={isUpdatingProfilePicture}
+                className={cn(
+                  "flex-row items-center rounded-xl p-4",
+                  isUpdatingProfilePicture
+                    ? "bg-white/5 border border-white/10 opacity-60"
+                    : "bg-af-danger/20 border border-af-danger/50"
+                )}
               >
                 <Trash2 size={24} color="#EF4444" />
                 <Text className="text-af-danger font-semibold ml-3">Remove Photo</Text>
@@ -2929,9 +3581,9 @@ export default function ProfileScreen() {
         </View>
       </Modal>
 
-      <Modal visible={showWorkoutHistoryModal} transparent animationType="slide">
-        <View className="flex-1 bg-black/80 justify-end">
-          <View className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[85%]">
+      <Modal visible={showWorkoutHistoryModal} transparent animationType="none">
+        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View entering={SlideInDown.duration(260)} className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[85%]">
             <View className="flex-row items-center justify-between mb-6">
               <Text className="text-white text-xl font-bold">Workout History</Text>
               <Pressable
@@ -2954,21 +3606,40 @@ export default function ProfileScreen() {
                         <Text className="text-af-silver text-xs mt-1">{workout.date}</Text>
                       </View>
                       <View className="rounded-full bg-white/10 px-3 py-1">
-                        <Text className="text-af-silver text-xs">{workout.source === 'manual' ? 'Manual' : workout.source}</Text>
+                        <Text className="text-af-silver text-xs">
+                          {workout.source === 'manual'
+                            ? 'Manual'
+                            : workout.source === 'attendance'
+                              ? 'Attendance'
+                              : workout.source}
+                        </Text>
                       </View>
                     </View>
-                    <View className="mt-3 flex-row justify-between">
-                      <Text className="text-af-silver text-sm">Duration</Text>
-                      <Text className="text-white font-semibold">{workout.duration} min</Text>
-                    </View>
-                    <View className="mt-2 flex-row justify-between">
-                      <Text className="text-af-silver text-sm">Distance</Text>
-                      <Text className="text-white font-semibold">{typeof workout.distance === 'number' ? `${workout.distance} mi` : 'N/A'}</Text>
-                    </View>
-                    <View className="mt-2 flex-row justify-between">
-                      <Text className="text-af-silver text-sm">Visibility</Text>
-                      <Text className="text-white font-semibold">{workout.isPrivate ? 'Private' : 'Public'}</Text>
-                    </View>
+                    {workout.source === 'attendance' ? (
+                      <View className="mt-3 rounded-xl border border-white/10 bg-black/10 px-4 py-3">
+                        <Text className="text-white font-medium">Logged by PFL/UFPM</Text>
+                      </View>
+                    ) : (
+                      <>
+                        {workout.source === 'strava' ? (
+                          <View className="mt-3 rounded-xl border border-orange-400/20 bg-orange-400/10 px-4 py-3">
+                            <Text className="text-orange-200 font-medium">Imported from Strava</Text>
+                          </View>
+                        ) : null}
+                        <View className="mt-3 flex-row justify-between">
+                          <Text className="text-af-silver text-sm">Duration</Text>
+                          <Text className="text-white font-semibold">{workout.duration} min</Text>
+                        </View>
+                        <View className="mt-2 flex-row justify-between">
+                          <Text className="text-af-silver text-sm">Distance</Text>
+                          <Text className="text-white font-semibold">{typeof workout.distance === 'number' ? `${workout.distance} mi` : 'N/A'}</Text>
+                        </View>
+                        <View className="mt-2 flex-row justify-between">
+                          <Text className="text-af-silver text-sm">Visibility</Text>
+                          <Text className="text-white font-semibold">{workout.isPrivate ? 'Private' : 'Public'}</Text>
+                        </View>
+                      </>
+                    )}
                     {workout.screenshotUri ? (
                       <Image
                         source={{ uri: workout.screenshotUri }}
@@ -2984,13 +3655,13 @@ export default function ProfileScreen() {
                 ))
               )}
             </ScrollView>
-          </View>
-        </View>
+            </Animated.View>
+        </Animated.View>
       </Modal>
 
-      <Modal visible={showPFRAHistoryModal} transparent animationType="slide">
-        <View className="flex-1 bg-black/80 justify-end">
-          <View className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[85%]">
+      <Modal visible={showPFRAHistoryModal} transparent animationType="none">
+        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View entering={SlideInDown.duration(260)} className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[85%]">
             <View className="flex-row items-center justify-between mb-6">
               <Text className="text-white text-xl font-bold">PFRA History</Text>
               <Pressable
@@ -3053,8 +3724,40 @@ export default function ProfileScreen() {
                 ))
               )}
             </ScrollView>
-          </View>
-        </View>
+          </Animated.View>
+        </Animated.View>
+      </Modal>
+
+      <Modal visible={showLeaderboardHistoryModal} transparent animationType="none">
+        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View entering={SlideInDown.duration(260)} className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[80%]">
+            <View className="flex-row items-center justify-between mb-6">
+              <Text className="text-white text-xl font-bold">Leaderboard History</Text>
+              <Pressable
+                onPress={() => setShowLeaderboardHistoryModal(false)}
+                className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+              >
+                <X size={20} color="#C0C0C0" />
+              </Pressable>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {leaderboardHistory.length === 0 ? (
+                <Text className="text-white/40 text-center py-8">No leaderboard placements recorded yet.</Text>
+              ) : (
+                leaderboardHistory.map((entry) => (
+                  <View key={`${entry.month}-${entry.position}`} className="bg-white/5 border border-white/10 rounded-2xl p-4 mb-3">
+                    <View className="flex-row items-center justify-between">
+                      <Text className="text-white font-semibold">{formatMonthLabel(entry.month)}</Text>
+                      <Text className="text-af-gold font-semibold">#{entry.position}</Text>
+                    </View>
+                    <Text className="text-af-silver text-sm mt-1">{entry.score.toLocaleString()} pts</Text>
+                  </View>
+                ))
+              )}
+            </ScrollView>
+          </Animated.View>
+        </Animated.View>
       </Modal>
 
       {/* Disconnect Integration Modal */}
