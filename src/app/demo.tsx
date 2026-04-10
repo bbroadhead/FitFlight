@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -94,6 +94,7 @@ export default function DemoLoginScreen() {
 
   const [statusMessage, setStatusMessage] = useState('Loading demo access...');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const hasStartedRef = useRef(false);
   const key = useMemo(() => {
     if (typeof params.key === 'string' && params.key.trim()) {
       return params.key.trim();
@@ -107,6 +108,11 @@ export default function DemoLoginScreen() {
   }, [params.key]);
 
   useEffect(() => {
+    if (hasStartedRef.current) {
+      return;
+    }
+
+    hasStartedRef.current = true;
     let isCancelled = false;
 
     const run = async () => {
@@ -139,7 +145,8 @@ export default function DemoLoginScreen() {
       const roleRecord = await fetchRoleForEmail(normalizedEmail, accessToken).catch(() => null);
       const resolvedSquadron = (typeof metadata.squadron === 'string' ? metadata.squadron : 'Hawks') as Squadron;
       const rosterMembers = await fetchRosterMembers(accessToken, resolvedSquadron).catch(() => []);
-      const localExistingMember = findMatchingMember(members, {
+      const currentMembers = useMemberStore.getState().members;
+      const localExistingMember = findMatchingMember(currentMembers, {
         email: normalizedEmail,
         firstName: typeof metadata.firstName === 'string' ? metadata.firstName : '',
         lastName: typeof metadata.lastName === 'string' ? metadata.lastName : '',
@@ -277,7 +284,7 @@ export default function DemoLoginScreen() {
     return () => {
       isCancelled = true;
     };
-  }, [addMember, key, login, members, removeMember, router, setSessionTokens, syncMembersFromRoster, updateMember]);
+  }, [addMember, key, login, removeMember, router, setSessionTokens, syncMembersFromRoster, updateMember]);
 
   return (
     <SafeAreaView className="flex-1 bg-af-navy">
