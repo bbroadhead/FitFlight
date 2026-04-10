@@ -36,7 +36,8 @@ on public.manual_workout_submissions
 for select
 to authenticated
 using (
-  lower(member_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+  member_id = coalesce(auth.uid()::text, '')
+  or lower(member_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
   or public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
 );
 
@@ -46,7 +47,8 @@ on public.manual_workout_submissions
 for insert
 to authenticated
 with check (
-  lower(member_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+  member_id = coalesce(auth.uid()::text, '')
+  or lower(member_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
 );
 
 drop policy if exists "manual_workout_submissions_update_reviewer_or_requester" on public.manual_workout_submissions;
@@ -55,10 +57,12 @@ on public.manual_workout_submissions
 for update
 to authenticated
 using (
-  lower(member_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+  member_id = coalesce(auth.uid()::text, '')
+  or lower(member_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
   or public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
 )
 with check (
-  lower(member_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+  member_id = coalesce(auth.uid()::text, '')
+  or lower(member_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
   or public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
 );

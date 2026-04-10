@@ -2136,12 +2136,15 @@ export async function createManualWorkoutSubmission(params: {
 
   const payload = await response.json().catch(() => []);
   if (!response.ok) {
-    const message =
-      typeof (payload as { message?: unknown }).message === 'string'
-        ? (payload as { message: string }).message
-        : 'Unable to submit manual workout proof.';
-    throw new Error(message);
-  }
+      const rawMessage =
+        typeof (payload as { message?: unknown }).message === 'string'
+          ? (payload as { message: string }).message
+          : 'Unable to submit manual workout proof.';
+      const message = rawMessage.toLowerCase().includes('row-level security')
+        ? 'Manual workout submission is blocked by Supabase security rules. Re-run supabase/sql/manual_workout_submissions.sql, then try again.'
+        : rawMessage;
+      throw new Error(message);
+    }
 
   return normalizeManualWorkoutSubmissionRow((payload as ManualWorkoutSubmissionRow[])[0]);
 }
