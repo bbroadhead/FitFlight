@@ -69,6 +69,8 @@
         var normalizedPath = path.toLowerCase();
         var allowedTopLevelRoutes = new Set([
           'demo',
+          'index',
+          'install',
           'login',
           'reset-password',
           'welcome',
@@ -93,6 +95,17 @@
 
         var route = path.slice(basePath.length).replace(/^\/+|\/+$/g, '');
         if (!route) {
+          return;
+        }
+
+        var normalizedRoute = route.toLowerCase();
+        if (normalizedRoute === 'index.html' || normalizedRoute === 'login.html' || normalizedRoute === 'install.html') {
+          window.location.replace(basePath + 'login' + window.location.search + window.location.hash);
+          return;
+        }
+
+        if (normalizedRoute === 'demo.html') {
+          window.location.replace(basePath + 'demo' + window.location.search + window.location.hash);
           return;
         }
 

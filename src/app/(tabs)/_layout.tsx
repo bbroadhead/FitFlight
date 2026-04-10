@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from "react";
 import { Redirect, withLayoutContext } from "expo-router";
 import { createMaterialTopTabNavigator } from "@react-navigation/material-top-tabs";
 import { Ionicons } from "@expo/vector-icons";
+import { ActivityIndicator, Image, View } from "react-native";
 import { TabSwipeProvider, useTabSwipe } from "@/contexts/TabSwipeContext";
 import { useAuthStore, useMemberStore } from "@/lib/store";
 import {
@@ -277,6 +278,34 @@ function TabsInner() {
       clearInterval(interval);
     };
   }, [accessToken, hasCheckedAuth, isAuthenticated, pruneOldWorkoutMedia, syncApprovedManualWorkouts, syncFitnessAssessments, syncLeaderboardHistory, syncMembersFromRoster, syncPTSessions, syncScheduledSessions, syncSharedWorkouts, updateUser, user]);
+
+  if (!hasCheckedAuth) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#0A1628', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+        <View
+          style={{
+            width: 84,
+            height: 84,
+            borderRadius: 24,
+            backgroundColor: 'rgba(255,255,255,0.08)',
+            borderWidth: 1,
+            borderColor: 'rgba(255,255,255,0.14)',
+            alignItems: 'center',
+            justifyContent: 'center',
+            overflow: 'hidden',
+            marginBottom: 22,
+          }}
+        >
+          <Image
+            source={require('../../../assets/images/TotalFlight_Icon_Resized.png')}
+            style={{ width: '72%', height: '72%' }}
+            resizeMode="contain"
+          />
+        </View>
+        <ActivityIndicator size="large" color="#4A90D9" />
+      </View>
+    );
+  }
 
   if (hasCheckedAuth && !isAuthenticated) {
     return <Redirect href="/login" />;

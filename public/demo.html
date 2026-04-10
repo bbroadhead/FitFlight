@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FitFlight Demo</title>
+    <link rel="icon" type="image/png" sizes="192x192" href="/FitFlight/logo192.png" />
+    <link rel="apple-touch-icon" href="/FitFlight/apple-touch-icon.png" />
+    <meta name="theme-color" content="#001F5C" />
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background:
+          radial-gradient(circle at top, rgba(74, 144, 217, 0.18), transparent 32%),
+          linear-gradient(180deg, #071226 0%, #0a1628 100%);
+        color: #ffffff;
+      }
+      .shell {
+        width: 100%;
+        max-width: 460px;
+        border-radius: 28px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(10, 22, 40, 0.92);
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+        padding: 28px;
+        text-align: center;
+      }
+      .icon-wrap {
+        width: 80px;
+        height: 80px;
+        border-radius: 24px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0 auto 22px;
+      }
+      .icon-wrap img {
+        width: 58px;
+        height: 58px;
+        object-fit: contain;
+      }
+      h1 {
+        margin: 0;
+        font-size: 30px;
+        line-height: 1.08;
+      }
+      p {
+        margin: 14px 0 0;
+        color: rgba(255, 255, 255, 0.76);
+        font-size: 16px;
+        line-height: 1.6;
+      }
+      .spinner {
+        width: 36px;
+        height: 36px;
+        border-radius: 999px;
+        border: 3px solid rgba(255, 255, 255, 0.18);
+        border-top-color: #4a90d9;
+        margin: 24px auto 0;
+        animation: spin 0.8s linear infinite;
+      }
+      .error {
+        margin-top: 20px;
+        border-radius: 18px;
+        border: 1px solid rgba(248, 113, 113, 0.35);
+        background: rgba(127, 29, 29, 0.22);
+        padding: 16px;
+        color: #fecaca;
+        font-size: 14px;
+        line-height: 1.6;
+        white-space: pre-wrap;
+        word-break: break-word;
+        text-align: left;
+      }
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        margin-top: 22px;
+        border-radius: 999px;
+        padding: 12px 20px;
+        background: #4a90d9;
+        color: #ffffff;
+        text-decoration: none;
+        font-weight: 700;
+      }
+      @keyframes spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <div class="icon-wrap">
+        <img src="/FitFlight/apple-touch-icon.png" alt="FitFlight icon" />
+      </div>
+      <h1>FitFlight Demo Access</h1>
+      <p id="status">Signing you into FitFlight...</p>
+      <div class="spinner" id="spinner" aria-hidden="true"></div>
+      <div id="error" class="error" hidden></div>
+      <a id="fallback-link" class="button" href="/FitFlight/login.html" hidden>Go to Login</a>
+    </div>
+
+    <script>
+      (function () {
+        var SUPABASE_URL = 'https://zfjuiwwhgoedsmvolrcd.supabase.co';
+        var statusEl = document.getElementById('status');
+        var spinnerEl = document.getElementById('spinner');
+        var errorEl = document.getElementById('error');
+        var fallbackLinkEl = document.getElementById('fallback-link');
+        var params = new URLSearchParams(window.location.search);
+        var key = params.get('key');
+
+        function showError(message) {
+          if (spinnerEl) spinnerEl.hidden = true;
+          if (statusEl) {
+            statusEl.textContent = 'Unable to start the demo session.';
+          }
+          if (errorEl) {
+            errorEl.hidden = false;
+            errorEl.textContent = message;
+          }
+          if (fallbackLinkEl) {
+            fallbackLinkEl.hidden = false;
+          }
+        }
+
+        if (!key) {
+          showError('Missing demo access key.');
+          return;
+        }
+
+        fetch(SUPABASE_URL + '/functions/v1/demo-login?key=' + encodeURIComponent(key))
+          .then(function (response) {
+            return response
+              .json()
+              .catch(function () { return {}; })
+              .then(function (payload) {
+                if (!response.ok) {
+                  throw new Error(payload.error || payload.message || 'Unable to use the demo login link.');
+                }
+                return payload;
+              });
+          })
+          .then(function (payload) {
+            var accessToken = payload.access_token || payload.accessToken || (payload.session && payload.session.access_token);
+            var refreshToken = payload.refresh_token || payload.refreshToken || (payload.session && payload.session.refresh_token);
+
+            if (!accessToken) {
+              throw new Error('Demo login did not return an access token.');
+            }
+
+            var hash = '#access_token=' + encodeURIComponent(accessToken);
+            if (refreshToken) {
+              hash += '&refresh_token=' + encodeURIComponent(refreshToken);
+            }
+
+            window.location.replace('/FitFlight/login.html' + hash);
+          })
+          .catch(function (error) {
+            showError(error && error.message ? error.message : 'Unable to use the demo login link.');
+          });
+      })();
+    </script>
+  </body>
+</html>
