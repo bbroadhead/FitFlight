@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, Pressable, KeyboardAvoidingView, Platform, ScrollView, Modal, Image } from 'react-native';
+import { View, Text, TextInput, Pressable, KeyboardAvoidingView, Platform, ScrollView, Modal, Image, ActivityIndicator } from 'react-native';
 import Checkbox from 'expo-checkbox';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -210,6 +210,7 @@ export default function LoginScreen() {
   const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false);
   const [resetEmail, setResetEmail] = useState('');
   const [resetMessage, setResetMessage] = useState('');
+  const [authLoadTimedOut, setAuthLoadTimedOut] = useState(false);
 
   const validateEmail = (emailToValidate: string): boolean => {
     return emailToValidate.toLowerCase().endsWith('@us.af.mil');
@@ -386,6 +387,19 @@ export default function LoginScreen() {
 
     void finalizeEmailConfirmation();
   }, [addMember, email, login, members, removeMember, router, setSessionTokens, syncMembersFromRoster, updateMember]);
+
+  useEffect(() => {
+    if (hasCheckedAuth) {
+      setAuthLoadTimedOut(false);
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      setAuthLoadTimedOut(true);
+    }, 1800);
+
+    return () => clearTimeout(timeout);
+  }, [hasCheckedAuth]);
 
   const handleSignIn = () => {
     const run = async () => {
@@ -733,10 +747,18 @@ export default function LoginScreen() {
   }
 
   // Show loading while checking auth
-  if (!hasCheckedAuth) {
+  if (!hasCheckedAuth && !authLoadTimedOut) {
     return (
-      <View className="flex-1 bg-af-navy items-center justify-center">
-        <Shield size={48} color="#4A90D9" />
+      <View className="flex-1 bg-af-navy items-center justify-center px-6">
+        <View className="w-20 h-20 bg-white/10 rounded-[24px] items-center justify-center mb-5 border border-white/20 overflow-hidden">
+          <Image
+            source={require('../../assets/images/TotalFlight_Icon_Resized.png')}
+            style={{ width: '74%', height: '74%' }}
+            resizeMode="contain"
+          />
+        </View>
+        <ActivityIndicator size="large" color="#4A90D9" />
+        <Text className="text-af-silver mt-4 text-center">Loading FitFlight...</Text>
       </View>
     );
   }
