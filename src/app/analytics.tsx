@@ -409,7 +409,9 @@ export default function AnalyticsScreen() {
             ? 'PFL'
             : member.accountType === 'squadron_leadership'
               ? 'Squadron Leadership'
-              : member.accountType === 'ufpm'
+              : member.accountType === 'demo'
+                ? 'Demo Role'
+                : member.accountType === 'ufpm'
                 ? 'UFPM'
                 : member.accountType,
         minutes: member.exerciseMinutes,

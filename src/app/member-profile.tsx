@@ -6,7 +6,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ChevronLeft, Timer, MapPin, Trophy, Lock, Unlock, TrendingUp, Shield, Camera, Dumbbell, Activity, Image as ImageIcon, BarChart3, User, X, Award, ClipboardList, FileText } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeInUp, useAnimatedStyle, useSharedValue, withSpring, withDelay } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import { useMemberStore, useAuthStore, getDisplayName, ALL_ACHIEVEMENTS, canEditAttendance, type AccountType, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
+import { useMemberStore, useAuthStore, getDisplayName, ALL_ACHIEVEMENTS, canManagePTPrograms, type AccountType, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { TrophyCase, CompactTrophyBadges } from '@/components/TrophyCase';
 import { buildTrophyStats, getRarestEarnedTrophies } from '@/lib/trophies';
@@ -113,7 +113,7 @@ export default function MemberProfileScreen() {
 
   // All hooks must be called before early returns
   const isOwnProfile = currentUser?.id === member?.id;
-  const canViewAllWorkouts = isOwnProfile || canEditAttendance(currentUser?.accountType ?? 'standard');
+  const canViewAllWorkouts = isOwnProfile || canManagePTPrograms(currentUser?.accountType ?? 'standard');
 
   const allEffectiveWorkouts = useMemo(() => {
     if (!member) return [];
@@ -206,6 +206,7 @@ export default function MemberProfileScreen() {
     !member.fitnessAssessments.some(fa => fa.isPrivate) ||
     currentUser?.accountType === 'fitflight_creator' ||
     currentUser?.accountType === 'ufpm' ||
+    currentUser?.accountType === 'demo' ||
     currentUser?.accountType === 'squadron_leadership';
   const pfraHistory = useMemo(
     () => [...member.fitnessAssessments].sort((a, b) => b.date.localeCompare(a.date)),
@@ -226,6 +227,7 @@ export default function MemberProfileScreen() {
     switch (accountType) {
       case 'fitflight_creator': return 'FitFlight Creator';
       case 'ufpm': return 'UFPM';
+      case 'demo': return 'Demo Role';
       case 'squadron_leadership': return 'Squadron Leadership';
       case 'ptl': return 'PFL';
       default: return 'Member';
@@ -236,6 +238,7 @@ export default function MemberProfileScreen() {
     switch (accountType) {
       case 'fitflight_creator': return { bg: 'bg-purple-500/20', text: 'text-purple-400' };
       case 'ufpm': return { bg: 'bg-af-gold/20', text: 'text-af-gold' };
+      case 'demo': return { bg: 'bg-emerald-500/20', text: 'text-emerald-300' };
       case 'squadron_leadership': return { bg: 'bg-sky-500/20', text: 'text-sky-300' };
       case 'ptl': return { bg: 'bg-af-accent/20', text: 'text-af-accent' };
       default: return { bg: 'bg-white/10', text: 'text-af-silver' };

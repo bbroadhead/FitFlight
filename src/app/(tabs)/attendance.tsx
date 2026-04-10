@@ -11,7 +11,7 @@ import * as FileSystem from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { format, startOfWeek, addDays, subWeeks, addWeeks, isSameDay } from 'date-fns';
-import { useMemberStore, useAuthStore, type Flight, type ScheduledPTSession, canEditAttendance, formatRankDisplay } from '@/lib/store';
+import { useMemberStore, useAuthStore, type Flight, type ScheduledPTSession, canEditAttendance, canManagePTPrograms, formatRankDisplay } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { useTabSwipe } from '@/contexts/TabSwipeContext';
 import { deleteScheduledPTSession as deleteScheduledPTSessionFromSupabase, fetchAttendanceSessions, setAttendanceStatus } from '@/lib/supabaseData';
@@ -88,6 +88,7 @@ export default function AttendanceScreen() {
   const accessToken = useAuthStore((state) => state.accessToken);
 
   const canEdit = user ? canEditAttendance(user.accountType) : false;
+  const canManagePrograms = user ? canManagePTPrograms(user.accountType) : false;
   const userSquadron = user?.squadron ?? 'Hawks';
 
   const weekDays = useMemo(
@@ -207,7 +208,7 @@ export default function AttendanceScreen() {
     () => flightMembers.filter((member) => getWeeklyAttendance(member.id) >= WEEKLY_PROGRESS_TARGET).length,
     [flightMembers, getWeeklyAttendance]
   );
-  const canViewReport = !!user && canEditAttendance(user.accountType);
+  const canViewReport = !!user && canManagePTPrograms(user.accountType);
   const currentWeekLabel = `${format(currentWeekStart, 'MMM d')} - ${format(addDays(currentWeekStart, 6), 'MMM d, yyyy')}`;
   const attendanceReportRows = useMemo(
     () =>
@@ -363,7 +364,7 @@ export default function AttendanceScreen() {
 
   const handleDeleteScheduledSession = (sessionId: string) => {
     const run = async () => {
-      if (!accessToken || !canEdit) {
+      if (!accessToken || !canManagePrograms) {
         return;
       }
 
@@ -1236,7 +1237,7 @@ export default function AttendanceScreen() {
                 }}
                 className="mb-4 rounded-2xl border border-af-accent/40 bg-af-accent/15 px-4 py-3"
               >
-                <Text className="text-white font-semibold text-center">{canEdit ? 'Schedule PT Session' : 'Schedule Personal PT'}</Text>
+                <Text className="text-white font-semibold text-center">{canManagePrograms ? 'Schedule PT Session' : 'Schedule Personal PT'}</Text>
               </Pressable>
 
               <ScrollView showsVerticalScrollIndicator={false}>
@@ -1270,7 +1271,7 @@ export default function AttendanceScreen() {
                               {scheduledSessionScopeLabel(session)}
                             </Text>
                           </View>
-                          {canEdit ? (
+                          {canManagePrograms ? (
                             <Pressable
                               onPress={() => handleDeleteScheduledSession(session.id)}
                               disabled={deletingScheduledSessionId === session.id}

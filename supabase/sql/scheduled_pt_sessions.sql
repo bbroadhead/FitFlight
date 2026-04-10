@@ -56,14 +56,14 @@ on public.scheduled_pt_sessions
 for all
 to authenticated
 using (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl')
   or (
     session_scope = 'personal'
     and created_by = auth.uid()::text
   )
 )
 with check (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl')
   or (
     session_scope = 'personal'
     and created_by = auth.uid()::text

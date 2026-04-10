@@ -6,7 +6,7 @@ import { Plus, Search, X, ThumbsUp, ThumbsDown, Star, Trash2, Clock, Flame, Chev
 import Animated, { FadeInDown, FadeInRight } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import SmartSlider from "../../components/SmartSlider";
-import { useMemberStore, useAuthStore, getDisplayName, type WorkoutType, type SharedWorkout, type Squadron, WORKOUT_TYPES, isAdmin, canEditAttendance } from '@/lib/store';
+import { useMemberStore, useAuthStore, getDisplayName, type WorkoutType, type SharedWorkout, type Squadron, WORKOUT_TYPES, isAdmin, canManagePTPrograms } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { createSharedWorkout, deleteSharedWorkoutFromSupabase, fetchSharedWorkouts, updateSharedWorkout } from '@/lib/supabaseData';
 import { TutorialTarget } from '@/contexts/TutorialTourContext';
@@ -98,7 +98,7 @@ function WorkoutCard({
               <Text className="text-white font-bold text-lg">{workout.name}</Text>
               <Text className="text-af-silver text-sm">by {creatorName}</Text>
               {editorName && workout.editedBy !== workout.createdBy ? (
-                <Text className="text-af-silver/80 text-xs mt-1">edited by {editorName}</Text>
+                <Text className="text-white text-xs mt-1 italic">edited by {editorName}</Text>
               ) : null}
             </View>
           <View className="flex-row items-center">
@@ -272,7 +272,7 @@ export default function WorkoutsScreen() {
   const currentUserId = user?.id ?? '';
   const userAccountType = user?.accountType ?? 'standard';
   const userSquadron: Squadron = (user?.squadron as Squadron) ?? 'Hawks';
-  const canManageSharedWorkouts = canEditAttendance(userAccountType);
+  const canManageSharedWorkouts = canManagePTPrograms(userAccountType);
 
   useEffect(() => {
     if (!accessToken || !userSquadron) {

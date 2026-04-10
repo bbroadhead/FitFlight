@@ -4,33 +4,111 @@
     <meta charset="utf-8" />
     <title>FitFlight</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background:
+          radial-gradient(circle at top, rgba(74, 144, 217, 0.18), transparent 32%),
+          linear-gradient(180deg, #071226 0%, #0a1628 100%);
+        color: #ffffff;
+      }
+      .shell {
+        width: 100%;
+        max-width: 460px;
+        border-radius: 28px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(10, 22, 40, 0.92);
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+        padding: 28px;
+        text-align: center;
+      }
+      .icon-wrap {
+        width: 80px;
+        height: 80px;
+        border-radius: 24px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0 auto 22px;
+      }
+      .icon-wrap img {
+        width: 58px;
+        height: 58px;
+        object-fit: contain;
+      }
+      h1 {
+        margin: 0;
+        font-size: 30px;
+        line-height: 1.08;
+      }
+      p {
+        margin: 14px 0 0;
+        color: rgba(255, 255, 255, 0.76);
+        font-size: 16px;
+        line-height: 1.6;
+      }
+    </style>
     <script>
       (function () {
         var basePath = '/FitFlight/';
         var path = window.location.pathname;
         var normalizedPath = path.toLowerCase();
+        var allowedTopLevelRoutes = new Set([
+          'demo',
+          'login',
+          'reset-password',
+          'welcome',
+          'member-profile',
+          'analytics',
+          'add-workout',
+          'schedule-session',
+          'upload-fitness',
+          'cross-squadron',
+          'import-roster',
+          'resources',
+          'leaderboard',
+          'attendance',
+          'workouts',
+          'calculator',
+          'profile'
+        ]);
 
         if (normalizedPath.indexOf(basePath.toLowerCase()) !== 0) {
-          window.location.replace('/FitFlight/index.html');
           return;
         }
 
         var route = path.slice(basePath.length).replace(/^\/+|\/+$/g, '');
         if (!route) {
-          window.location.replace('/FitFlight/index.html');
           return;
         }
 
-        if (!route.includes('.') && !route.includes('/')) {
-          window.location.replace(basePath + route + '.html');
-          return;
+        if (!route.includes('.') && !route.includes('/') && allowedTopLevelRoutes.has(route)) {
+          window.location.replace(basePath + route + '.html' + window.location.search + window.location.hash);
         }
-
-        window.location.replace('/FitFlight/index.html');
       })();
     </script>
   </head>
-  <body style="background:#0A1628;color:#fff;font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;">
-    <p>Redirecting to FitFlight...</p>
+  <body>
+    <div class="shell">
+      <div class="icon-wrap">
+        <img src="/FitFlight/apple-touch-icon.png" alt="FitFlight icon" />
+      </div>
+      <h1>App under maintenance.</h1>
+      <p>Check back again soon!</p>
+    </div>
   </body>
-  </html>
+</html>

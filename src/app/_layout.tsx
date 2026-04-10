@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { useEffect } from 'react';
+import { Image, ScrollView, Text, View } from 'react-native';
 import { useMemberStore, ALL_ACHIEVEMENTS } from '@/lib/store';
 import { AchievementCelebration } from '@/components/AchievementCelebration';
 import { TutorialTourProvider } from '@/contexts/TutorialTourContext';
@@ -47,6 +48,7 @@ function RootLayoutNav() {
     <ThemeProvider value={AirForceDarkTheme}>
       <TutorialTourProvider>
         <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="demo" options={{ headerShown: false }} />
           <Stack.Screen name="login" options={{ headerShown: false }} />
           <Stack.Screen name="reset-password" options={{ headerShown: false }} />
           <Stack.Screen name="welcome" options={{ headerShown: false }} />
@@ -71,6 +73,58 @@ function RootLayoutNav() {
         ) : null}
       </TutorialTourProvider>
     </ThemeProvider>
+  );
+}
+
+export function ErrorBoundary({ error }: { error: Error }) {
+  return (
+    <View style={{ flex: 1, backgroundColor: '#0A1628', paddingHorizontal: 24, paddingVertical: 40, alignItems: 'center', justifyContent: 'center' }}>
+      <View style={{ width: '100%', maxWidth: 520, alignItems: 'center' }}>
+        <View
+          style={{
+            width: 96,
+            height: 96,
+            borderRadius: 28,
+            backgroundColor: 'rgba(255,255,255,0.08)',
+            borderWidth: 1,
+            borderColor: 'rgba(255,255,255,0.14)',
+            alignItems: 'center',
+            justifyContent: 'center',
+            overflow: 'hidden',
+            marginBottom: 28,
+          }}
+        >
+          <Image
+            source={require('../../assets/images/TotalFlight_Icon_Resized.png')}
+            style={{ width: '72%', height: '72%' }}
+            resizeMode="contain"
+          />
+        </View>
+        <Text style={{ color: '#FFFFFF', fontSize: 28, fontWeight: '700', textAlign: 'center' }}>
+          There was an issue.
+        </Text>
+        <Text style={{ color: '#C0C0C0', fontSize: 16, lineHeight: 24, textAlign: 'center', marginTop: 14 }}>
+          Please report this error message to SSgt Benjamin Broadhead - benjamin.broadhead.2@us.af.mil
+        </Text>
+        <ScrollView
+          style={{
+            marginTop: 28,
+            width: '100%',
+            maxHeight: 220,
+            borderRadius: 20,
+            borderWidth: 1,
+            borderColor: 'rgba(255,255,255,0.1)',
+            backgroundColor: 'rgba(255,255,255,0.04)',
+            padding: 16,
+          }}
+          contentContainerStyle={{ paddingBottom: 4 }}
+        >
+          <Text style={{ color: '#FCA5A5', fontSize: 13, lineHeight: 20 }}>
+            {error?.message || 'Unknown error'}
+          </Text>
+        </ScrollView>
+      </View>
+    </View>
   );
 }
 

@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { Dimensions, LayoutChangeEvent, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
-import { useAuthStore, useMemberStore, canEditAttendance, canManagePTL, type AccountType } from '@/lib/store';
+import { useAuthStore, useMemberStore, canEditAttendance, canManagePTL, canManagePTPrograms, type AccountType } from '@/lib/store';
 import { updateRosterPasswordStatus } from '@/lib/supabaseData';
 
 type TutorialStep = {
@@ -121,7 +121,7 @@ function buildTutorialSteps(accountType: AccountType): TutorialStep[] {
     },
   ];
 
-  if (canEditAttendance(accountType)) {
+  if (canManagePTPrograms(accountType)) {
     steps.push({
       id: 'attendance-report',
       route: '/attendance',
@@ -137,7 +137,7 @@ function buildTutorialSteps(accountType: AccountType): TutorialStep[] {
       route: '/profile',
       targetId: 'account-quick-actions',
       title: 'Quick Actions',
-      description: canEditAttendance(accountType)
+      description: canManagePTPrograms(accountType)
         ? 'Quick Actions give you fast access to manual workout logging, manual PFRA entry, and PT scheduling for your squadron role.'
         : 'Quick Actions give you fast access to manual workout logging and manual PFRA entry from your account page.',
     },
@@ -157,7 +157,7 @@ function buildTutorialSteps(accountType: AccountType): TutorialStep[] {
     }
   );
 
-  if (canManagePTL(accountType) || canEditAttendance(accountType)) {
+  if (canManagePTL(accountType) || canManagePTPrograms(accountType)) {
     steps.push({
       id: 'account-admin',
       route: '/profile',
@@ -167,7 +167,7 @@ function buildTutorialSteps(accountType: AccountType): TutorialStep[] {
     });
   }
 
-  if (accountType === 'fitflight_creator' || accountType === 'ufpm') {
+  if (accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'demo') {
     steps.push({
       id: 'account-password-reset',
       route: '/profile',

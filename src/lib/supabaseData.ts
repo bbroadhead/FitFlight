@@ -9,6 +9,7 @@ const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
 export const ROSTER_BACKED_SQUADRON = 'Hawks' as const;
 const DEFAULT_ROSTER_TABLE = 'roster';
 const STORAGE_BUCKET = 'fitflight-images';
+const DEMO_ACCOUNT_EMAIL = 'fitflight@us.af.mil';
 
 type SupabaseRow = Record<string, unknown>;
 type RosterColumnName =
@@ -803,9 +804,14 @@ function getRosterTableName(squadron: Squadron = 'Hawks') {
   return `${slugify(squadron).replace(/-/g, '_')}_roster`;
 }
 
-function getAccountType(firstName: string, lastName: string): AccountType {
+function getAccountType(firstName: string, lastName: string, email?: string): AccountType {
   const normalizedFirstName = firstName.trim().toLowerCase();
   const normalizedLastName = lastName.trim().toLowerCase();
+  const normalizedEmail = email?.trim().toLowerCase();
+
+  if (normalizedEmail === 'fitflight@us.af.mil') {
+    return 'demo';
+  }
 
   if (normalizedFirstName === 'benjamin' && normalizedLastName === 'broadhead') {
     return 'fitflight_creator';
@@ -907,22 +913,29 @@ function normalizeRosterRow(row: SupabaseRow): Member | null {
 
   const squadron = 'Hawks' as Squadron;
   const email = buildEmail(row, firstName, lastName);
+  const normalizedEmail = email.toLowerCase();
+  if (normalizedEmail === DEMO_ACCOUNT_EMAIL) {
+    return null;
+  }
+  const normalizedFirstName = normalizedEmail === 'fitflight@us.af.mil' ? 'Ima' : firstName;
+  const normalizedLastName = normalizedEmail === 'fitflight@us.af.mil' ? 'Demo' : lastName;
+  const normalizedRank = normalizedEmail === 'fitflight@us.af.mil' ? 'Lt. Col.' : rank;
   const stableId =
     getStringValue(row, ['auth_user_id', 'AUTH_USER_ID', 'id', 'member_id']) ||
-    `roster-${slugify(`${rank}-${lastName}-${firstName}-${flight}`)}`;
+    `roster-${slugify(`${normalizedRank}-${normalizedLastName}-${normalizedFirstName}-${flight}`)}`;
   const mustChangePassword = getBooleanValue(row, ['must_change_password', 'MUST_CHANGE_PASSWORD']) ?? false;
   const hasLoggedIntoApp = getBooleanValue(row, ['has_logged_into_app', 'HAS_LOGGED_INTO_APP', 'has_logged_in', 'HAS_LOGGED_IN']) ?? false;
   const profilePicture = getDisplayImageUri(getStringValue(row, ['profile_picture', 'PROFILE_PICTURE'])) || undefined;
 
   return {
     id: stableId,
-    rank,
-    firstName,
-    lastName,
+    rank: normalizedRank,
+    firstName: normalizedFirstName,
+    lastName: normalizedLastName,
     flight,
     squadron,
-    accountType: getAccountType(firstName, lastName),
-    email,
+    accountType: getAccountType(normalizedFirstName, normalizedLastName, normalizedEmail),
+    email: normalizedEmail,
     exerciseMinutes: 0,
     distanceRun: 0,
     connectedApps: [],

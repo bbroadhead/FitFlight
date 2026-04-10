@@ -3,6 +3,7 @@ import { Alert, View, Text, Pressable, ScrollView, TextInput, Modal, Image, Plat
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useIsFocused } from '@react-navigation/native';
 import { User, Shield, LogOut, LogIn, UserPlus, Trash2, Users, Activity, X, Check, Bell, Crown, Settings, Plus, Camera, FileText, Calendar, Building2, AlertTriangle, Upload, Dumbbell, ImageIcon, HelpCircle, Mail, ChevronDown, ChevronUp, Pencil, Search, Star, MessageSquare, Trophy } from 'lucide-react-native';
 import Animated, { FadeIn, FadeInDown, FadeInUp, SlideInDown } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
@@ -10,8 +11,9 @@ import * as ImagePicker from 'expo-image-picker';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { useRouter } from 'expo-router';
 import SmartSlider from '@/components/SmartSlider';
-import { useAuthStore, useMemberStore, type Flight, type Member, type AccountType, type Squadron, type IntegrationService, type WorkoutType, getDisplayName, canEditAttendance, canManagePTL, isAdmin, SQUADRONS, ALL_ACHIEVEMENTS } from '@/lib/store';
+import { useAuthStore, useMemberStore, type Flight, type Member, type AccountType, type Squadron, type IntegrationService, type WorkoutType, getDisplayName, canEditAttendance, canManagePTL, canManagePTPrograms, isAdmin, SQUADRONS, ALL_ACHIEVEMENTS } from '@/lib/store';
 import { cn } from '@/lib/cn';
+import { AchievementCelebration } from '@/components/AchievementCelebration';
 import { TrophyCase, CompactTrophyBadges } from '@/components/TrophyCase';
 import { TutorialTarget, useTutorialTour } from '@/contexts/TutorialTourContext';
 import { canUseStravaSync, disconnectStrava, getStravaSetupError, mapImportedWorkouts, startStravaConnect, syncStravaWorkouts } from '@/lib/strava';
@@ -54,6 +56,7 @@ const DEVELOPER_NAME = 'SSgt Benjamin Broadhead';
 const DEVELOPER_TITLE = 'Developer';
 const PROJECT_COORDINATOR_NAME = 'SSgt Jacob De La Rosa';
 const PROJECT_COORDINATOR_TITLE = 'Project Coordinator';
+const DEMO_TROPHY_ID = 'top_3_month';
 
 type SupportContact = {
   key: 'developer' | 'project_coordinator';
@@ -144,6 +147,7 @@ function getWorkoutDisplayTitle(type: WorkoutType) {
 
 export default function ProfileScreen() {
   const router = useRouter();
+  const isFocused = useIsFocused();
   const { currentTargetId, refreshCurrentTarget } = useTutorialTour();
   const scrollViewRef = useRef<ScrollView | null>(null);
   const tutorialTargetYRef = useRef<Record<string, number>>({});
@@ -235,6 +239,8 @@ export default function ProfileScreen() {
   const [dismissedNotificationKeys, setDismissedNotificationKeys] = useState<string[]>([]);
   const [showLeaderboardHistoryModal, setShowLeaderboardHistoryModal] = useState(false);
   const [expandedUpcomingSessionIds, setExpandedUpcomingSessionIds] = useState<string[]>([]);
+  const [demoTrophyEarnedPreview, setDemoTrophyEarnedPreview] = useState(false);
+  const [showDemoTrophyCelebration, setShowDemoTrophyCelebration] = useState(false);
 
   const isAuthenticated = useAuthStore(s => s.isAuthenticated);
   const updateUser = useAuthStore(s => s.updateUser);
@@ -297,9 +303,9 @@ export default function ProfileScreen() {
   const userAccountType = user?.accountType ?? 'standard';
   const canManage = canManagePTL(userAccountType);
   const hasAdminAccess = isAdmin(userAccountType);
-  const canManageMembers = canEditAttendance(userAccountType);
-  const canReviewManualWorkouts = canEditAttendance(userAccountType);
-  const canResetUserPasswords = userAccountType === 'fitflight_creator' || userAccountType === 'ufpm';
+  const canManageMembers = canManagePTPrograms(userAccountType);
+  const canReviewManualWorkouts = canManagePTPrograms(userAccountType);
+  const canResetUserPasswords = userAccountType === 'fitflight_creator' || userAccountType === 'ufpm' || userAccountType === 'demo';
   const isOwnerReviewer = user?.email?.toLowerCase() === OWNER_EMAIL;
   const canViewSupportInbox = user?.email
     ? supportContacts.some((contact) => contact.email.toLowerCase() === user.email.toLowerCase())
@@ -850,7 +856,7 @@ export default function ProfileScreen() {
   const handleAdminResetUserPassword = () => {
     const run = async () => {
       if (!canResetUserPasswords) {
-        setAdminResetPasswordError('Only Owner and UFPM can reset user passwords.');
+        setAdminResetPasswordError('Only Owner, UFPM, and Demo can reset user passwords.');
         return;
       }
 
@@ -1732,6 +1738,22 @@ export default function ProfileScreen() {
         achievements: [],
       }
     : null;
+  const isDemoAccount = userAccountType === 'demo' || user?.email?.trim().toLowerCase() === 'fitflight@us.af.mil';
+  const displayAchievementIds = useMemo(() => {
+    const achievements = [...(userStats?.achievements ?? [])];
+    if (isDemoAccount && demoTrophyEarnedPreview && !achievements.includes(DEMO_TROPHY_ID)) {
+      achievements.push(DEMO_TROPHY_ID);
+    }
+    return achievements;
+  }, [demoTrophyEarnedPreview, isDemoAccount, userStats]);
+  const displayTrophyMember = useMemo(
+    () => ({
+      achievements: displayAchievementIds,
+      trophyCount: 'trophyCount' in (userStats ?? {}) ? (userStats as Member).trophyCount ?? 0 : 0,
+      monthlyPlacements: 'monthlyPlacements' in (userStats ?? {}) ? (userStats as Member).monthlyPlacements ?? [] : [],
+    }),
+    [displayAchievementIds, userStats]
+  );
   const availableSummaryMonths = useMemo(
     () => getAvailableMonthKeys(userStats && 'workouts' in userStats && 'fitnessAssessments' in userStats ? [userStats as Member] : [], []),
     [userStats]
@@ -1750,13 +1772,9 @@ export default function ProfileScreen() {
     () => buildTrophyStats(
       ALL_ACHIEVEMENTS,
       members,
-      {
-        achievements: userStats?.achievements ?? [],
-        trophyCount: 'trophyCount' in (userStats ?? {}) ? (userStats as Member).trophyCount ?? 0 : 0,
-        monthlyPlacements: 'monthlyPlacements' in (userStats ?? {}) ? (userStats as Member).monthlyPlacements ?? [] : [],
-      }
+      displayTrophyMember
     ),
-    [members, userStats]
+    [displayTrophyMember, members]
   );
   const workoutHistory = useMemo(
     () => {
@@ -1781,22 +1799,29 @@ export default function ProfileScreen() {
     () => getRarestEarnedTrophies(
       ALL_ACHIEVEMENTS,
       members,
-      {
-        achievements: userStats?.achievements ?? [],
-        trophyCount: 'trophyCount' in (userStats ?? {}) ? (userStats as Member).trophyCount ?? 0 : 0,
-        monthlyPlacements: 'monthlyPlacements' in (userStats ?? {}) ? (userStats as Member).monthlyPlacements ?? [] : [],
-      },
+      displayTrophyMember,
       3
     ),
-    [members, userStats]
+    [displayTrophyMember, members]
   );
   const earnedTrophyCount = trophyStats.filter((trophy) => trophy.isEarned).length;
   const trophyOverflowCount = Math.max(earnedTrophyCount - rarestTrophies.length, 0);
+  const demoAchievement = ALL_ACHIEVEMENTS.find((achievement) => achievement.id === DEMO_TROPHY_ID) ?? null;
+
+  useEffect(() => {
+    if (isFocused) {
+      return;
+    }
+
+    setDemoTrophyEarnedPreview(false);
+    setShowDemoTrophyCelebration(false);
+  }, [isFocused]);
 
   const getAccountTypeLabel = (accountType: AccountType) => {
     switch (accountType) {
       case 'fitflight_creator': return 'FitFlight Creator';
       case 'ufpm': return 'UFPM';
+      case 'demo': return 'Demo Role';
       case 'squadron_leadership': return 'Squadron Leadership';
       case 'ptl': return 'PFL';
       default: return 'Member';
@@ -1841,6 +1866,7 @@ export default function ProfileScreen() {
     switch (accountType) {
       case 'fitflight_creator': return { bg: 'bg-purple-500/20', text: 'text-purple-400', border: 'border-purple-500/50' };
       case 'ufpm': return { bg: 'bg-af-gold/20', text: 'text-af-gold', border: 'border-af-gold/50' };
+      case 'demo': return { bg: 'bg-emerald-500/20', text: 'text-emerald-300', border: 'border-emerald-400/40' };
       case 'squadron_leadership': return { bg: 'bg-sky-500/20', text: 'text-sky-300', border: 'border-sky-400/40' };
       case 'ptl': return { bg: 'bg-af-accent/20', text: 'text-af-accent', border: 'border-af-accent/50' };
       default: return { bg: 'bg-white/10', text: 'text-af-silver', border: 'border-white/20' };
@@ -2046,6 +2072,21 @@ export default function ProfileScreen() {
               }}
               trophies={trophyStats}
             />
+            {isDemoAccount ? (
+              <Pressable
+                onPress={() => {
+                  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                  setDemoTrophyEarnedPreview(true);
+                  setShowDemoTrophyCelebration(true);
+                }}
+                className="mt-3 rounded-2xl border border-af-gold/35 bg-af-gold/10 px-4 py-3"
+              >
+                <View className="flex-row items-center justify-center">
+                  <Trophy size={18} color="#FFD700" />
+                  <Text className="ml-2 text-af-gold font-semibold">Demo Trophy Celebration</Text>
+                </View>
+              </Pressable>
+            ) : null}
             </Animated.View>
           </TutorialTarget>
 
@@ -2215,7 +2256,7 @@ export default function ProfileScreen() {
                     <Text className="text-white font-semibold mt-1.5 text-sm text-center leading-5">Add Manual PFRA</Text>
                   </View>
                 </Pressable>
-                {canEditAttendance(userAccountType) && (
+                {canManagePTPrograms(userAccountType) && (
                   <Pressable
                     onPress={() => {
                       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -2229,7 +2270,7 @@ export default function ProfileScreen() {
                       </View>
                     </Pressable>
                 )}
-                {!canEditAttendance(userAccountType) && (
+                {!canManagePTPrograms(userAccountType) && (
                   <Pressable
                     onPress={() => {
                       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -2421,7 +2462,7 @@ export default function ProfileScreen() {
                     <Shield size={24} color="#F59E0B" />
                     <View className="ml-3 flex-1">
                       <Text className="text-white font-semibold">Reset User Password</Text>
-                      <Text className="text-af-silver text-xs">Owner and UFPM can set a new password for a member</Text>
+                      <Text className="text-af-silver text-xs">Owner, UFPM, and Demo can set a new password for a member</Text>
                     </View>
                   </Pressable>
                 </TutorialTarget>
@@ -2587,9 +2628,9 @@ export default function ProfileScreen() {
               </View>
 
               {showDeveloperContact && (
-                <View className="mt-4 pt-4 border-t border-white/10">
-                  <Text className="text-white font-semibold">{DEVELOPER_NAME}</Text>
-                  <Text className="text-af-silver text-sm mt-1">{DEVELOPER_TITLE}</Text>
+                <View className="mt-4 pt-3 border-t border-white/10">
+                   <Text className="text-white font-semibold">{DEVELOPER_NAME}</Text>
+                   <Text className="text-af-silver text-sm mt-1 italic">{DEVELOPER_TITLE}</Text>
                   <Text className="text-af-silver mt-1">{OWNER_EMAIL}</Text>
                   <Pressable
                     onPress={() => handleOpenSupportMessages(OWNER_EMAIL)}
@@ -2606,9 +2647,9 @@ export default function ProfileScreen() {
                     ) : null}
                   </Pressable>
 
-                  <View className="mt-5 pt-5 border-t border-white/10">
-                    <Text className="text-white font-semibold">{PROJECT_COORDINATOR_NAME}</Text>
-                    <Text className="text-af-silver text-sm mt-1">{PROJECT_COORDINATOR_TITLE}</Text>
+                    <View className="mt-5 pt-5 border-t border-white/10">
+                      <Text className="text-white font-semibold mt-2">{PROJECT_COORDINATOR_NAME}</Text>
+                      <Text className="text-af-silver text-sm mt-1 italic">{PROJECT_COORDINATOR_TITLE}</Text>
                     <Text className="text-af-silver mt-1">{projectCoordinatorEmail || 'Email unavailable'}</Text>
                     <Pressable
                       onPress={() => projectCoordinatorEmail && handleOpenSupportMessages(projectCoordinatorEmail)}
@@ -4446,6 +4487,13 @@ export default function ProfileScreen() {
           ) : null}
         </View>
       </Modal>
+
+      {showDemoTrophyCelebration && demoAchievement ? (
+        <AchievementCelebration
+          achievement={demoAchievement}
+          onDismiss={() => setShowDemoTrophyCelebration(false)}
+        />
+      ) : null}
 
       {/* Disconnect Integration Modal */}
       <Modal visible={showDisconnectModal} transparent animationType="fade">

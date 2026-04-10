@@ -5,7 +5,7 @@ import { buildLeaderboardHistory } from '@/lib/monthlyStats';
 
 // Types
 export type Flight = 'Apex' | 'Bomber' | 'Cryptid' | 'Doom' | 'Ewok' | 'Foxhound' | 'ADF' | 'DET';
-export type AccountType = 'fitflight_creator' | 'ufpm' | 'squadron_leadership' | 'ptl' | 'standard';
+export type AccountType = 'fitflight_creator' | 'ufpm' | 'demo' | 'squadron_leadership' | 'ptl' | 'standard';
 export type Squadron = 'Hawks' | 'Tigers';
 export type WorkoutType = 'Running' | 'Walking' | 'Cycling' | 'Strength' | 'HIIT' | 'Swimming' | 'Sports' | 'Cardio' | 'Flexibility' | 'Other';
 export type IntegrationService = 'apple_health' | 'strava' | 'garmin';
@@ -30,6 +30,10 @@ const DISPLAY_RANK_MAP: Record<string, string> = {
   SMSGT: 'SMSgt',
   CMS: 'CMSgt',
   CMSGT: 'CMSgt',
+  LTC: 'Lt. Col.',
+  LTCOL: 'Lt. Col.',
+  LTCOLEL: 'Lt. Col.',
+  'LT COL': 'Lt. Col.',
 };
 
 // Shared Workout Submission (community workouts)
@@ -389,9 +393,7 @@ const getAutomaticAchievementIds = (
 
 const buildMemberWithDerivedAchievements = (member: Member, ptSessions: PTSession[], sharedWorkouts: SharedWorkout[]) => {
   const automaticAchievements = getAutomaticAchievementIds(member, ptSessions, sharedWorkouts);
-  const existingAchievements = getEffectiveAchievementIds(member).filter(
-    (achievementId) => !RECALCULATED_ACHIEVEMENT_IDS.has(achievementId)
-  );
+  const existingAchievements = getEffectiveAchievementIds(member);
   const mergedAchievements = Array.from(new Set([...existingAchievements, ...automaticAchievements]));
 
   return {
@@ -513,13 +515,33 @@ const OWNER_ACCOUNT: Member = {
   hasLoggedIntoApp: true,
 };
 
+const DEMO_ACCOUNT_EMAIL = 'fitflight@us.af.mil';
+const DEMO_ACCOUNT: Partial<Member> = {
+  rank: 'Lt. Col.',
+  firstName: 'Ima',
+  lastName: 'Demo',
+  accountType: 'demo',
+};
+
 const INITIAL_MEMBERS: Member[] = [];
 const ROSTER_BACKED_SQUADRON: Squadron = 'Hawks';
 const AUTH_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const normalizeOwnerMember = (member: Member): Member => {
+const normalizeSpecialAccountMember = (member: Member): Member => {
   if (member.email.toLowerCase() !== OWNER_ACCOUNT.email.toLowerCase()) {
-    return member;
+    if (member.email.toLowerCase() !== DEMO_ACCOUNT_EMAIL) {
+      return member;
+    }
+
+    return {
+      ...member,
+      rank: DEMO_ACCOUNT.rank ?? member.rank,
+      firstName: DEMO_ACCOUNT.firstName ?? member.firstName,
+      lastName: DEMO_ACCOUNT.lastName ?? member.lastName,
+      accountType: DEMO_ACCOUNT.accountType ?? member.accountType,
+      mustChangePassword: false,
+      hasLoggedIntoApp: true,
+    };
   }
 
   return {
@@ -545,8 +567,8 @@ const isSameMember = (left: Member, right: Member) => {
 const mergeMember = (base: Member, existing?: Member): Member => {
   if (!existing) {
     return {
-      ...base,
-      achievements: withCompletionist(base),
+      ...normalizeSpecialAccountMember(base),
+      achievements: withCompletionist(normalizeSpecialAccountMember(base)),
     };
   }
 
@@ -577,9 +599,11 @@ const mergeMember = (base: Member, existing?: Member): Member => {
     hasLoggedIntoApp: existing.hasLoggedIntoApp ?? base.hasLoggedIntoApp,
   };
 
+  const normalizedMergedMember = normalizeSpecialAccountMember(mergedMember);
+
   return {
-    ...mergedMember,
-    achievements: withCompletionist(mergedMember),
+    ...normalizedMergedMember,
+    achievements: withCompletionist(normalizedMergedMember),
   };
 };
 
@@ -643,6 +667,42 @@ const applyLeaderboardHistory = (members: Member[], ptSessions: PTSession[]) => 
       trophyCount: monthlyPlacements.length,
     };
   });
+};
+
+const findNewlyEarnedAchievementId = (previousMembers: Member[], nextMembers: Member[]) => {
+  const authUser = useAuthStore.getState().user;
+  const normalizedAuthEmail = authUser?.email?.trim().toLowerCase();
+
+  for (const nextMember of nextMembers) {
+    const isCurrentUser =
+      (authUser && nextMember.id === authUser.id) ||
+      (normalizedAuthEmail && nextMember.email.trim().toLowerCase() === normalizedAuthEmail);
+
+    if (!isCurrentUser) {
+      continue;
+    }
+
+    const previousMember = previousMembers.find((member) => member.id === nextMember.id);
+    const previousMemberByEmail =
+      normalizedAuthEmail
+        ? previousMembers.find((member) => member.email.trim().toLowerCase() === normalizedAuthEmail)
+        : undefined;
+    const resolvedPreviousMember = previousMember ?? previousMemberByEmail;
+
+    if (!resolvedPreviousMember) {
+      continue;
+    }
+
+    const previousAchievements = new Set(getEffectiveAchievementIds(resolvedPreviousMember));
+    const nextAchievements = getEffectiveAchievementIds(nextMember);
+    const newlyEarnedId = nextAchievements.find((achievementId) => !previousAchievements.has(achievementId));
+
+    if (newlyEarnedId) {
+      return newlyEarnedId;
+    }
+  }
+
+  return null;
 };
 
 const hydrateDerivedMemberState = (members: Member[], ptSessions: PTSession[], sharedWorkouts: SharedWorkout[]) => (
@@ -734,7 +794,7 @@ export const useMemberStore = create<MemberState>()(
       // Member actions
       addMember: (member) => set((state) => ({
         members: hydrateDerivedMemberState(
-          [...state.members, normalizeOwnerMember({ ...member, achievements: withCompletionist(member) })],
+          [...state.members, normalizeSpecialAccountMember({ ...member, achievements: withCompletionist(member) })],
           state.ptSessions,
           state.sharedWorkouts
         )
@@ -743,7 +803,7 @@ export const useMemberStore = create<MemberState>()(
       syncMembersFromRoster: (rosterMembers) => set((state) => {
         const mergedRosterMembers = rosterMembers.map((rosterMember) => {
           const existing = state.members.find((member) => isSameMember(member, rosterMember));
-          return normalizeOwnerMember(mergeMember(rosterMember, existing));
+          return normalizeSpecialAccountMember(mergeMember(rosterMember, existing));
         });
         const nextMembers = mergedRosterMembers;
         const validMemberIds = new Set(nextMembers.map((member) => member.id));
@@ -813,7 +873,7 @@ export const useMemberStore = create<MemberState>()(
       updateMember: (id, updates) => set((state) => ({
         members: hydrateDerivedMemberState(state.members.map(m => {
           if (m.id !== id) return m;
-          const nextMember = normalizeOwnerMember({ ...m, ...updates });
+          const nextMember = normalizeSpecialAccountMember({ ...m, ...updates });
           return {
             ...nextMember,
             achievements: withCompletionist(nextMember),
@@ -826,7 +886,14 @@ export const useMemberStore = create<MemberState>()(
       // PT Session actions
       addPTSession: (session) => set((state) => ({
         ptSessions: [...state.ptSessions, session],
-        members: hydrateDerivedMemberState(state.members, [...state.ptSessions, session], state.sharedWorkouts),
+        members: (() => {
+          const nextMembers = hydrateDerivedMemberState(state.members, [...state.ptSessions, session], state.sharedWorkouts);
+          return nextMembers;
+        })(),
+        recentAchievementId: (() => {
+          const nextMembers = hydrateDerivedMemberState(state.members, [...state.ptSessions, session], state.sharedWorkouts);
+          return findNewlyEarnedAchievementId(state.members, nextMembers) ?? state.recentAchievementId;
+        })(),
       })),
 
         syncPTSessions: (sessions) => set((state) => {
@@ -836,21 +903,27 @@ export const useMemberStore = create<MemberState>()(
             attendees: [...new Set(session.attendees)],
             attendeeSources: session.attendeeSources ?? {},
           }));
+          const nextMembers = hydrateDerivedMemberState(state.members, nextSessions, state.sharedWorkouts);
+          const nextRecentAchievementId =
+            findNewlyEarnedAchievementId(state.members, nextMembers) ?? state.recentAchievementId;
 
         return {
           ptSessions: nextSessions,
-          members: hydrateDerivedMemberState(state.members, nextSessions, state.sharedWorkouts),
+          members: nextMembers,
+          recentAchievementId: nextRecentAchievementId,
         };
       }),
 
-      updatePTSession: (id, updates) => set((state) => ({
-        ptSessions: state.ptSessions.map(s => s.id === id ? { ...s, ...updates } : s),
-        members: hydrateDerivedMemberState(
-          state.members,
-          state.ptSessions.map(s => s.id === id ? { ...s, ...updates } : s),
-          state.sharedWorkouts
-        ),
-      })),
+      updatePTSession: (id, updates) => set((state) => {
+        const nextSessions = state.ptSessions.map(s => s.id === id ? { ...s, ...updates } : s);
+        const nextMembers = hydrateDerivedMemberState(state.members, nextSessions, state.sharedWorkouts);
+
+        return {
+          ptSessions: nextSessions,
+          members: nextMembers,
+          recentAchievementId: findNewlyEarnedAchievementId(state.members, nextMembers) ?? state.recentAchievementId,
+        };
+      }),
 
       deletePTSession: (id) => set((state) => ({
         ptSessions: state.ptSessions.filter(s => s.id !== id),
@@ -868,10 +941,12 @@ export const useMemberStore = create<MemberState>()(
               : [...s.attendees, memberId]
           };
         });
+        const nextMembers = hydrateDerivedMemberState(state.members, nextSessions, state.sharedWorkouts);
 
         return {
           ptSessions: nextSessions,
-          members: hydrateDerivedMemberState(state.members, nextSessions, state.sharedWorkouts),
+          members: nextMembers,
+          recentAchievementId: findNewlyEarnedAchievementId(state.members, nextMembers) ?? state.recentAchievementId,
         };
       }),
 
@@ -967,8 +1042,8 @@ export const useMemberStore = create<MemberState>()(
       })),
 
       // Workout actions
-      addWorkout: (memberId, workout) => set((state) => ({
-        members: hydrateDerivedMemberState(state.members.map(m =>
+      addWorkout: (memberId, workout) => set((state) => {
+        const nextMembers = hydrateDerivedMemberState(state.members.map(m =>
           m.id === memberId
             ? {
                 ...m,
@@ -977,11 +1052,16 @@ export const useMemberStore = create<MemberState>()(
                 distanceRun: m.distanceRun + (workout.distance ?? 0),
               }
             : m
-        ), state.ptSessions, state.sharedWorkouts),
-      })),
+        ), state.ptSessions, state.sharedWorkouts);
 
-      importWorkouts: (memberId, workouts) => set((state) => ({
-        members: hydrateDerivedMemberState(state.members.map((member) => {
+        return {
+          members: nextMembers,
+          recentAchievementId: findNewlyEarnedAchievementId(state.members, nextMembers) ?? state.recentAchievementId,
+        };
+      }),
+
+      importWorkouts: (memberId, workouts) => set((state) => {
+        const nextMembers = hydrateDerivedMemberState(state.members.map((member) => {
           if (member.id !== memberId) {
             return member;
           }
@@ -995,8 +1075,13 @@ export const useMemberStore = create<MemberState>()(
             exerciseMinutes: summary.exerciseMinutes,
             distanceRun: summary.distanceRun,
           };
-        }), state.ptSessions, state.sharedWorkouts),
-      })),
+        }), state.ptSessions, state.sharedWorkouts);
+
+        return {
+          members: nextMembers,
+          recentAchievementId: findNewlyEarnedAchievementId(state.members, nextMembers) ?? state.recentAchievementId,
+        };
+      }),
 
       pruneOldWorkoutMedia: (currentMonthKey = new Date().toISOString().slice(0, 7)) => set((state) => ({
         members: state.members.map((member) => ({
@@ -1035,8 +1120,10 @@ export const useMemberStore = create<MemberState>()(
           };
         });
 
+        const hydratedMembers = hydrateDerivedMemberState(nextMembers, state.ptSessions, state.sharedWorkouts);
         return {
-          members: hydrateDerivedMemberState(nextMembers, state.ptSessions, state.sharedWorkouts),
+          members: hydratedMembers,
+          recentAchievementId: findNewlyEarnedAchievementId(state.members, hydratedMembers) ?? state.recentAchievementId,
         };
       }),
 
@@ -1057,8 +1144,10 @@ export const useMemberStore = create<MemberState>()(
           };
         });
 
+        const hydratedMembers = hydrateDerivedMemberState(nextMembers, state.ptSessions, state.sharedWorkouts);
         return {
-          members: hydrateDerivedMemberState(nextMembers, state.ptSessions, state.sharedWorkouts),
+          members: hydratedMembers,
+          recentAchievementId: findNewlyEarnedAchievementId(state.members, hydratedMembers) ?? state.recentAchievementId,
         };
       }),
 
@@ -1114,10 +1203,14 @@ export const useMemberStore = create<MemberState>()(
       previewAchievementCelebration: (achievementId) => set({ recentAchievementId: achievementId }),
 
       // Shared Workout actions
-      syncSharedWorkouts: (workouts) => set((state) => ({
-        sharedWorkouts: workouts,
-        members: hydrateDerivedMemberState(state.members, state.ptSessions, workouts),
-      })),
+      syncSharedWorkouts: (workouts) => set((state) => {
+        const nextMembers = hydrateDerivedMemberState(state.members, state.ptSessions, workouts);
+        return {
+          sharedWorkouts: workouts,
+          members: nextMembers,
+          recentAchievementId: findNewlyEarnedAchievementId(state.members, nextMembers) ?? state.recentAchievementId,
+        };
+      }),
 
       addSharedWorkout: (workout) => set((state) => {
         const nextSharedWorkouts = [workout, ...state.sharedWorkouts];
@@ -1181,7 +1274,7 @@ export const useMemberStore = create<MemberState>()(
 
 // Helper to check if user can manage PTL status
 export const canManagePTL = (accountType: AccountType): boolean => {
-  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'squadron_leadership';
+  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'demo' || accountType === 'squadron_leadership';
 };
 
 // Helper to check if user can edit PT attendance
@@ -1189,7 +1282,12 @@ export const canEditAttendance = (accountType: AccountType): boolean => {
   return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'squadron_leadership' || accountType === 'ptl';
 };
 
+// Helper for UFPM-like or PT-program features that Demo can still access
+export const canManagePTPrograms = (accountType: AccountType): boolean => {
+  return canEditAttendance(accountType) || accountType === 'demo';
+};
+
 // Helper to check if user has admin access
 export const isAdmin = (accountType: AccountType): boolean => {
-  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'squadron_leadership';
+  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'demo' || accountType === 'squadron_leadership';
 };

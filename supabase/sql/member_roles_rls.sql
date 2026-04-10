@@ -1,9 +1,16 @@
 create table if not exists public.member_roles (
   email text primary key,
-  app_role text not null check (app_role in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl', 'standard')),
+  app_role text not null check (app_role in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl', 'standard')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.member_roles
+drop constraint if exists member_roles_app_role_check;
+
+alter table public.member_roles
+add constraint member_roles_app_role_check
+check (app_role in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl', 'standard'));
 
 create or replace function public.set_updated_at()
 returns trigger
@@ -45,7 +52,7 @@ for select
 to authenticated
 using (
   lower(email) = lower(coalesce(auth.jwt() ->> 'email', ''))
-  or public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership')
+  or public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership')
 );
 
 drop policy if exists "member_roles_insert_self_or_manager" on public.member_roles;
@@ -55,7 +62,7 @@ for insert
 to authenticated
 with check (
   lower(email) = lower(coalesce(auth.jwt() ->> 'email', ''))
-  or public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership')
+  or public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership')
 );
 
 drop policy if exists "member_roles_update_manager_only" on public.member_roles;
@@ -64,10 +71,10 @@ on public.member_roles
 for update
 to authenticated
 using (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership')
 )
 with check (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership')
 );
 
 drop policy if exists "roster_select_authenticated" on public.roster;
@@ -83,7 +90,7 @@ on public.roster
 for insert
 to authenticated
 with check (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl')
 );
 
 drop policy if exists "roster_update_role_managers" on public.roster;
@@ -92,10 +99,10 @@ on public.roster
 for update
 to authenticated
 using (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl')
 )
 with check (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl')
 );
 
 drop policy if exists "roster_delete_role_managers" on public.roster;
@@ -104,13 +111,14 @@ on public.roster
 for delete
 to authenticated
 using (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl')
 );
 
 insert into public.member_roles (email, app_role)
 values
   ('benjamin.broadhead.2@us.af.mil', 'fitflight_creator'),
   ('jacob.de.la.rosa@us.af.mil', 'ufpm'),
+  ('fitflight@us.af.mil', 'demo'),
   ('benjamin.isenberg@us.af.mil', 'squadron_leadership'),
   ('jessica.kick@us.af.mil', 'squadron_leadership'),
   ('nicky.spader@us.af.mil', 'squadron_leadership')

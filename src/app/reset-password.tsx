@@ -10,6 +10,8 @@ import { clearUrlHashSession, readSessionFromUrlHash, updatePassword } from '@/l
 import { useAuthStore, useMemberStore } from '@/lib/store';
 import { updateRosterPasswordStatus } from '@/lib/supabaseData';
 
+const DEMO_ACCOUNT_EMAIL = 'fitflight@us.af.mil';
+
 export default function ResetPasswordScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ mode?: string }>();
@@ -23,6 +25,15 @@ export default function ResetPasswordScreen() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const isFirstLoginPasswordChange = useMemo(() => params.mode === 'first-login', [params.mode]);
+  const isDemoAccount = authUser?.accountType === 'demo' || authUser?.email?.trim().toLowerCase() === DEMO_ACCOUNT_EMAIL;
+
+  useEffect(() => {
+    if (!isFirstLoginPasswordChange || !isDemoAccount) {
+      return;
+    }
+
+    router.replace('/');
+  }, [isDemoAccount, isFirstLoginPasswordChange, router]);
 
   useEffect(() => {
     const sessionFromHash = readSessionFromUrlHash();

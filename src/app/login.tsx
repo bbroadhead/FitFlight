@@ -15,10 +15,18 @@ import { createRosterMember, ensureMemberRole, fetchRoleForEmail, fetchRosterMem
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
 const RANKS = ['AB', 'Amn', 'A1C', 'SrA', 'SSgt', 'TSgt', 'MSgt', 'SMSgt', 'CMSgt'];
 const EMAIL_RATE_LIMIT_MESSAGE = "The server's hourly email limit has been reached. Please try again in 1 hour.";
+const DEMO_ACCOUNT_EMAIL = 'fitflight@us.af.mil';
+const DEMO_ACCOUNT_NAME = { firstName: 'Ima', lastName: 'Demo' };
+const DEMO_ACCOUNT_RANK = 'Lt. Col.';
 
-function normalizeSpecialMemberName(firstName: string, lastName: string) {
+function normalizeSpecialMemberName(firstName: string, lastName: string, emailAddress?: string) {
   const normalizedFirstName = firstName.trim().toLowerCase();
   const normalizedLastName = lastName.trim().toLowerCase();
+  const normalizedEmail = emailAddress?.trim().toLowerCase();
+
+  if (normalizedEmail === DEMO_ACCOUNT_EMAIL) {
+    return DEMO_ACCOUNT_NAME;
+  }
 
   if (normalizedFirstName === 'benjamin' && normalizedLastName === 'broadhead') {
     return {
@@ -52,6 +60,14 @@ function getInitialAccountType(firstName: string, lastName: string): AccountType
   return 'standard';
 }
 
+function normalizeSpecialMemberRank(rank: string, emailAddress?: string) {
+  if (emailAddress?.trim().toLowerCase() === DEMO_ACCOUNT_EMAIL) {
+    return DEMO_ACCOUNT_RANK;
+  }
+
+  return rank;
+}
+
 function findMatchingMember<T extends Pick<Member, 'id' | 'email' | 'firstName' | 'lastName'>>(
   members: T[],
   options: { email?: string; firstName?: string; lastName?: string }
@@ -76,7 +92,15 @@ function findMatchingMember<T extends Pick<Member, 'id' | 'email' | 'firstName' 
   ) ?? null;
 }
 
-function getPostLoginRoute(member: Pick<Member, 'mustChangePassword' | 'hasLoggedIntoApp'>) {
+function isDemoEmail(email?: string | null) {
+  return email?.trim().toLowerCase() === DEMO_ACCOUNT_EMAIL;
+}
+
+function getPostLoginRoute(member: Pick<Member, 'mustChangePassword' | 'hasLoggedIntoApp' | 'email' | 'accountType'>) {
+  if (member.accountType === 'demo' || isDemoEmail(member.email)) {
+    return '/';
+  }
+
   if (member.mustChangePassword && !member.hasLoggedIntoApp) {
     return '/reset-password?mode=first-login';
   }
@@ -106,7 +130,7 @@ async function syncRosterMemberAfterRegistration(
   accessToken?: string,
   previousMember?: Member | null
 ) {
-  if (!accessToken) {
+  if (!accessToken || nextMember.email.trim().toLowerCase() === DEMO_ACCOUNT_EMAIL) {
     return;
   }
 
@@ -167,6 +191,7 @@ export default function LoginScreen() {
   const hasCheckedAuth = useAuthStore(s => s.hasCheckedAuth);
   const members = useMemberStore(s => s.members);
   const addMember = useMemberStore(s => s.addMember);
+  const removeMember = useMemberStore(s => s.removeMember);
   const updateMember = useMemberStore(s => s.updateMember);
   const syncMembersFromRoster = useMemberStore(s => s.syncMembersFromRoster);
 
@@ -230,7 +255,8 @@ export default function LoginScreen() {
         const existingMember = localExistingMember ?? rosterExistingMember;
         const normalizedSpecialName = normalizeSpecialMemberName(
           typeof metadata.firstName === 'string' ? metadata.firstName : existingMember?.firstName ?? 'Airman',
-          typeof metadata.lastName === 'string' ? metadata.lastName : existingMember?.lastName ?? 'Member'
+          typeof metadata.lastName === 'string' ? metadata.lastName : existingMember?.lastName ?? 'Member',
+          normalizedEmail
         );
 
         const member = existingMember
@@ -244,7 +270,7 @@ export default function LoginScreen() {
             }
           : {
               id: authUser.id,
-              rank: typeof metadata.rank === 'string' ? metadata.rank : 'A1C',
+              rank: normalizeSpecialMemberRank(typeof metadata.rank === 'string' ? metadata.rank : 'A1C', normalizedEmail),
               firstName: normalizedSpecialName.firstName,
               lastName: normalizedSpecialName.lastName,
               flight: (typeof metadata.flight === 'string' ? metadata.flight : 'Apex') as Flight,
@@ -284,7 +310,13 @@ export default function LoginScreen() {
 
         syncMembersFromRoster(normalizedRosterMembers);
 
-        if (!existingMember) {
+        const isPresentationDemoUser = normalizedEmail === DEMO_ACCOUNT_EMAIL;
+
+        if (isPresentationDemoUser) {
+          if (existingMember) {
+            removeMember(existingMember.id);
+          }
+        } else if (!existingMember) {
           addMember(member);
           await createRosterMember(member, sessionFromHash.accessToken).catch(() => undefined);
         } else if (!localExistingMember) {
@@ -353,7 +385,7 @@ export default function LoginScreen() {
     };
 
     void finalizeEmailConfirmation();
-  }, [addMember, email, login, members, router, setSessionTokens, syncMembersFromRoster, updateMember]);
+  }, [addMember, email, login, members, removeMember, router, setSessionTokens, syncMembersFromRoster, updateMember]);
 
   const handleSignIn = () => {
     const run = async () => {
@@ -384,7 +416,8 @@ export default function LoginScreen() {
       const existingMember = localExistingMember ?? rosterExistingMember;
       const normalizedSpecialName = normalizeSpecialMemberName(
         typeof metadata.firstName === 'string' ? metadata.firstName : existingMember?.firstName ?? 'Airman',
-        typeof metadata.lastName === 'string' ? metadata.lastName : existingMember?.lastName ?? 'Member'
+        typeof metadata.lastName === 'string' ? metadata.lastName : existingMember?.lastName ?? 'Member',
+        normalizedEmail
       );
 
       const member = existingMember
@@ -399,7 +432,7 @@ export default function LoginScreen() {
           }
         : {
             id: response.user.id,
-            rank: typeof metadata.rank === 'string' ? metadata.rank : selectedRank,
+            rank: normalizeSpecialMemberRank(typeof metadata.rank === 'string' ? metadata.rank : selectedRank, normalizedEmail),
             firstName: normalizedSpecialName.firstName,
             lastName: normalizedSpecialName.lastName,
             flight: (typeof metadata.flight === 'string' ? metadata.flight : selectedFlight) as Flight,
@@ -439,7 +472,13 @@ export default function LoginScreen() {
 
       syncMembersFromRoster(normalizedRosterMembers);
 
-      if (!existingMember) {
+      const isPresentationDemoUser = normalizedEmail === DEMO_ACCOUNT_EMAIL;
+
+      if (isPresentationDemoUser) {
+        if (existingMember) {
+          removeMember(existingMember.id);
+        }
+      } else if (!existingMember) {
         addMember(member);
         await createRosterMember(member, response.access_token).catch(() => undefined);
       } else if (!localExistingMember) {
@@ -569,18 +608,19 @@ export default function LoginScreen() {
   ) => {
     const newMemberId = authUserId ?? existingMemberOverride?.id ?? Date.now().toString();
     const accountType = getInitialAccountType(firstName, lastName);
-    const normalizedSpecialName = normalizeSpecialMemberName(firstName, lastName);
+    const normalizedEmail = email.toLowerCase();
+    const normalizedSpecialName = normalizeSpecialMemberName(firstName, lastName, normalizedEmail);
 
     // Create the member
     const newMember = {
       id: newMemberId,
-      rank: selectedRank,
+      rank: normalizeSpecialMemberRank(selectedRank, normalizedEmail),
       firstName: normalizedSpecialName.firstName,
       lastName: normalizedSpecialName.lastName,
       flight: selectedFlight,
       squadron: selectedSquadron,
       accountType,
-      email: email.toLowerCase(),
+      email: normalizedEmail,
       exerciseMinutes: 0,
       distanceRun: 0,
       connectedApps: [] as string[],
@@ -599,7 +639,11 @@ export default function LoginScreen() {
       profilePicture: existingMemberOverride?.profilePicture,
     };
 
-    if (existingMemberOverride) {
+    if (normalizedEmail === DEMO_ACCOUNT_EMAIL) {
+      if (existingMemberOverride) {
+        removeMember(existingMemberOverride.id);
+      }
+    } else if (existingMemberOverride) {
       updateMember(existingMemberOverride.id, {
         rank: newMember.rank,
         firstName: newMember.firstName,
@@ -625,13 +669,13 @@ export default function LoginScreen() {
     // Log in the new user
     const user: UserType = {
       id: newMemberId,
-      rank: selectedRank,
+      rank: normalizeSpecialMemberRank(selectedRank, normalizedEmail),
       firstName: normalizedSpecialName.firstName,
       lastName: normalizedSpecialName.lastName,
       flight: selectedFlight,
       squadron: selectedSquadron,
       accountType,
-      email: email.toLowerCase(),
+      email: normalizedEmail,
       profilePicture: newMember.profilePicture,
       isVerified: true,
       ptlPendingApproval: wantsPTL,

@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { corsHeaders, getSupabaseAdmin, json } from '../_shared/strava.ts';
 
-const ALLOWED_RESET_ROLES = new Set(['fitflight_creator', 'ufpm']);
+const ALLOWED_RESET_ROLES = new Set(['fitflight_creator', 'ufpm', 'demo']);
 
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') {

@@ -8,7 +8,7 @@ import Animated, { FadeInDown } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { addDays, format, startOfWeek } from 'date-fns';
-import { useMemberStore, useAuthStore, type Flight, type ScheduledPTKind, type ScheduledPTScope, type ScheduledPTSession, canEditAttendance, formatRankDisplay } from '@/lib/store';
+import { useMemberStore, useAuthStore, type Flight, type ScheduledPTKind, type ScheduledPTScope, type ScheduledPTSession, canManagePTPrograms, formatRankDisplay } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { createScheduledPTSession, deleteScheduledPTSession as deleteScheduledPTSessionFromSupabase, updateScheduledPTSession as updateScheduledPTSessionInSupabase } from '@/lib/supabaseData';
 
@@ -31,7 +31,7 @@ export default function ScheduleSessionScreen() {
   const scheduledSessions = useMemberStore((s) => s.scheduledSessions);
   const members = useMemberStore((s) => s.members);
 
-  const canManageFlightSessions = user ? canEditAttendance(user.accountType) : false;
+  const canManageFlightSessions = user ? canManagePTPrograms(user.accountType) : false;
   const mobileWeb = isWebMobile();
   const userSquadron = user?.squadron ?? 'Hawks';
   const defaultScope: ScheduledPTScope = canManageFlightSessions ? 'flight' : 'personal';

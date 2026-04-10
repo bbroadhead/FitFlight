@@ -17,7 +17,7 @@ on public.tigers_roster
 for insert
 to authenticated
 with check (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl')
 );
 
 drop policy if exists "tigers_roster_update_role_managers" on public.tigers_roster;
@@ -26,10 +26,10 @@ on public.tigers_roster
 for update
 to authenticated
 using (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl')
 )
 with check (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl')
 );
 
 drop policy if exists "tigers_roster_delete_role_managers" on public.tigers_roster;
@@ -38,7 +38,7 @@ on public.tigers_roster
 for delete
 to authenticated
 using (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl')
 );
 
 -- Pattern for future squadrons:
