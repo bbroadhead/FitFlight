@@ -16,11 +16,15 @@ create table if not exists public.manual_workout_submissions (
   reviewer_member_id text null,
   reviewer_name text null,
   reviewer_note text null,
+  attendance_marked_by_submission boolean not null default false,
   requester_read boolean not null default true,
   reviewer_read boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.manual_workout_submissions
+  add column if not exists attendance_marked_by_submission boolean not null default false;
 
 create index if not exists idx_manual_workout_submissions_member_id
   on public.manual_workout_submissions(member_id);

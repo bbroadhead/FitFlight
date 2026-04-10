@@ -449,13 +449,13 @@ export function LeaderboardContent({
             <View className="flex-row justify-between">
               <View className="items-center flex-1">
                 <Timer size={20} color="#4A90D9" />
-                <Text className="text-white font-bold text-lg mt-1">{Math.round(squadronMembers.reduce((acc, m) => acc + (currentMonthSummaries.get(m.id)?.minutes ?? 0), 0) / 60)}</Text>
+                <Text className="text-white font-bold text-lg mt-1">{(squadronMembers.reduce((acc, m) => acc + (currentMonthSummaries.get(m.id)?.minutes ?? 0), 0) / 60).toFixed(2)}</Text>
                 <Text className="text-af-silver text-xs">Hours</Text>
               </View>
               <View className="w-px bg-white/10" />
               <View className="items-center flex-1">
                 <RunningIcon size={20} color="#22C55E" />
-                <Text className="text-white font-bold text-lg mt-1">{squadronMembers.reduce((acc, m) => acc + (currentMonthSummaries.get(m.id)?.miles ?? 0), 0).toFixed(0)}</Text>
+                <Text className="text-white font-bold text-lg mt-1">{squadronMembers.reduce((acc, m) => acc + (currentMonthSummaries.get(m.id)?.miles ?? 0), 0).toFixed(2)}</Text>
                 <Text className="text-af-silver text-xs">Miles</Text>
               </View>
               <View className="w-px bg-white/10" />

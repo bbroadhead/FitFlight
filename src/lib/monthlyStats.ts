@@ -4,6 +4,21 @@ export const ATTENDANCE_CHECK_IN_POINTS = 10;
 export const WORKOUT_POINTS_PER_MINUTE = 1;
 export const WORKOUT_POINTS_PER_MILE = 15;
 
+const slugify = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+const buildLegacyRosterId = (member: Pick<Member, 'rank' | 'firstName' | 'lastName' | 'flight'>) =>
+  `roster-${slugify(`${member.rank}-${member.lastName}-${member.firstName}-${member.flight}`)}`;
+
+const getAttendanceAliases = (member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight'>) => {
+  const aliases = new Set<string>([member.id]);
+  aliases.add(buildLegacyRosterId(member));
+  return aliases;
+};
+
 export function getCompetitionPosition(scores: number[], index: number): number {
   if (index <= 0) {
     return 1;
@@ -42,9 +57,10 @@ export function monthKeyFromDateString(dateValue: string) {
 }
 
 export function getMemberEffectiveWorkouts(
-  member: Pick<Member, 'id' | 'workouts'>,
+  member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight' | 'workouts'>,
   ptSessions: Pick<PTSession, 'id' | 'date' | 'flight' | 'attendees'>[] = []
 ) {
+  const attendanceAliases = getAttendanceAliases(member);
   const datesWithRealWorkouts = new Set(
     member.workouts
       .filter((workout) => workout.source !== 'attendance')
@@ -52,7 +68,11 @@ export function getMemberEffectiveWorkouts(
   );
 
   const attendanceWorkouts: Workout[] = ptSessions
-    .filter((session) => session.attendees.includes(member.id) && !datesWithRealWorkouts.has(session.date))
+    .filter(
+      (session) =>
+        session.attendees.some((attendeeId) => attendanceAliases.has(attendeeId)) &&
+        !datesWithRealWorkouts.has(session.date)
+    )
     .map((session) => ({
       id: `attendance-${session.id}-${member.id}`,
       externalId: session.id,
@@ -69,7 +89,7 @@ export function getMemberEffectiveWorkouts(
 }
 
 export function getMemberMonthWorkouts(
-  member: Pick<Member, 'id' | 'workouts'>,
+  member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight' | 'workouts'>,
   monthKey: string,
   ptSessions: Pick<PTSession, 'id' | 'date' | 'flight' | 'attendees'>[] = []
 ) {
@@ -77,7 +97,7 @@ export function getMemberMonthWorkouts(
 }
 
 export function getMemberMonthSummary(
-  member: Pick<Member, 'id' | 'workouts'>,
+  member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight' | 'workouts'>,
   monthKey: string,
   ptSessions: Pick<PTSession, 'id' | 'date' | 'flight' | 'attendees'>[] = []
 ) {
@@ -125,7 +145,7 @@ export function getAvailableMonthKeys(
 }
 
 export function buildLeaderboardHistory(
-  members: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'workouts' | 'fitnessAssessments'>[],
+  members: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight' | 'workouts' | 'fitnessAssessments'>[],
   ptSessions: Pick<PTSession, 'id' | 'date' | 'flight' | 'attendees'>[]
 ) {
   const currentMonthKey = getMonthKey();

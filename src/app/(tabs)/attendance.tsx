@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { LayoutChangeEvent, Modal, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, ScrollView, Text, View } from 'react-native';
+import { Alert, LayoutChangeEvent, Modal, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { CalendarDays, ChevronLeft, ChevronRight, Check, FileSpreadsheet, FileText, Trash2, X } from 'lucide-react-native';
+import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Check, FileSpreadsheet, FileText, HelpCircle, Trash2, X } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -11,7 +11,7 @@ import * as FileSystem from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { format, startOfWeek, addDays, subWeeks, addWeeks, isSameDay } from 'date-fns';
-import { useMemberStore, useAuthStore, type Flight, canEditAttendance, formatRankDisplay } from '@/lib/store';
+import { useMemberStore, useAuthStore, type Flight, type ScheduledPTSession, canEditAttendance, formatRankDisplay } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { useTabSwipe } from '@/contexts/TabSwipeContext';
 import { deleteScheduledPTSession as deleteScheduledPTSessionFromSupabase, fetchAttendanceSessions, setAttendanceStatus } from '@/lib/supabaseData';
@@ -26,6 +26,24 @@ const DAY_COLUMN_WIDTH = 60;
 const HEADER_HEIGHT = 56;
 const ROW_HEIGHT = 66;
 const ATTENDANCE_FILTER_STORAGE_KEY = 'fitflight-attendance-filter';
+const slugify = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+const buildLegacyRosterId = (member: { rank: string; firstName: string; lastName: string; flight: Flight }) =>
+  `roster-${slugify(`${member.rank}-${member.lastName}-${member.firstName}-${member.flight}`)}`;
+const isUpcomingScheduledSession = (date: string, time: string) => new Date(`${date}T${time}:00`).getTime() >= Date.now();
+const scheduledSessionScopeLabel = (session: ScheduledPTSession) =>
+  session.scope === 'personal' ? 'Personal PT' : session.scope === 'squadron' ? 'Squadron PT' : session.flights.join(', ');
+const scheduledSessionKindLabel = (session: ScheduledPTSession) =>
+  session.kind === 'pfra_mock'
+    ? 'PFRA Mock'
+    : session.kind === 'pfra_diagnostic'
+      ? 'PFRA Diagnostic'
+      : session.kind === 'pfra_official'
+        ? 'PFRA Official'
+        : 'Normal PT';
 
 async function downloadWebFile(filename: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
@@ -47,8 +65,12 @@ export default function AttendanceScreen() {
   const [flightViewportWidth, setFlightViewportWidth] = useState(0);
   const [showReportModal, setShowReportModal] = useState(false);
   const [showScheduledSessionsModal, setShowScheduledSessionsModal] = useState(false);
+  const [showDayScheduledSessionsModal, setShowDayScheduledSessionsModal] = useState(false);
+  const [showAttendanceLegendModal, setShowAttendanceLegendModal] = useState(false);
   const [isExportingReport, setIsExportingReport] = useState(false);
   const [deletingScheduledSessionId, setDeletingScheduledSessionId] = useState<string | null>(null);
+  const [selectedScheduledDayKey, setSelectedScheduledDayKey] = useState<string | null>(null);
+  const [expandedScheduledSessionIds, setExpandedScheduledSessionIds] = useState<string[]>([]);
   const { setSwipeEnabled } = useTabSwipe();
   const flightScrollRef = useRef<ScrollView | null>(null);
   const flightScrollXRef = useRef(0);
@@ -128,10 +150,40 @@ export default function AttendanceScreen() {
     return ptSessions.find((session) => session.date === dateStr && session.flight === flight && (session.squadron ?? 'Hawks') === squadron);
   }, [ptSessions, userSquadron]);
 
+  const getAttendanceAliases = useCallback((memberId: string) => {
+    const member = members.find((entry) => entry.id === memberId);
+    if (!member) {
+      return new Set([memberId]);
+    }
+
+    return new Set<string>([member.id, buildLegacyRosterId(member)]);
+  }, [members]);
+
   const isAttending = useCallback((date: Date, memberId: string, flight: Flight, squadron: typeof userSquadron = userSquadron) => {
     const session = getSession(date, flight, squadron);
-    return session?.attendees.includes(memberId) ?? false;
-  }, [getSession, userSquadron]);
+    if (!session) {
+      return false;
+    }
+
+    const aliases = getAttendanceAliases(memberId);
+    return session.attendees.some((attendeeId) => aliases.has(attendeeId));
+  }, [getAttendanceAliases, getSession, userSquadron]);
+
+  const getAttendanceSource = useCallback((date: Date, memberId: string, flight: Flight, squadron: typeof userSquadron = userSquadron) => {
+    const session = getSession(date, flight, squadron);
+    if (!session) {
+      return null;
+    }
+
+    const aliases = getAttendanceAliases(memberId);
+    for (const attendeeId of session.attendees) {
+      if (aliases.has(attendeeId)) {
+        return session.attendeeSources?.[attendeeId] ?? 'manual';
+      }
+    }
+
+    return null;
+  }, [getAttendanceAliases, getSession, userSquadron]);
 
   const getWeeklyAttendance = useCallback((memberId: string) => {
     const member = members.find((entry) => entry.id === memberId);
@@ -200,21 +252,48 @@ export default function AttendanceScreen() {
           return false;
         }
 
-        if (selectedFlight === 'all') {
+        if (!isUpcomingScheduledSession(session.date, session.time)) {
+          return false;
+        }
+
+        if (session.scope === 'personal') {
+          return session.createdBy === user?.id;
+        }
+
+        if (selectedFlight === 'all' || session.scope === 'squadron') {
           return true;
         }
 
         return session.flights.includes(selectedFlight);
       })
       .sort((left, right) => `${left.date} ${left.time}`.localeCompare(`${right.date} ${right.time}`));
-  }, [currentWeekStart, scheduledSessions, selectedFlight, userSquadron]);
+  }, [currentWeekStart, scheduledSessions, selectedFlight, user?.id, userSquadron]);
   const weekScheduledIndicators = useMemo(
     () =>
-      weekDays.map((day) =>
-        scheduledSessionsThisWeek.some((session) => session.date === format(day, 'yyyy-MM-dd'))
-      ),
+      weekDays.map((day) => {
+        const key = format(day, 'yyyy-MM-dd');
+        return {
+          hasGroup: scheduledSessionsThisWeek.some((session) => session.date === key && session.scope !== 'personal'),
+          hasPersonal: scheduledSessionsThisWeek.some((session) => session.date === key && session.scope === 'personal'),
+        };
+      }),
     [scheduledSessionsThisWeek, weekDays]
   );
+  const selectedDayScheduledSessions = useMemo(() => {
+    if (!selectedScheduledDayKey) {
+      return [];
+    }
+
+    return scheduledSessionsThisWeek.filter((session) => session.date === selectedScheduledDayKey);
+  }, [scheduledSessionsThisWeek, selectedScheduledDayKey]);
+
+  const selectedScheduledDayLabel = useMemo(() => {
+    if (!selectedScheduledDayKey) {
+      return '';
+    }
+
+    return format(new Date(`${selectedScheduledDayKey}T00:00:00`), 'EEEE, MMM d, yyyy');
+  }, [selectedScheduledDayKey]);
 
   const markAttendanceInteraction = useCallback((active: boolean) => {
     if (attendanceInteractionResetRef.current) {
@@ -247,18 +326,29 @@ export default function AttendanceScreen() {
       return;
     }
 
+    const attendanceSource = getAttendanceSource(date, memberId, flight, squadron);
+    const currentlyAttending = isAttending(date, memberId, flight, squadron);
+    if (currentlyAttending && attendanceSource === 'workout') {
+      Alert.alert(
+        'Workout-backed attendance',
+        'This attendance came from an approved or imported workout and cannot be removed here. Remove or edit the workout instead.'
+      );
+      return;
+    }
+
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
     try {
       const updatedSessions = await setAttendanceStatus({
-        date: format(date, 'yyyy-MM-dd'),
-        flight,
-        squadron,
-        memberId,
-        createdBy: user.id,
-        isAttending: !isAttending(date, memberId, flight, squadron),
-        accessToken,
-      });
+          date: format(date, 'yyyy-MM-dd'),
+          flight,
+          squadron,
+          memberId,
+          createdBy: user.id,
+          isAttending: !currentlyAttending,
+          source: 'manual',
+          accessToken,
+        });
 
       syncPTSessions(updatedSessions);
     } catch (error) {
@@ -293,6 +383,27 @@ export default function AttendanceScreen() {
       setDeletingScheduledSessionId(null);
     });
   };
+
+  const handleOpenScheduledSessionsForDay = useCallback((day: Date) => {
+    const dayKey = format(day, 'yyyy-MM-dd');
+    const hasSessions = scheduledSessionsThisWeek.some((session) => session.date === dayKey);
+    if (!hasSessions) {
+      return;
+    }
+
+    Haptics.selectionAsync();
+    setSelectedScheduledDayKey(dayKey);
+    setExpandedScheduledSessionIds([]);
+    setShowDayScheduledSessionsModal(true);
+  }, [scheduledSessionsThisWeek]);
+
+  const toggleExpandedScheduledSession = useCallback((sessionId: string) => {
+    setExpandedScheduledSessionIds((current) =>
+      current.includes(sessionId)
+        ? current.filter((id) => id !== sessionId)
+        : [...current, sessionId]
+    );
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -587,12 +698,23 @@ export default function AttendanceScreen() {
         style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
       />
 
-      <SafeAreaView edges={['top']} className="flex-1">
-        <Animated.View entering={FadeInDown.delay(100).springify()} className="px-6 pt-4 pb-1 flex-row items-start justify-between">
-          <View className="flex-1 pr-4">
-            <Text className="text-white text-2xl font-bold">PT Attendance</Text>
-            <Text className="text-af-silver text-sm mt-1">Track squadron fitness participation</Text>
-          </View>
+        <SafeAreaView edges={['top']} className="flex-1">
+          <Animated.View entering={FadeInDown.delay(100).springify()} className="px-6 pt-4 pb-1 flex-row items-start justify-between">
+            <View className="flex-1 pr-4">
+              <View className="flex-row items-center">
+                <Text className="text-white text-2xl font-bold">PT Attendance</Text>
+                <Pressable
+                  onPress={() => {
+                    Haptics.selectionAsync();
+                    setShowAttendanceLegendModal(true);
+                  }}
+                  className="ml-2 rounded-full border border-white/15 bg-white/8 p-1.5"
+                >
+                  <HelpCircle size={16} color="#C0C0C0" />
+                </Pressable>
+              </View>
+              <Text className="text-af-silver text-sm mt-1">Track squadron fitness participation</Text>
+            </View>
           {canViewReport ? (
             <TutorialTarget id="attendance-report">
               <Pressable
@@ -727,8 +849,11 @@ export default function AttendanceScreen() {
                           <Text className="text-white font-semibold text-sm">
                             {format(new Date(`${session.date}T00:00:00`), 'EEE, MMM d')} at {session.time}
                           </Text>
-                          <Text className="text-af-silver text-[11px]">{session.flights.join(', ')}</Text>
+                          <Text className={cn('text-[11px]', session.scope === 'personal' ? 'text-af-success' : 'text-af-silver')}>
+                            {scheduledSessionScopeLabel(session)}
+                          </Text>
                         </View>
+                        <Text className="text-af-silver text-[11px] mt-1">{scheduledSessionKindLabel(session)}</Text>
                       </View>
                     ))}
                     {scheduledSessionsThisWeek.length > 2 ? (
@@ -885,24 +1010,34 @@ export default function AttendanceScreen() {
                   <View style={{ width: dayColumnsWidth }}>
                     <View className="flex-row items-center" style={{ height: HEADER_HEIGHT }}>
                         {weekDays.map((day, index) => (
-                          <View key={`header-${day.toISOString()}`} style={{ width: DAY_COLUMN_WIDTH }} className="items-center justify-center">
+                          <Pressable
+                            key={`header-${day.toISOString()}`}
+                            style={{ width: DAY_COLUMN_WIDTH }}
+                            className="items-center justify-center"
+                            disabled={!weekScheduledIndicators[index].hasGroup && !weekScheduledIndicators[index].hasPersonal}
+                            onPress={() => handleOpenScheduledSessionsForDay(day)}
+                          >
                             <Text className="text-af-silver text-xs uppercase tracking-[0.4px]">{format(day, 'EEE')}</Text>
                             <View className="relative items-center justify-center mt-0.5" style={{ minWidth: 22 }}>
                               <Text className="text-white font-bold">{format(day, 'd')}</Text>
-                              {weekScheduledIndicators[index] ? (
-                                <View
-                                  className="absolute rounded-full"
-                                  style={{
-                                    width: 6,
-                                    height: 6,
-                                    right: -7,
-                                    top: 1,
-                                    backgroundColor: '#FACC15',
-                                  }}
-                                />
+                              {(weekScheduledIndicators[index].hasGroup || weekScheduledIndicators[index].hasPersonal) ? (
+                                <View className="absolute" style={{ right: -8, top: -1, gap: 3 }}>
+                                  {weekScheduledIndicators[index].hasGroup ? (
+                                    <View
+                                      className="rounded-full"
+                                      style={{ width: 6, height: 6, backgroundColor: '#FACC15' }}
+                                    />
+                                  ) : null}
+                                  {weekScheduledIndicators[index].hasPersonal ? (
+                                    <View
+                                      className="rounded-full"
+                                      style={{ width: 6, height: 6, backgroundColor: '#22C55E' }}
+                                    />
+                                  ) : null}
+                                </View>
                               ) : null}
                             </View>
-                          </View>
+                          </Pressable>
                         ))}
                     </View>
 
@@ -913,26 +1048,36 @@ export default function AttendanceScreen() {
                         className="flex-row items-center border-t border-white/5"
                         style={{ height: ROW_HEIGHT }}
                       >
-                        {weekDays.map((day) => {
-                          const attending = isAttending(day, member.id, member.flight, member.squadron);
-                          return (
-                            <Pressable
+                          {weekDays.map((day) => {
+                            const attending = isAttending(day, member.id, member.flight, member.squadron);
+                            const attendanceSource = getAttendanceSource(day, member.id, member.flight, member.squadron);
+                            const isWorkoutDerivedAttendance = attendanceSource === 'workout';
+                            return (
+                              <Pressable
                               key={`${member.id}-${day.toISOString()}`}
                               onPress={() => handleToggleAttendance(day, member.id, member.flight, member.squadron)}
                               disabled={!canEdit}
                               style={{ width: DAY_COLUMN_WIDTH }}
                               className="items-center"
                             >
-                              <View
-                                className={cn(
-                                  'w-10 h-10 rounded-full items-center justify-center border shadow-sm',
-                                  attending ? 'bg-af-success/20 border-af-success' : 'bg-black/10 border-white/10'
-                                )}
-                              >
-                                {attending ? <Check size={20} color="#22C55E" /> : <X size={20} color="#ffffff30" />}
-                              </View>
-                            </Pressable>
-                          );
+                                <View
+                                  className={cn(
+                                    'w-10 h-10 rounded-full items-center justify-center border shadow-sm',
+                                    attending
+                                      ? isWorkoutDerivedAttendance
+                                        ? 'bg-af-accent/20 border-af-accent'
+                                        : 'bg-af-success/20 border-af-success'
+                                      : 'bg-black/10 border-white/10'
+                                  )}
+                                >
+                                  {attending ? (
+                                    <Check size={20} color={isWorkoutDerivedAttendance ? '#4A90D9' : '#22C55E'} />
+                                  ) : (
+                                    <X size={20} color="#ffffff30" />
+                                  )}
+                                </View>
+                              </Pressable>
+                            );
                         })}
                       </Animated.View>
                     ))}
@@ -1083,22 +1228,20 @@ export default function AttendanceScreen() {
                 </Pressable>
               </View>
 
-              {canEdit ? (
-                <Pressable
-                  onPress={() => {
-                    Haptics.selectionAsync();
-                    setShowScheduledSessionsModal(false);
-                    router.push('/schedule-session');
-                  }}
-                  className="mb-4 rounded-2xl border border-af-accent/40 bg-af-accent/15 px-4 py-3"
-                >
-                  <Text className="text-white font-semibold text-center">Schedule PT Session</Text>
-                </Pressable>
-              ) : null}
+              <Pressable
+                onPress={() => {
+                  Haptics.selectionAsync();
+                  setShowScheduledSessionsModal(false);
+                  router.push('/schedule-session');
+                }}
+                className="mb-4 rounded-2xl border border-af-accent/40 bg-af-accent/15 px-4 py-3"
+              >
+                <Text className="text-white font-semibold text-center">{canEdit ? 'Schedule PT Session' : 'Schedule Personal PT'}</Text>
+              </Pressable>
 
               <ScrollView showsVerticalScrollIndicator={false}>
                 {scheduledSessionsThisWeek.length === 0 ? (
-                  <Text className="text-white/40 text-center py-8">No scheduled PT sessions for this week.</Text>
+                  <Text className="text-white/40 text-center py-8">No upcoming PT sessions for this week.</Text>
                 ) : (
                   scheduledSessionsThisWeek.map((session) => (
                     <View key={session.id} className="rounded-2xl border border-white/10 bg-white/5 p-4 mb-3">
@@ -1108,14 +1251,23 @@ export default function AttendanceScreen() {
                             {format(new Date(`${session.date}T00:00:00`), 'EEEE, MMM d')} at {session.time}
                           </Text>
                           <Text className="text-af-silver text-sm mt-2">{session.description}</Text>
+                          <Text className="text-af-silver text-xs mt-2">{scheduledSessionKindLabel(session)}</Text>
                           <Text className="text-af-silver text-xs mt-2">
                             Scheduled by {creatorNameById.get(session.createdBy) ?? 'Unknown member'}
                           </Text>
                         </View>
                         <View className="items-end">
-                          <View className="rounded-full border border-af-warning/40 bg-af-warning/15 px-2.5 py-1 max-w-[150px]">
-                            <Text className="text-af-warning text-[11px] font-semibold" numberOfLines={1}>
-                              {session.flights.join(', ')}
+                          <View className={cn(
+                            'rounded-full px-2.5 py-1 max-w-[170px]',
+                            session.scope === 'personal'
+                              ? 'border border-af-success/40 bg-af-success/15'
+                              : 'border border-af-warning/40 bg-af-warning/15'
+                          )}>
+                            <Text
+                              className={cn('text-[11px] font-semibold', session.scope === 'personal' ? 'text-af-success' : 'text-af-warning')}
+                              numberOfLines={1}
+                            >
+                              {scheduledSessionScopeLabel(session)}
                             </Text>
                           </View>
                           {canEdit ? (
@@ -1129,13 +1281,15 @@ export default function AttendanceScreen() {
                           ) : null}
                         </View>
                       </View>
-                      <View className="flex-row flex-wrap mt-3" style={{ gap: 8 }}>
-                        {session.flights.map((flight) => (
-                          <View key={`${session.id}-${flight}`} className="rounded-full border border-white/10 bg-black/15 px-3 py-1.5">
-                            <Text className="text-white text-xs font-medium">{flight}</Text>
-                          </View>
-                        ))}
-                      </View>
+                      {session.scope !== 'personal' ? (
+                        <View className="flex-row flex-wrap mt-3" style={{ gap: 8 }}>
+                          {session.flights.map((flight) => (
+                            <View key={`${session.id}-${flight}`} className="rounded-full border border-white/10 bg-black/15 px-3 py-1.5">
+                              <Text className="text-white text-xs font-medium">{flight}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      ) : null}
                     </View>
                   ))
                 )}
@@ -1143,7 +1297,117 @@ export default function AttendanceScreen() {
             </View>
           </View>
         </Modal>
-      </SafeAreaView>
-    </View>
-  );
+
+        <Modal visible={showDayScheduledSessionsModal} transparent animationType="fade" onRequestClose={() => setShowDayScheduledSessionsModal(false)}>
+            <View className="flex-1 bg-black/80 items-center justify-center p-6">
+              <View className="w-full max-w-lg rounded-3xl border border-white/20 bg-af-navy p-6 max-h-[80%]">
+              <View className="flex-row items-center justify-between mb-4">
+                <View className="flex-1 pr-3">
+                  <Text className="text-white text-xl font-bold">Scheduled PT Sessions</Text>
+                  <Text className="text-af-silver text-sm mt-1">{selectedScheduledDayLabel}</Text>
+                </View>
+                <Pressable
+                  onPress={() => setShowDayScheduledSessionsModal(false)}
+                  className="w-8 h-8 rounded-full bg-white/10 items-center justify-center"
+                >
+                  <X size={18} color="#C0C0C0" />
+                </Pressable>
+              </View>
+
+              <ScrollView showsVerticalScrollIndicator={false}>
+                {selectedDayScheduledSessions.length === 0 ? (
+                  <Text className="text-white/40 text-center py-8">No scheduled PT sessions for this day.</Text>
+                ) : (
+                  selectedDayScheduledSessions.map((session) => {
+                    const expanded = expandedScheduledSessionIds.includes(session.id);
+                    return (
+                      <Pressable
+                        key={session.id}
+                        onPress={() => toggleExpandedScheduledSession(session.id)}
+                        className="mb-3 rounded-2xl border border-white/10 bg-white/5 p-4"
+                      >
+                        <View className="flex-row items-center justify-between">
+                          <View className="flex-1 pr-3">
+                            <Text className="text-white font-semibold">
+                              {format(new Date(`${session.date}T00:00:00`), 'EEE, MMM d')} at {session.time}
+                            </Text>
+                            <Text className={cn('text-xs mt-1', session.scope === 'personal' ? 'text-af-success' : 'text-af-warning')}>
+                              {scheduledSessionScopeLabel(session)}
+                            </Text>
+                          </View>
+                          {expanded ? <ChevronUp size={18} color="#C0C0C0" /> : <ChevronDown size={18} color="#C0C0C0" />}
+                        </View>
+
+                        {expanded ? (
+                          <View className="mt-3 border-t border-white/10 pt-3">
+                            <Text className="text-white text-sm">{session.description}</Text>
+                            <Text className="text-af-silver text-xs mt-2">{scheduledSessionKindLabel(session)}</Text>
+                            <Text className="text-af-silver text-xs mt-2">
+                              Scheduled by {creatorNameById.get(session.createdBy) ?? 'Unknown member'}
+                            </Text>
+                            {session.scope !== 'personal' ? (
+                              <View className="flex-row flex-wrap mt-3" style={{ gap: 8 }}>
+                                {session.flights.map((flight) => (
+                                  <View key={`${session.id}-${flight}`} className="rounded-full border border-white/10 bg-black/15 px-3 py-1.5">
+                                    <Text className="text-white text-xs font-medium">{flight}</Text>
+                                  </View>
+                                ))}
+                              </View>
+                            ) : null}
+                          </View>
+                        ) : null}
+                      </Pressable>
+                    );
+                  })
+                )}
+              </ScrollView>
+              </View>
+            </View>
+         </Modal>
+
+         <Modal visible={showAttendanceLegendModal} transparent animationType="fade" onRequestClose={() => setShowAttendanceLegendModal(false)}>
+            <View className="flex-1 bg-black/80 items-center justify-center p-6">
+              <View className="w-full max-w-sm rounded-3xl border border-white/20 bg-af-navy p-6">
+                <View className="flex-row items-center justify-between mb-4">
+                  <View className="flex-1 pr-3">
+                    <Text className="text-white text-xl font-bold">Attendance Checkmarks</Text>
+                    <Text className="text-af-silver text-sm mt-1">Reference for the attendance colors used in FitFlight.</Text>
+                  </View>
+                  <Pressable
+                    onPress={() => setShowAttendanceLegendModal(false)}
+                    className="w-8 h-8 rounded-full bg-white/10 items-center justify-center"
+                  >
+                    <X size={18} color="#C0C0C0" />
+                  </Pressable>
+                </View>
+
+                <View className="rounded-2xl border border-white/10 bg-white/5 p-4 mb-3">
+                  <View className="flex-row items-center">
+                    <View className="w-10 h-10 rounded-full items-center justify-center border border-af-success bg-af-success/20">
+                      <Check size={20} color="#22C55E" />
+                    </View>
+                    <View className="ml-3 flex-1">
+                      <Text className="text-white font-semibold">Green Checkmark</Text>
+                      <Text className="text-af-silver text-sm mt-1">Attendance was marked manually by a PFL, UFPM, Owner, or Squadron Leadership.</Text>
+                    </View>
+                  </View>
+                </View>
+
+                <View className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <View className="flex-row items-center">
+                    <View className="w-10 h-10 rounded-full items-center justify-center border border-af-accent bg-af-accent/20">
+                      <Check size={20} color="#4A90D9" />
+                    </View>
+                    <View className="ml-3 flex-1">
+                      <Text className="text-white font-semibold">Blue Checkmark</Text>
+                      <Text className="text-af-silver text-sm mt-1">Attendance was added automatically from an approved manual workout or a Strava-imported workout.</Text>
+                    </View>
+                  </View>
+                </View>
+              </View>
+            </View>
+         </Modal>
+        </SafeAreaView>
+      </View>
+    );
 }

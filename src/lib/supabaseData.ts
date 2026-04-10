@@ -1,4 +1,4 @@
-import type { AccountType, FitnessAssessment, Flight, Member, PTSession, ScheduledPTSession, SharedWorkout, Squadron, WorkoutType } from '@/lib/store';
+import type { AccountType, FitnessAssessment, Flight, Member, PTSession, ScheduledPTKind, ScheduledPTScope, ScheduledPTSession, SharedWorkout, Squadron, WorkoutType } from '@/lib/store';
 import { getValidAccessToken } from '@/lib/supabaseAuth';
 import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
@@ -16,6 +16,7 @@ type RosterColumnName =
   | 'RANK'
   | 'EMAIL'
   | 'FLT-DET'
+  | 'AUTH_USER_ID'
   | 'PROFILE_PICTURE'
   | 'MUST_CHANGE_PASSWORD'
   | 'HAS_LOGGED_INTO_APP';
@@ -33,6 +34,7 @@ type AttendanceSessionRow = {
 type AttendanceAttendeeRow = {
   session_id: string;
   member_id: string;
+  attendance_source?: 'manual' | 'workout' | null;
 };
 type ScheduledPTSessionRow = {
   id: string;
@@ -42,6 +44,8 @@ type ScheduledPTSessionRow = {
   squadron: Squadron;
   flights: Flight[] | null;
   created_by: string;
+  session_scope: ScheduledPTScope;
+  session_kind: ScheduledPTKind;
 };
 type PFRARecordRow = {
   id: string;
@@ -93,6 +97,9 @@ type SupportThreadRow = {
   requester_email: string;
   requester_name: string;
   requester_squadron: Squadron;
+  recipient_member_id: string | null;
+  recipient_email: string;
+  recipient_name: string;
   subject: string;
   created_at: string;
   updated_at: string;
@@ -122,6 +129,8 @@ type SharedWorkoutRow = {
   steps: string[] | null;
   created_by: string;
   created_at: string;
+  edited_by?: string | null;
+  edited_at?: string | null;
   squadron: Squadron;
   thumbs_up: string[] | null;
   thumbs_down: string[] | null;
@@ -148,6 +157,7 @@ type ManualWorkoutSubmissionRow = {
   reviewer_member_id: string | null;
   reviewer_name: string | null;
   reviewer_note: string | null;
+  attendance_marked_by_submission: boolean;
   requester_read: boolean;
   reviewer_read: boolean;
   created_at: string;
@@ -174,6 +184,9 @@ export type SupportThreadSummary = {
   requesterEmail: string;
   requesterName: string;
   requesterSquadron: Squadron;
+  recipientMemberId: string | null;
+  recipientEmail: string;
+  recipientName: string;
   subject: string;
   createdAt: string;
   updatedAt: string;
@@ -201,6 +214,7 @@ export type ManualWorkoutSubmission = {
   reviewerMemberId: string | null;
   reviewerName: string | null;
   reviewerNote: string | null;
+  attendanceMarkedBySubmission: boolean;
   requesterRead: boolean;
   reviewerRead: boolean;
   createdAt: string;
@@ -224,6 +238,21 @@ export type AppNotification = {
   readAt: string | null;
   createdAt: string;
 };
+
+function isMissingAttendanceMarkedBySubmissionError(message: string) {
+  const normalized = message.toLowerCase();
+  return normalized.includes('attendance_marked_by_submission') && normalized.includes('schema cache');
+}
+
+function getManualWorkoutWriteErrorMessage(payload: unknown, fallbackMessage: string) {
+  const rawMessage =
+    typeof (payload as { message?: unknown }).message === 'string'
+      ? (payload as { message: string }).message
+      : fallbackMessage;
+  return rawMessage.toLowerCase().includes('row-level security')
+    ? 'Manual workout submission is blocked by Supabase security rules. Re-run supabase/sql/manual_workout_submissions.sql, then try again.'
+    : rawMessage;
+}
 
 type RosterPasswordStatus = {
   mustChangePassword: boolean;
@@ -379,6 +408,35 @@ export function getDisplayImageUri(value?: string) {
   return `${getStoragePublicBaseUrl()}${encodeStoragePath(storagePath)}`;
 }
 
+export async function deleteStoredImage(params: {
+  imageReference?: string;
+  accessToken?: string;
+}) {
+  const storagePath = extractStoragePath(params.imageReference);
+  if (!storagePath) {
+    return;
+  }
+
+  const response = await fetch(
+    `${SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}/${encodeStoragePath(storagePath)}`,
+    {
+      method: 'DELETE',
+      headers: await getHeaders(params.accessToken),
+    }
+  );
+
+  if (!response.ok && response.status !== 404) {
+    const payload = await response.json().catch(() => ({}));
+    const message =
+      typeof (payload as { error?: unknown; message?: unknown }).error === 'string'
+        ? (payload as { error: string }).error
+        : typeof (payload as { error?: unknown; message?: unknown }).message === 'string'
+          ? (payload as { message: string }).message
+          : 'Unable to delete the previous image from storage.';
+    throw new Error(message);
+  }
+}
+
 async function uploadImageToStorage(params: {
   localUri: string;
   storagePath: string;
@@ -428,12 +486,15 @@ async function uploadImageToStorage(params: {
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const message =
+    const rawMessage =
       typeof (payload as { message?: unknown; error?: unknown }).message === 'string'
         ? (payload as { message: string }).message
         : typeof (payload as { message?: unknown; error?: unknown }).error === 'string'
           ? (payload as { error: string }).error
           : 'Unable to upload image to Supabase storage.';
+    const message = rawMessage.toLowerCase().includes('row-level security')
+      ? 'Image upload is blocked by Supabase storage security rules. Re-run supabase/sql/storage_fitflight_images.sql, then try again.'
+      : rawMessage;
     throw new Error(message);
   }
 
@@ -516,11 +577,18 @@ function normalizeSharedWorkoutRow(row: SharedWorkoutRow): SharedWorkout {
     steps: row.steps ?? [],
     createdBy: row.created_by,
     createdAt: row.created_at,
+    editedBy: row.edited_by ?? undefined,
+    editedAt: row.edited_at ?? undefined,
     squadron: row.squadron,
     thumbsUp: row.thumbs_up ?? [],
     thumbsDown: row.thumbs_down ?? [],
     favoritedBy: row.favorited_by ?? [],
   };
+}
+
+function isMissingSharedWorkoutEditColumnsError(message: string) {
+  const normalized = message.toLowerCase();
+  return normalized.includes('edited_by') || normalized.includes('edited_at');
 }
 
 function normalizeManualWorkoutSubmissionRow(row: ManualWorkoutSubmissionRow): ManualWorkoutSubmission {
@@ -538,11 +606,12 @@ function normalizeManualWorkoutSubmissionRow(row: ManualWorkoutSubmissionRow): M
     distance: typeof row.distance === 'number' ? row.distance : undefined,
     isPrivate: row.is_private,
     proofImageData: getDisplayImageUri(row.proof_image_data) ?? row.proof_image_data,
-    status: row.status,
-    reviewerMemberId: row.reviewer_member_id,
-    reviewerName: row.reviewer_name,
-    reviewerNote: row.reviewer_note,
-    requesterRead: row.requester_read,
+      status: row.status,
+      reviewerMemberId: row.reviewer_member_id,
+      reviewerName: row.reviewer_name,
+      reviewerNote: row.reviewer_note,
+      attendanceMarkedBySubmission: row.attendance_marked_by_submission,
+      requesterRead: row.requester_read,
     reviewerRead: row.reviewer_read,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -558,6 +627,8 @@ function normalizeScheduledPTSessionRow(row: ScheduledPTSessionRow): ScheduledPT
     squadron: row.squadron,
     flights: row.flights ?? [],
     createdBy: row.created_by,
+    scope: row.session_scope ?? 'flight',
+    kind: row.session_kind ?? 'pt',
   };
 }
 
@@ -783,11 +854,16 @@ function getRosterFlight(member: Pick<Member, 'flight'>) {
 function getRosterPayload(
   member: Member
 ): Record<RosterColumnName, string | boolean> {
+  const authUserId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(member.id)
+    ? member.id
+    : '';
+
   return {
     FULL_NAME: getRosterFullName(member),
     RANK: RANK_TO_ROSTER[member.rank] ?? member.rank.toUpperCase(),
     EMAIL: member.email.toLowerCase(),
     'FLT-DET': getRosterFlight(member),
+    AUTH_USER_ID: authUserId,
     PROFILE_PICTURE: serializeImageReference(member.profilePicture),
     MUST_CHANGE_PASSWORD: member.mustChangePassword ?? false,
     HAS_LOGGED_INTO_APP: member.hasLoggedIntoApp ?? false,
@@ -831,7 +907,9 @@ function normalizeRosterRow(row: SupabaseRow): Member | null {
 
   const squadron = 'Hawks' as Squadron;
   const email = buildEmail(row, firstName, lastName);
-  const stableId = getStringValue(row, ['id', 'member_id']) || `roster-${slugify(`${rank}-${lastName}-${firstName}-${flight}`)}`;
+  const stableId =
+    getStringValue(row, ['auth_user_id', 'AUTH_USER_ID', 'id', 'member_id']) ||
+    `roster-${slugify(`${rank}-${lastName}-${firstName}-${flight}`)}`;
   const mustChangePassword = getBooleanValue(row, ['must_change_password', 'MUST_CHANGE_PASSWORD']) ?? false;
   const hasLoggedIntoApp = getBooleanValue(row, ['has_logged_into_app', 'HAS_LOGGED_INTO_APP', 'has_logged_in', 'HAS_LOGGED_IN']) ?? false;
   const profilePicture = getDisplayImageUri(getStringValue(row, ['profile_picture', 'PROFILE_PICTURE'])) || undefined;
@@ -891,7 +969,7 @@ export async function fetchAttendanceSessions(accessToken?: string) {
       method: 'GET',
       headers: await getHeaders(accessToken),
     }),
-    fetch(`${SUPABASE_URL}/rest/v1/pt_session_attendees?select=session_id,member_id`, {
+      fetch(`${SUPABASE_URL}/rest/v1/pt_session_attendees?select=session_id,member_id,attendance_source`, {
       method: 'GET',
       headers: await getHeaders(accessToken),
     }),
@@ -915,26 +993,32 @@ export async function fetchAttendanceSessions(accessToken?: string) {
     throw new Error(message);
   }
 
-  const attendeeMap = new Map<string, string[]>();
-  (attendeesPayload as AttendanceAttendeeRow[]).forEach((attendee) => {
-    const current = attendeeMap.get(attendee.session_id) ?? [];
-    current.push(attendee.member_id);
-    attendeeMap.set(attendee.session_id, current);
-  });
+    const attendeeMap = new Map<string, string[]>();
+    const attendeeSourceMap = new Map<string, Record<string, 'manual' | 'workout'>>();
+    (attendeesPayload as AttendanceAttendeeRow[]).forEach((attendee) => {
+      const current = attendeeMap.get(attendee.session_id) ?? [];
+      current.push(attendee.member_id);
+      attendeeMap.set(attendee.session_id, current);
+
+      const currentSources = attendeeSourceMap.get(attendee.session_id) ?? {};
+      currentSources[attendee.member_id] = attendee.attendance_source === 'workout' ? 'workout' : 'manual';
+      attendeeSourceMap.set(attendee.session_id, currentSources);
+    });
 
   return (sessionsPayload as AttendanceSessionRow[]).map((session) => ({
     id: session.id,
     date: session.date,
     flight: session.flight,
-    squadron: session.squadron,
-    createdBy: session.created_by,
-    attendees: attendeeMap.get(session.id) ?? [],
-  })).filter((session) => session.attendees.length > 0) as PTSession[];
+      squadron: session.squadron,
+      createdBy: session.created_by,
+      attendees: attendeeMap.get(session.id) ?? [],
+      attendeeSources: attendeeSourceMap.get(session.id) ?? {},
+    })).filter((session) => session.attendees.length > 0) as PTSession[];
 }
 
 export async function fetchScheduledPTSessions(accessToken?: string, squadron?: Squadron) {
   const query = new URLSearchParams();
-  query.set('select', 'id,session_date,session_time,description,squadron,flights,created_by');
+  query.set('select', 'id,session_date,session_time,description,squadron,flights,created_by,session_scope,session_kind');
   query.set('order', 'session_date.asc,session_time.asc');
   if (squadron) {
     query.set('squadron', `eq.${squadron}`);
@@ -965,15 +1049,17 @@ export async function createScheduledPTSession(session: ScheduledPTSession, acce
       'Content-Type': 'application/json',
       Prefer: 'return=representation',
     },
-    body: JSON.stringify({
-      id: session.id,
-      session_date: session.date,
-      session_time: session.time,
-      description: session.description,
-      squadron: session.squadron,
-      flights: session.flights,
-      created_by: session.createdBy,
-    }),
+      body: JSON.stringify({
+        id: session.id,
+        session_date: session.date,
+        session_time: session.time,
+        description: session.description,
+        squadron: session.squadron,
+        flights: session.flights,
+        created_by: session.createdBy,
+        session_scope: session.scope,
+        session_kind: session.kind,
+      }),
   });
 
   const payload = await response.json().catch(() => []);
@@ -998,13 +1084,15 @@ export async function updateScheduledPTSession(session: ScheduledPTSession, acce
         'Content-Type': 'application/json',
         Prefer: 'return=representation',
       },
-      body: JSON.stringify({
-        session_date: session.date,
-        session_time: session.time,
-        description: session.description,
-        squadron: session.squadron,
-        flights: session.flights,
-      }),
+        body: JSON.stringify({
+          session_date: session.date,
+          session_time: session.time,
+          description: session.description,
+          squadron: session.squadron,
+          flights: session.flights,
+          session_scope: session.scope,
+          session_kind: session.kind,
+        }),
     }
   );
 
@@ -1237,23 +1325,35 @@ export async function markAppNotificationRead(id: string, accessToken?: string) 
 
 export async function fetchSharedWorkouts(accessToken?: string, squadron?: Squadron) {
   const query = new URLSearchParams();
-  query.set('select', 'id,name,type,duration,intensity,description,is_multi_step,steps,created_by,created_at,squadron,thumbs_up,thumbs_down,favorited_by');
+  query.set('select', 'id,name,type,duration,intensity,description,is_multi_step,steps,created_by,created_at,edited_by,edited_at,squadron,thumbs_up,thumbs_down,favorited_by');
   query.set('order', 'created_at.desc');
   if (squadron) {
     query.set('squadron', `eq.${squadron}`);
   }
 
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/shared_workouts?${query.toString()}`, {
+  let response = await fetch(`${SUPABASE_URL}/rest/v1/shared_workouts?${query.toString()}`, {
     method: 'GET',
     headers: await getHeaders(accessToken),
   });
 
-  const payload = await response.json().catch(() => []);
+  let payload = await response.json().catch(() => []);
   if (!response.ok) {
     const message =
       typeof (payload as { message?: unknown }).message === 'string'
         ? (payload as { message: string }).message
-        : 'Unable to load squadron workouts from Supabase.';
+          : 'Unable to load squadron workouts from Supabase.';
+    if (isMissingSharedWorkoutEditColumnsError(message)) {
+      const fallbackQuery = new URLSearchParams(query);
+      fallbackQuery.set('select', 'id,name,type,duration,intensity,description,is_multi_step,steps,created_by,created_at,squadron,thumbs_up,thumbs_down,favorited_by');
+      response = await fetch(`${SUPABASE_URL}/rest/v1/shared_workouts?${fallbackQuery.toString()}`, {
+        method: 'GET',
+        headers: await getHeaders(accessToken),
+      });
+      payload = await response.json().catch(() => []);
+      if (response.ok) {
+        return (payload as SharedWorkoutRow[]).map(normalizeSharedWorkoutRow);
+      }
+    }
     throw new Error(message);
   }
 
@@ -1261,37 +1361,59 @@ export async function fetchSharedWorkouts(accessToken?: string, squadron?: Squad
 }
 
 export async function createSharedWorkout(workout: SharedWorkout, accessToken?: string) {
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/shared_workouts`, {
+  const basePayload = {
+    id: workout.id,
+    name: workout.name,
+    type: workout.type,
+    duration: workout.duration,
+    intensity: workout.intensity,
+    description: workout.description,
+    is_multi_step: workout.isMultiStep,
+    steps: workout.steps,
+    created_by: workout.createdBy,
+    created_at: workout.createdAt,
+    edited_by: workout.editedBy ?? null,
+    edited_at: workout.editedAt ?? null,
+    squadron: workout.squadron,
+    thumbs_up: workout.thumbsUp,
+    thumbs_down: workout.thumbsDown,
+    favorited_by: workout.favoritedBy,
+  };
+  let response = await fetch(`${SUPABASE_URL}/rest/v1/shared_workouts`, {
     method: 'POST',
     headers: {
       ...(await getHeaders(accessToken)),
       'Content-Type': 'application/json',
       Prefer: 'return=representation',
     },
-    body: JSON.stringify({
-      id: workout.id,
-      name: workout.name,
-      type: workout.type,
-      duration: workout.duration,
-      intensity: workout.intensity,
-      description: workout.description,
-      is_multi_step: workout.isMultiStep,
-      steps: workout.steps,
-      created_by: workout.createdBy,
-      created_at: workout.createdAt,
-      squadron: workout.squadron,
-      thumbs_up: workout.thumbsUp,
-      thumbs_down: workout.thumbsDown,
-      favorited_by: workout.favoritedBy,
-    }),
+    body: JSON.stringify(basePayload),
   });
 
-  const payload = await response.json().catch(() => []);
+  let payload = await response.json().catch(() => []);
   if (!response.ok) {
     const message =
       typeof (payload as { message?: unknown }).message === 'string'
         ? (payload as { message: string }).message
-        : 'Unable to create squadron workout in Supabase.';
+          : 'Unable to create squadron workout in Supabase.';
+    if (isMissingSharedWorkoutEditColumnsError(message)) {
+      response = await fetch(`${SUPABASE_URL}/rest/v1/shared_workouts`, {
+        method: 'POST',
+        headers: {
+          ...(await getHeaders(accessToken)),
+          'Content-Type': 'application/json',
+          Prefer: 'return=representation',
+        },
+        body: JSON.stringify({
+          ...basePayload,
+          edited_by: undefined,
+          edited_at: undefined,
+        }),
+      });
+      payload = await response.json().catch(() => []);
+      if (response.ok) {
+        return normalizeSharedWorkoutRow((payload as SharedWorkoutRow[])[0]);
+      }
+    }
     throw new Error(message);
   }
 
@@ -1299,33 +1421,55 @@ export async function createSharedWorkout(workout: SharedWorkout, accessToken?: 
 }
 
 export async function updateSharedWorkout(workout: SharedWorkout, accessToken?: string) {
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/shared_workouts?id=eq.${encodeURIComponent(workout.id)}`, {
+  const basePayload = {
+    thumbs_up: workout.thumbsUp,
+    thumbs_down: workout.thumbsDown,
+    favorited_by: workout.favoritedBy,
+    name: workout.name,
+    type: workout.type,
+    duration: workout.duration,
+    intensity: workout.intensity,
+    description: workout.description,
+    is_multi_step: workout.isMultiStep,
+    steps: workout.steps,
+    edited_by: workout.editedBy ?? null,
+    edited_at: workout.editedAt ?? null,
+  };
+  let response = await fetch(`${SUPABASE_URL}/rest/v1/shared_workouts?id=eq.${encodeURIComponent(workout.id)}`, {
     method: 'PATCH',
     headers: {
       ...(await getHeaders(accessToken)),
       'Content-Type': 'application/json',
       Prefer: 'return=representation',
     },
-    body: JSON.stringify({
-      thumbs_up: workout.thumbsUp,
-      thumbs_down: workout.thumbsDown,
-      favorited_by: workout.favoritedBy,
-      name: workout.name,
-      type: workout.type,
-      duration: workout.duration,
-      intensity: workout.intensity,
-      description: workout.description,
-      is_multi_step: workout.isMultiStep,
-      steps: workout.steps,
-    }),
+    body: JSON.stringify(basePayload),
   });
 
-  const payload = await response.json().catch(() => []);
+  let payload = await response.json().catch(() => []);
   if (!response.ok) {
     const message =
       typeof (payload as { message?: unknown }).message === 'string'
         ? (payload as { message: string }).message
-        : 'Unable to update squadron workout in Supabase.';
+          : 'Unable to update squadron workout in Supabase.';
+    if (isMissingSharedWorkoutEditColumnsError(message)) {
+      response = await fetch(`${SUPABASE_URL}/rest/v1/shared_workouts?id=eq.${encodeURIComponent(workout.id)}`, {
+        method: 'PATCH',
+        headers: {
+          ...(await getHeaders(accessToken)),
+          'Content-Type': 'application/json',
+          Prefer: 'return=representation',
+        },
+        body: JSON.stringify({
+          ...basePayload,
+          edited_by: undefined,
+          edited_at: undefined,
+        }),
+      });
+      payload = await response.json().catch(() => []);
+      if (response.ok) {
+        return normalizeSharedWorkoutRow((payload as SharedWorkoutRow[])[0]);
+      }
+    }
     throw new Error(message);
   }
 
@@ -1422,6 +1566,7 @@ export async function setAttendanceStatus(params: {
   memberId: string;
   createdBy: string;
   isAttending: boolean;
+  source?: 'manual' | 'workout';
   accessToken?: string;
 }) {
   const session = await ensureAttendanceSession(params);
@@ -1434,11 +1579,12 @@ export async function setAttendanceStatus(params: {
         'Content-Type': 'application/json',
         Prefer: 'resolution=merge-duplicates,return=minimal',
       },
-      body: JSON.stringify({
-        session_id: session.id,
-        member_id: params.memberId,
-      }),
-    });
+        body: JSON.stringify({
+          session_id: session.id,
+          member_id: params.memberId,
+          attendance_source: params.source === 'workout' ? 'workout' : 'manual',
+        }),
+      });
 
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
@@ -1728,6 +1874,9 @@ function buildSupportThreadSummary(thread: SupportThreadRow, messages: SupportMe
     requesterEmail: thread.requester_email,
     requesterName: thread.requester_name,
     requesterSquadron: thread.requester_squadron,
+    recipientMemberId: thread.recipient_member_id,
+    recipientEmail: thread.recipient_email,
+    recipientName: thread.recipient_name,
     subject: thread.subject,
     createdAt: thread.created_at,
     updatedAt: thread.updated_at,
@@ -1740,15 +1889,17 @@ function buildSupportThreadSummary(thread: SupportThreadRow, messages: SupportMe
 
 export async function fetchSupportThreads(params: {
   email: string;
-  isOwner: boolean;
+  isStaff: boolean;
   accessToken?: string;
 }) {
   const query = new URLSearchParams();
   query.set('select', '*');
   query.set('order', 'updated_at.desc');
 
-  if (!params.isOwner) {
+  if (!params.isStaff) {
     query.set('requester_email', `eq.${params.email.toLowerCase()}`);
+  } else {
+    query.set('recipient_email', `eq.${params.email.toLowerCase()}`);
   }
 
   const threadsResponse = await fetch(`${SUPABASE_URL}/rest/v1/support_threads?${query.toString()}`, {
@@ -1829,12 +1980,16 @@ async function upsertSupportThread(params: {
   requesterEmail: string;
   requesterName: string;
   requesterSquadron: Squadron;
+  recipientMemberId?: string | null;
+  recipientEmail: string;
+  recipientName: string;
   subject: string;
   accessToken?: string;
 }) {
   const encodedEmail = encodeURIComponent(params.requesterEmail.toLowerCase());
+  const encodedRecipientEmail = encodeURIComponent(params.recipientEmail.toLowerCase());
   const lookupResponse = await fetch(
-    `${SUPABASE_URL}/rest/v1/support_threads?select=*&requester_email=eq.${encodedEmail}`,
+    `${SUPABASE_URL}/rest/v1/support_threads?select=*&requester_email=eq.${encodedEmail}&recipient_email=eq.${encodedRecipientEmail}`,
     {
       method: 'GET',
       headers: await getHeaders(params.accessToken),
@@ -1846,7 +2001,7 @@ async function upsertSupportThread(params: {
     const message =
       typeof (lookupPayload as { message?: unknown }).message === 'string'
         ? (lookupPayload as { message: string }).message
-        : 'Unable to look up developer support thread.';
+        : 'Unable to look up FitFlight team support thread.';
     throw new Error(message);
   }
 
@@ -1856,6 +2011,9 @@ async function upsertSupportThread(params: {
     requester_email: params.requesterEmail.toLowerCase(),
     requester_name: params.requesterName,
     requester_squadron: params.requesterSquadron,
+    recipient_member_id: params.recipientMemberId ?? null,
+    recipient_email: params.recipientEmail.toLowerCase(),
+    recipient_name: params.recipientName,
     subject: params.subject,
     updated_at: new Date().toISOString(),
   };
@@ -1876,7 +2034,7 @@ async function upsertSupportThread(params: {
       const message =
         typeof (updatePayload as { message?: unknown }).message === 'string'
           ? (updatePayload as { message: string }).message
-          : 'Unable to update developer support thread.';
+          : 'Unable to update FitFlight team support thread.';
       throw new Error(message);
     }
 
@@ -1902,7 +2060,7 @@ async function upsertSupportThread(params: {
     const message =
       typeof (createPayload as { message?: unknown }).message === 'string'
         ? (createPayload as { message: string }).message
-        : 'Unable to create developer support thread.';
+        : 'Unable to create FitFlight team support thread.';
     throw new Error(message);
   }
 
@@ -1918,6 +2076,9 @@ export async function sendSupportMessage(params: {
   requesterEmail: string;
   requesterName: string;
   requesterSquadron: Squadron;
+  recipientMemberId?: string | null;
+  recipientEmail: string;
+  recipientName: string;
   senderMemberId: string;
   senderEmail: string;
   senderName: string;
@@ -1931,6 +2092,9 @@ export async function sendSupportMessage(params: {
     requesterEmail: params.requesterEmail,
     requesterName: params.requesterName,
     requesterSquadron: params.requesterSquadron,
+    recipientMemberId: params.recipientMemberId,
+    recipientEmail: params.recipientEmail,
+    recipientName: params.recipientName,
     subject: params.subject,
     accessToken: params.accessToken,
   });
@@ -2029,13 +2193,26 @@ export async function markSupportMessagesRead(params: {
 
 export async function fetchManualWorkoutSubmissions(params: {
   memberId: string;
+  memberEmail?: string;
   squadron: Squadron;
   canReview: boolean;
   accessToken?: string;
 }) {
+  const mineQuery = new URLSearchParams();
+  mineQuery.set('select', '*');
+  mineQuery.set('order', 'updated_at.desc');
+  if (params.memberEmail?.trim()) {
+    mineQuery.set(
+      'or',
+      `(member_id.eq.${params.memberId},member_email.eq.${params.memberEmail.trim().toLowerCase()})`
+    );
+  } else {
+    mineQuery.set('member_id', `eq.${params.memberId}`);
+  }
+
   const requests: Promise<Response>[] = [
     fetch(
-      `${SUPABASE_URL}/rest/v1/manual_workout_submissions?select=*&member_id=eq.${encodeURIComponent(params.memberId)}&order=updated_at.desc`,
+      `${SUPABASE_URL}/rest/v1/manual_workout_submissions?${mineQuery.toString()}`,
       {
         method: 'GET',
         headers: await getHeaders(params.accessToken),
@@ -2102,49 +2279,62 @@ export async function createManualWorkoutSubmission(params: {
 }) {
   const now = new Date().toISOString();
   const id = params.submissionId ?? createSupportId('manual-workout');
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/manual_workout_submissions`, {
+  const basePayload = {
+    id,
+    member_id: params.memberId,
+    member_email: params.memberEmail.toLowerCase(),
+    member_name: params.memberName,
+    member_rank: params.memberRank,
+    member_flight: params.memberFlight,
+    squadron: params.squadron,
+    workout_date: params.workoutDate,
+    workout_type: params.workoutType,
+    duration: params.duration,
+    distance: params.distance ?? null,
+    is_private: params.isPrivate,
+    proof_image_data: serializeImageReference(params.proofImageData),
+    status: 'pending',
+    reviewer_member_id: null,
+    reviewer_name: null,
+    reviewer_note: null,
+    requester_read: true,
+    reviewer_read: false,
+    created_at: now,
+    updated_at: now,
+  };
+  const headers = {
+    ...(await getHeaders(params.accessToken)),
+    'Content-Type': 'application/json',
+    Prefer: 'return=representation',
+  };
+
+  let response = await fetch(`${SUPABASE_URL}/rest/v1/manual_workout_submissions`, {
     method: 'POST',
-    headers: {
-      ...(await getHeaders(params.accessToken)),
-      'Content-Type': 'application/json',
-      Prefer: 'return=representation',
-    },
+    headers,
     body: JSON.stringify({
-      id,
-      member_id: params.memberId,
-      member_email: params.memberEmail.toLowerCase(),
-      member_name: params.memberName,
-      member_rank: params.memberRank,
-      member_flight: params.memberFlight,
-      squadron: params.squadron,
-      workout_date: params.workoutDate,
-      workout_type: params.workoutType,
-      duration: params.duration,
-      distance: params.distance ?? null,
-      is_private: params.isPrivate,
-      proof_image_data: serializeImageReference(params.proofImageData),
-      status: 'pending',
-      reviewer_member_id: null,
-      reviewer_name: null,
-      reviewer_note: null,
-      requester_read: true,
-      reviewer_read: false,
-      created_at: now,
-      updated_at: now,
+      ...basePayload,
+      attendance_marked_by_submission: false,
     }),
   });
 
-  const payload = await response.json().catch(() => []);
+  let payload = await response.json().catch(() => []);
   if (!response.ok) {
-      const rawMessage =
-        typeof (payload as { message?: unknown }).message === 'string'
-          ? (payload as { message: string }).message
-          : 'Unable to submit manual workout proof.';
-      const message = rawMessage.toLowerCase().includes('row-level security')
-        ? 'Manual workout submission is blocked by Supabase security rules. Re-run supabase/sql/manual_workout_submissions.sql, then try again.'
-        : rawMessage;
+    const message = getManualWorkoutWriteErrorMessage(payload, 'Unable to submit manual workout proof.');
+    if (isMissingAttendanceMarkedBySubmissionError(message)) {
+      response = await fetch(`${SUPABASE_URL}/rest/v1/manual_workout_submissions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(basePayload),
+      });
+      payload = await response.json().catch(() => []);
+    } else {
       throw new Error(message);
     }
+  }
+
+  if (!response.ok) {
+    throw new Error(getManualWorkoutWriteErrorMessage(payload, 'Unable to submit manual workout proof.'));
+  }
 
   return normalizeManualWorkoutSubmissionRow((payload as ManualWorkoutSubmissionRow[])[0]);
 }
@@ -2155,36 +2345,122 @@ export async function reviewManualWorkoutSubmission(params: {
   reviewerName: string;
   approved: boolean;
   note?: string;
+  attendanceMarkedBySubmission?: boolean;
   accessToken?: string;
 }) {
-  const response = await fetch(
+  const headers = {
+    ...(await getHeaders(params.accessToken)),
+    'Content-Type': 'application/json',
+    Prefer: 'return=representation',
+  };
+  const basePayload = {
+    status: params.approved ? 'approved' : 'denied',
+    reviewer_member_id: params.reviewerMemberId,
+    reviewer_name: params.reviewerName,
+    reviewer_note: params.note?.trim() || null,
+    requester_read: false,
+    reviewer_read: true,
+    updated_at: new Date().toISOString(),
+  };
+  let response = await fetch(
     `${SUPABASE_URL}/rest/v1/manual_workout_submissions?id=eq.${encodeURIComponent(params.submissionId)}`,
     {
       method: 'PATCH',
-      headers: {
-        ...(await getHeaders(params.accessToken)),
-        'Content-Type': 'application/json',
-        Prefer: 'return=representation',
-      },
+      headers,
       body: JSON.stringify({
-        status: params.approved ? 'approved' : 'denied',
-        reviewer_member_id: params.reviewerMemberId,
-        reviewer_name: params.reviewerName,
-        reviewer_note: params.note?.trim() || null,
-        requester_read: false,
-        reviewer_read: true,
-        updated_at: new Date().toISOString(),
+        ...basePayload,
+        attendance_marked_by_submission: params.attendanceMarkedBySubmission ?? false,
       }),
     }
   );
 
-  const payload = await response.json().catch(() => []);
+  let payload = await response.json().catch(() => []);
   if (!response.ok) {
-    const message =
-      typeof (payload as { message?: unknown }).message === 'string'
-        ? (payload as { message: string }).message
-        : 'Unable to review manual workout submission.';
-    throw new Error(message);
+    const message = getManualWorkoutWriteErrorMessage(payload, 'Unable to review manual workout submission.');
+    if (isMissingAttendanceMarkedBySubmissionError(message)) {
+      response = await fetch(
+        `${SUPABASE_URL}/rest/v1/manual_workout_submissions?id=eq.${encodeURIComponent(params.submissionId)}`,
+        {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify(basePayload),
+        }
+      );
+      payload = await response.json().catch(() => []);
+    } else {
+      throw new Error(message);
+    }
+  }
+
+  if (!response.ok) {
+    throw new Error(getManualWorkoutWriteErrorMessage(payload, 'Unable to review manual workout submission.'));
+  }
+
+  return normalizeManualWorkoutSubmissionRow((payload as ManualWorkoutSubmissionRow[])[0]);
+}
+
+export async function updateManualWorkoutSubmission(params: {
+  submissionId: string;
+  workoutDate: string;
+  workoutType: WorkoutType;
+  duration: number;
+  distance?: number;
+  isPrivate: boolean;
+  proofImageData: string;
+  accessToken?: string;
+}) {
+  const headers = {
+    ...(await getHeaders(params.accessToken)),
+    'Content-Type': 'application/json',
+    Prefer: 'return=representation',
+  };
+  const basePayload = {
+    workout_date: params.workoutDate,
+    workout_type: params.workoutType,
+    duration: params.duration,
+    distance: params.distance ?? null,
+    is_private: params.isPrivate,
+    proof_image_data: serializeImageReference(params.proofImageData),
+    status: 'pending',
+    reviewer_member_id: null,
+    reviewer_name: null,
+    reviewer_note: null,
+    requester_read: true,
+    reviewer_read: false,
+    updated_at: new Date().toISOString(),
+  };
+  let response = await fetch(
+    `${SUPABASE_URL}/rest/v1/manual_workout_submissions?id=eq.${encodeURIComponent(params.submissionId)}`,
+    {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({
+        ...basePayload,
+        attendance_marked_by_submission: false,
+      }),
+    }
+  );
+
+  let payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message = getManualWorkoutWriteErrorMessage(payload, 'Unable to update manual workout submission.');
+    if (isMissingAttendanceMarkedBySubmissionError(message)) {
+      response = await fetch(
+        `${SUPABASE_URL}/rest/v1/manual_workout_submissions?id=eq.${encodeURIComponent(params.submissionId)}`,
+        {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify(basePayload),
+        }
+      );
+      payload = await response.json().catch(() => []);
+    } else {
+      throw new Error(message);
+    }
+  }
+
+  if (!response.ok) {
+    throw new Error(getManualWorkoutWriteErrorMessage(payload, 'Unable to update manual workout submission.'));
   }
 
   return normalizeManualWorkoutSubmissionRow((payload as ManualWorkoutSubmissionRow[])[0]);
@@ -2246,7 +2522,7 @@ export async function fetchApprovedManualWorkouts(accessToken?: string, squadron
   }
 
   const submissions = (payload as ManualWorkoutSubmissionRow[]).map(normalizeManualWorkoutSubmissionRow);
-  const grouped = new Map<string, Array<{ memberId: string; workout: Member['workouts'][number] }>>();
+  const grouped = new Map<string, { memberId?: string; memberEmail?: string; workouts: Member['workouts'][number][] }>();
 
   submissions.forEach((submission) => {
     const workout = {
@@ -2258,16 +2534,32 @@ export async function fetchApprovedManualWorkouts(accessToken?: string, squadron
       distance: submission.distance,
       source: 'manual' as const,
       screenshotUri: submission.proofImageData,
-      title: `${submission.workoutType} proof`,
+      title:
+        submission.workoutType === 'Running'
+          ? 'Run'
+          : submission.workoutType === 'Walking'
+            ? 'Walk'
+            : submission.workoutType === 'Cycling'
+              ? 'Ride'
+              : submission.workoutType === 'Swimming'
+                ? 'Swim'
+                : submission.workoutType,
       isPrivate: submission.isPrivate,
+      attendanceMarkedBySubmission: submission.attendanceMarkedBySubmission,
     };
-    const current = grouped.get(submission.memberId) ?? [];
-    current.push({ memberId: submission.memberId, workout });
-    grouped.set(submission.memberId, current);
+    const key = submission.memberId || submission.memberEmail.toLowerCase();
+    const current = grouped.get(key) ?? {
+      memberId: submission.memberId,
+      memberEmail: submission.memberEmail.toLowerCase(),
+      workouts: [],
+    };
+    current.workouts.push(workout);
+    grouped.set(key, current);
   });
 
-  return Array.from(grouped.entries()).map(([memberId, items]) => ({
-    memberId,
-    workouts: items.map((item) => item.workout),
+  return Array.from(grouped.values()).map((entry) => ({
+    memberId: entry.memberId,
+    memberEmail: entry.memberEmail,
+    workouts: entry.workouts,
   }));
 }

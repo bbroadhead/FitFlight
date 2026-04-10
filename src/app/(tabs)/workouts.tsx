@@ -32,6 +32,7 @@ function WorkoutCard({
   canEdit,
   canDelete,
   creatorName,
+  editorName,
 }: {
   workout: SharedWorkout;
   currentUserId: string;
@@ -42,6 +43,7 @@ function WorkoutCard({
   canEdit: boolean;
   canDelete: boolean;
   creatorName: string;
+  editorName?: string | null;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -92,10 +94,13 @@ function WorkoutCard({
       >
         {/* Header */}
         <View className="flex-row items-start justify-between">
-          <View className="flex-1">
-            <Text className="text-white font-bold text-lg">{workout.name}</Text>
-            <Text className="text-af-silver text-sm">by {creatorName}</Text>
-          </View>
+            <View className="flex-1">
+              <Text className="text-white font-bold text-lg">{workout.name}</Text>
+              <Text className="text-af-silver text-sm">by {creatorName}</Text>
+              {editorName && workout.editedBy !== workout.createdBy ? (
+                <Text className="text-af-silver/80 text-xs mt-1">edited by {editorName}</Text>
+              ) : null}
+            </View>
           <View className="flex-row items-center">
             <Pressable
               onPress={handleFavorite}
@@ -414,6 +419,8 @@ export default function WorkoutsScreen() {
             description: newDescription.trim(),
             isMultiStep,
             steps: trimmedSteps,
+            editedBy: user.id,
+            editedAt: new Date().toISOString(),
           }, accessToken);
 
           syncSharedWorkouts(
@@ -667,10 +674,11 @@ export default function WorkoutsScreen() {
             filteredWorkouts.map((workout) => (
               <WorkoutCard
                 key={workout.id}
-                workout={workout}
-                currentUserId={currentUserId}
-                creatorName={getMemberName(workout.createdBy)}
-                onRate={(rating) => handleRateWorkout(workout, rating)}
+                  workout={workout}
+                  currentUserId={currentUserId}
+                  creatorName={getMemberName(workout.createdBy)}
+                  editorName={workout.editedBy ? getMemberName(workout.editedBy) : null}
+                  onRate={(rating) => handleRateWorkout(workout, rating)}
                 onToggleFavorite={() => handleToggleFavorite(workout)}
                 onEdit={() => openEditModal(workout)}
                 onDelete={() => handleDeleteWorkout(workout.id)}

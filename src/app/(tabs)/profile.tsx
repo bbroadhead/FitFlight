@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, Pressable, ScrollView, TextInput, Modal, Image, Platform } from 'react-native';
+import { Alert, View, Text, Pressable, ScrollView, TextInput, Modal, Image, Platform } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -7,8 +7,10 @@ import { User, Shield, LogOut, LogIn, UserPlus, Trash2, Users, Activity, X, Chec
 import Animated, { FadeIn, FadeInDown, FadeInUp, SlideInDown } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { useRouter } from 'expo-router';
-import { useAuthStore, useMemberStore, type Flight, type Member, type AccountType, type Squadron, type IntegrationService, getDisplayName, canEditAttendance, canManagePTL, isAdmin, SQUADRONS, ALL_ACHIEVEMENTS } from '@/lib/store';
+import SmartSlider from '@/components/SmartSlider';
+import { useAuthStore, useMemberStore, type Flight, type Member, type AccountType, type Squadron, type IntegrationService, type WorkoutType, getDisplayName, canEditAttendance, canManagePTL, isAdmin, SQUADRONS, ALL_ACHIEVEMENTS } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { TrophyCase, CompactTrophyBadges } from '@/components/TrophyCase';
 import { TutorialTarget, useTutorialTour } from '@/contexts/TutorialTourContext';
@@ -23,6 +25,7 @@ import {
   fetchManualWorkoutSubmissions,
   markAppNotificationRead,
   assignUFPMRole,
+  deleteStoredImage,
   createRosterMember,
   deleteRosterMember,
   ensureMemberRole,
@@ -30,12 +33,12 @@ import {
   fetchSupportMessages,
   fetchSupportThreads,
   markSupportMessagesRead,
-  reviewManualWorkoutSubmission,
-  resetUserPasswordAsAdmin,
-  sendSupportMessage,
-  sendAppNotification,
-  setAttendanceStatus,
-  type AppNotification,
+    reviewManualWorkoutSubmission,
+    resetUserPasswordAsAdmin,
+    sendSupportMessage,
+    sendAppNotification,
+    setAttendanceStatus,
+    type AppNotification,
   type ManualWorkoutSubmission,
   type SupportMessage,
   type SupportThreadSummary,
@@ -47,6 +50,26 @@ import {
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
 const RANKS = ['AB', 'Amn', 'A1C', 'SrA', 'SSgt', 'TSgt', 'MSgt', 'SMSgt', 'CMSgt'];
 const OWNER_EMAIL = 'benjamin.broadhead.2@us.af.mil';
+const DEVELOPER_NAME = 'SSgt Benjamin Broadhead';
+const DEVELOPER_TITLE = 'Developer';
+const PROJECT_COORDINATOR_NAME = 'SSgt Jacob De La Rosa';
+const PROJECT_COORDINATOR_TITLE = 'Project Coordinator';
+
+type SupportContact = {
+  key: 'developer' | 'project_coordinator';
+  name: string;
+  title: string;
+  email: string;
+  memberId: string | null;
+};
+
+const slugify = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+const buildLegacyRosterId = (member: { rank: string; firstName: string; lastName: string; flight: Flight }) =>
+  `roster-${slugify(`${member.rank}-${member.lastName}-${member.firstName}-${member.flight}`)}`;
 type SupportNotificationItem = {
   id: string;
   title: string;
@@ -70,8 +93,53 @@ type BackendNotificationItem = AppNotification & {
   unread: boolean;
 };
 
+type PendingProfileImageCrop = {
+  uri: string;
+  width: number;
+  height: number;
+  mimeType?: string;
+};
+
 function RunningIcon({ size, color }: { size: number; color: string }) {
   return <MaterialCommunityIcons name="run-fast" size={size} color={color} />;
+}
+
+function getScheduledSessionKindLabel(kind: 'pt' | 'pfra_mock' | 'pfra_diagnostic' | 'pfra_official') {
+  switch (kind) {
+    case 'pfra_mock':
+      return 'PFRA Mock';
+    case 'pfra_diagnostic':
+      return 'PFRA Diagnostic';
+    case 'pfra_official':
+      return 'PFRA Official';
+    default:
+      return 'Normal PT';
+  }
+}
+
+function getScheduledSessionScopeLabel(session: { scope: 'squadron' | 'flight' | 'personal'; flights: Flight[] }) {
+  if (session.scope === 'personal') {
+    return 'Personal';
+  }
+  if (session.scope === 'squadron') {
+    return 'Squadron PT';
+  }
+  return session.flights.join(', ');
+}
+
+function getWorkoutDisplayTitle(type: WorkoutType) {
+  switch (type) {
+    case 'Running':
+      return 'Run';
+    case 'Walking':
+      return 'Walk';
+    case 'Cycling':
+      return 'Ride';
+    case 'Swimming':
+      return 'Swim';
+    default:
+      return type;
+  }
 }
 
 export default function ProfileScreen() {
@@ -88,6 +156,7 @@ export default function ProfileScreen() {
   const importWorkouts = useMemberStore(s => s.importWorkouts);
   const syncPTSessions = useMemberStore(s => s.syncPTSessions);
   const ptSessions = useMemberStore(s => s.ptSessions);
+  const scheduledSessions = useMemberStore(s => s.scheduledSessions);
   const syncApprovedManualWorkouts = useMemberStore(s => s.syncApprovedManualWorkouts);
   const approvePTL = useMemberStore(s => s.approvePTL);
   const rejectPTL = useMemberStore(s => s.rejectPTL);
@@ -104,8 +173,13 @@ export default function ProfileScreen() {
   const [showDeveloperContact, setShowDeveloperContact] = useState(false);
   const [showDeveloperMessageModal, setShowDeveloperMessageModal] = useState(false);
   const [showSupportInboxModal, setShowSupportInboxModal] = useState(false);
+  const [activeSupportRecipientEmail, setActiveSupportRecipientEmail] = useState(OWNER_EMAIL);
   const [showInstallModal, setShowInstallModal] = useState(false);
   const [isUpdatingProfilePicture, setIsUpdatingProfilePicture] = useState(false);
+  const [pendingProfileImageCrop, setPendingProfileImageCrop] = useState<PendingProfileImageCrop | null>(null);
+  const [profileCropZoom, setProfileCropZoom] = useState(1);
+  const [profileCropOffsetX, setProfileCropOffsetX] = useState(0);
+  const [profileCropOffsetY, setProfileCropOffsetY] = useState(0);
   const [showUFPMModal, setShowUFPMModal] = useState(false);
   const [memberPendingDeleteId, setMemberPendingDeleteId] = useState<string | null>(null);
   const [showUFPMConfirmModal, setShowUFPMConfirmModal] = useState(false);
@@ -114,6 +188,8 @@ export default function ProfileScreen() {
   const [showWorkoutReviewModal, setShowWorkoutReviewModal] = useState(false);
   const [showWorkoutHistoryModal, setShowWorkoutHistoryModal] = useState(false);
   const [showPFRAHistoryModal, setShowPFRAHistoryModal] = useState(false);
+  const [showUpcomingPTSessionsModal, setShowUpcomingPTSessionsModal] = useState(false);
+  const [expandedWorkoutImageUri, setExpandedWorkoutImageUri] = useState<string | null>(null);
   const [selectedSummaryMonth, setSelectedSummaryMonth] = useState(getMonthKey());
   const [integrationToDisconnect, setIntegrationToDisconnect] = useState<IntegrationService | null>(null);
   const [stravaBusyAction, setStravaBusyAction] = useState<'connect' | 'sync' | 'disconnect' | null>(null);
@@ -156,12 +232,67 @@ export default function ProfileScreen() {
   const [manualWorkoutSubmitting, setManualWorkoutSubmitting] = useState(false);
   const [appNotifications, setAppNotifications] = useState<BackendNotificationItem[]>([]);
   const [appNotificationsLoading, setAppNotificationsLoading] = useState(false);
+  const [dismissedNotificationKeys, setDismissedNotificationKeys] = useState<string[]>([]);
   const [showLeaderboardHistoryModal, setShowLeaderboardHistoryModal] = useState(false);
+  const [expandedUpcomingSessionIds, setExpandedUpcomingSessionIds] = useState<string[]>([]);
 
   const isAuthenticated = useAuthStore(s => s.isAuthenticated);
   const updateUser = useAuthStore(s => s.updateUser);
   const updateMember = useMemberStore(s => s.updateMember);
-  const currentMember = user ? members.find((member) => member.id === user.id) : null;
+  const resolveMemberForUser = (memberUser: typeof user) => {
+    if (!memberUser) {
+      return null;
+    }
+
+    const normalizedEmail = memberUser.email?.trim().toLowerCase() ?? '';
+    const normalizedFirstName = memberUser.firstName.trim().toLowerCase();
+    const normalizedLastName = memberUser.lastName.trim().toLowerCase();
+
+    return (
+      members.find((member) => member.id === memberUser.id) ??
+      members.find(
+        (member) =>
+          normalizedEmail.length > 0 &&
+          member.email?.trim().toLowerCase() === normalizedEmail
+      ) ??
+      members.find(
+        (member) =>
+          member.firstName.trim().toLowerCase() === normalizedFirstName &&
+          member.lastName.trim().toLowerCase() === normalizedLastName
+      ) ??
+      null
+    );
+  };
+  const currentMember = resolveMemberForUser(user);
+  const projectCoordinatorMember = members.find(
+    (member) =>
+      member.firstName.trim().toLowerCase() === 'jacob' &&
+      member.lastName.trim().toLowerCase() === 'de la rosa'
+  ) ?? null;
+  const projectCoordinatorEmail =
+    projectCoordinatorMember?.email ??
+    (user?.firstName.trim().toLowerCase() === 'jacob' && user?.lastName.trim().toLowerCase() === 'de la rosa'
+      ? user.email
+      : '');
+  const supportContacts = useMemo<SupportContact[]>(
+    () => [
+      {
+        key: 'developer' as const,
+        name: DEVELOPER_NAME,
+        title: DEVELOPER_TITLE,
+        email: OWNER_EMAIL,
+        memberId: members.find((member) => member.email.trim().toLowerCase() === OWNER_EMAIL)?.id ?? null,
+      },
+      {
+        key: 'project_coordinator' as const,
+        name: PROJECT_COORDINATOR_NAME,
+        title: PROJECT_COORDINATOR_TITLE,
+        email: projectCoordinatorEmail,
+        memberId: projectCoordinatorMember?.id ?? null,
+      },
+    ].filter((contact) => Boolean(contact.email.trim())),
+    [members, projectCoordinatorEmail, projectCoordinatorMember?.id]
+  );
 
   const userAccountType = user?.accountType ?? 'standard';
   const canManage = canManagePTL(userAccountType);
@@ -170,14 +301,28 @@ export default function ProfileScreen() {
   const canReviewManualWorkouts = canEditAttendance(userAccountType);
   const canResetUserPasswords = userAccountType === 'fitflight_creator' || userAccountType === 'ufpm';
   const isOwnerReviewer = user?.email?.toLowerCase() === OWNER_EMAIL;
+  const canViewSupportInbox = user?.email
+    ? supportContacts.some((contact) => contact.email.toLowerCase() === user.email.toLowerCase())
+    : false;
 
-  const unreadNotifications = appNotifications.filter((notification) => !notification.readAt);
+  const unreadNotifications = appNotifications.filter(
+    (notification) =>
+      !notification.readAt && !dismissedNotificationKeys.includes(`backend-${notification.id}`)
+  );
   const ptlRequests = appNotifications.filter((notification) => notification.type === 'ptl_request' && !notification.readAt);
   const currentUFPM = members.find((member) => member.accountType === 'ufpm') ?? null;
   const normalizedMemberSearch = memberSearchQuery.trim().toLowerCase();
   const normalizedUFPMSearch = ufpmSearchQuery.trim().toLowerCase();
   const normalizedResetPasswordSearch = resetPasswordSearchQuery.trim().toLowerCase();
   const memberSquadron = user?.squadron ?? 'Hawks';
+  const getAttendanceAliases = (memberId: string) => {
+    const member = members.find((entry) => entry.id === memberId);
+    if (!member) {
+      return new Set([memberId]);
+    }
+
+    return new Set<string>([member.id, buildLegacyRosterId(member)]);
+  };
 
   useEffect(() => {
     if (!currentTargetId || !currentTargetId.startsWith('account-')) {
@@ -209,15 +354,36 @@ export default function ProfileScreen() {
   const isAndroid = /android/.test(userAgent);
   const isDesktop = isWeb && !isIos && !isAndroid;
   const isSafari = isIos && /safari/.test(userAgent) && !/crios|fxios|edgios/.test(userAgent);
-  const supportThread = !isOwnerReviewer
-    ? supportThreads.find((thread) => thread.requesterEmail.toLowerCase() === user?.email?.toLowerCase())
+  const activeSupportContact =
+    supportContacts.find((contact) => contact.email.toLowerCase() === activeSupportRecipientEmail.toLowerCase()) ??
+    supportContacts[0] ??
+    null;
+  const supportThread = !canViewSupportInbox
+    ? supportThreads.find(
+        (thread) =>
+          thread.requesterEmail.toLowerCase() === user?.email?.toLowerCase() &&
+          thread.recipientEmail.toLowerCase() === (activeSupportContact?.email.toLowerCase() ?? '')
+      )
     : null;
+  const developerSupportThread = supportThreads.find(
+    (thread) =>
+      thread.requesterEmail.toLowerCase() === user?.email?.toLowerCase() &&
+      thread.recipientEmail.toLowerCase() === OWNER_EMAIL
+  ) ?? null;
+  const coordinatorSupportThread =
+    activeSupportContact?.key === 'project_coordinator' || projectCoordinatorEmail
+      ? supportThreads.find(
+          (thread) =>
+            thread.requesterEmail.toLowerCase() === user?.email?.toLowerCase() &&
+            thread.recipientEmail.toLowerCase() === projectCoordinatorEmail.toLowerCase()
+        ) ?? null
+      : null;
   const unreadSupportCount = useMemo(
     () => supportThreads.reduce(
-      (total, thread) => total + (isOwnerReviewer ? thread.unreadForOwner : thread.unreadForRequester),
+      (total, thread) => total + (canViewSupportInbox ? thread.unreadForOwner : thread.unreadForRequester),
       0
     ),
-    [isOwnerReviewer, supportThreads]
+    [canViewSupportInbox, supportThreads]
   );
   const unreadManualWorkoutCount = useMemo(
     () => (
@@ -226,7 +392,56 @@ export default function ProfileScreen() {
     ),
     [manualWorkoutReviewQueue.length, manualWorkoutSubmissions]
   );
-  const totalUnreadCount = unreadNotifications.length + unreadSupportCount + unreadManualWorkoutCount;
+  const upcomingPTSessions = useMemo(() => {
+    if (!user) {
+      return [];
+    }
+
+    return scheduledSessions
+      .filter((session) => {
+        if ((session.squadron ?? 'Hawks') !== memberSquadron) {
+          return false;
+        }
+
+        if (new Date(`${session.date}T${session.time}:00`).getTime() < Date.now()) {
+          return false;
+        }
+
+        if (session.scope === 'personal') {
+          return session.createdBy === user.id;
+        }
+
+        if (session.scope === 'squadron') {
+          return true;
+        }
+
+        return session.flights.includes(user.flight);
+      })
+      .sort((left, right) => `${left.date} ${left.time}`.localeCompare(`${right.date} ${right.time}`));
+  }, [memberSquadron, scheduledSessions, user]);
+  const profileCropPreview = useMemo(() => {
+    if (!pendingProfileImageCrop) {
+      return null;
+    }
+
+    const frameSize = 240;
+    const baseScale = Math.max(
+      frameSize / pendingProfileImageCrop.width,
+      frameSize / pendingProfileImageCrop.height
+    );
+    const displayWidth = pendingProfileImageCrop.width * baseScale * profileCropZoom;
+    const displayHeight = pendingProfileImageCrop.height * baseScale * profileCropZoom;
+    const maxTranslateX = Math.max(0, (displayWidth - frameSize) / 2);
+    const maxTranslateY = Math.max(0, (displayHeight - frameSize) / 2);
+
+    return {
+      frameSize,
+      displayWidth,
+      displayHeight,
+      translateX: -profileCropOffsetX * maxTranslateX,
+      translateY: -profileCropOffsetY * maxTranslateY,
+    };
+  }, [pendingProfileImageCrop, profileCropOffsetX, profileCropOffsetY, profileCropZoom]);
 
   const filteredMembers = useMemo(() => {
     const sortedMembers = members
@@ -298,14 +513,19 @@ export default function ProfileScreen() {
     try {
       const nextThreads = await fetchSupportThreads({
         email: user.email,
-        isOwner: isOwnerReviewer,
+        isStaff: canViewSupportInbox,
         accessToken,
       });
 
       setSupportThreads(nextThreads);
 
-      if (!isOwnerReviewer) {
-        const ownThread = nextThreads.find((thread) => thread.requesterEmail.toLowerCase() === user.email.toLowerCase()) ?? null;
+      if (!canViewSupportInbox) {
+        const ownThread =
+          nextThreads.find(
+            (thread) =>
+              thread.requesterEmail.toLowerCase() === user.email.toLowerCase() &&
+              thread.recipientEmail.toLowerCase() === (activeSupportContact?.email.toLowerCase() ?? OWNER_EMAIL)
+          ) ?? null;
         setActiveSupportThreadId((current) => current ?? ownThread?.id ?? null);
         if (ownThread && !supportSubject.trim()) {
           setSupportSubject(ownThread.subject);
@@ -314,7 +534,7 @@ export default function ProfileScreen() {
         setActiveSupportThreadId((current) => current ?? nextThreads[0].id);
       }
     } catch (error) {
-      setSupportError(error instanceof Error ? error.message : 'Unable to load developer messages.');
+      setSupportError(error instanceof Error ? error.message : 'Unable to load FitFlight team messages.');
     } finally {
       setSupportLoading(false);
     }
@@ -332,7 +552,7 @@ export default function ProfileScreen() {
       if (options?.markRead) {
         await markSupportMessagesRead({
           threadId,
-          viewer: isOwnerReviewer ? 'owner' : 'requester',
+          viewer: canViewSupportInbox ? 'owner' : 'requester',
           accessToken,
         });
       }
@@ -344,8 +564,8 @@ export default function ProfileScreen() {
         thread.id === threadId
           ? {
               ...thread,
-              unreadForOwner: isOwnerReviewer ? 0 : thread.unreadForOwner,
-              unreadForRequester: isOwnerReviewer ? thread.unreadForRequester : 0,
+              unreadForOwner: canViewSupportInbox ? 0 : thread.unreadForOwner,
+              unreadForRequester: canViewSupportInbox ? thread.unreadForRequester : 0,
             }
           : thread
       )));
@@ -367,6 +587,7 @@ export default function ProfileScreen() {
     try {
       const nextData = await fetchManualWorkoutSubmissions({
         memberId: user.id,
+        memberEmail: user.email,
         squadron: memberSquadron,
         canReview: canReviewManualWorkouts,
         accessToken,
@@ -420,7 +641,7 @@ export default function ProfileScreen() {
     }, 30000);
 
     return () => clearInterval(pollId);
-  }, [accessToken, isOwnerReviewer, user?.email]);
+  }, [accessToken, activeSupportContact?.email, canViewSupportInbox, user?.email]);
 
   useEffect(() => {
     if (!user?.id || !accessToken) {
@@ -900,6 +1121,8 @@ export default function ProfileScreen() {
       return;
     }
 
+    const previousProfilePicture = currentMember.profilePicture;
+
     const updatedMember: Member = {
       ...currentMember,
       profilePicture,
@@ -909,37 +1132,125 @@ export default function ProfileScreen() {
       await updateRosterMember(currentMember, updatedMember, accessToken);
     }
 
-    updateMember(user.id, { profilePicture });
-    updateUser({ profilePicture });
+      updateMember(user.id, { profilePicture });
+      updateUser({ profilePicture });
+
+      const nextStorageValue = profilePicture?.trim();
+      const previousStorageValue = previousProfilePicture?.trim();
+      if (previousStorageValue && previousStorageValue !== nextStorageValue) {
+        await deleteStoredImage({
+          imageReference: previousProfilePicture,
+          accessToken: accessToken ?? undefined,
+        }).catch(() => undefined);
+      }
+    };
+
+  const beginProfileImageCrop = (asset: ImagePicker.ImagePickerAsset) => {
+    if (!asset.uri || !asset.width || !asset.height) {
+      Alert.alert('Unable to use image', 'This image could not be prepared for cropping.');
+      return;
+    }
+
+    setPendingProfileImageCrop({
+      uri: asset.uri,
+      width: asset.width,
+      height: asset.height,
+      mimeType: asset.mimeType ?? undefined,
+    });
+    setProfileCropZoom(1);
+    setProfileCropOffsetX(0);
+    setProfileCropOffsetY(0);
+    setShowProfilePictureModal(false);
+  };
+
+  const cancelProfileImageCrop = () => {
+    setPendingProfileImageCrop(null);
+    setProfileCropZoom(1);
+    setProfileCropOffsetX(0);
+    setProfileCropOffsetY(0);
+    setShowProfilePictureModal(true);
+  };
+
+  const confirmProfileImageCrop = async () => {
+    if (!pendingProfileImageCrop || !user) {
+      return;
+    }
+
+    try {
+      setIsUpdatingProfilePicture(true);
+
+      const baseCropSize = Math.min(pendingProfileImageCrop.width, pendingProfileImageCrop.height);
+      const cropSize = baseCropSize / profileCropZoom;
+      const maxOriginXDelta = Math.max(0, (pendingProfileImageCrop.width - cropSize) / 2);
+      const maxOriginYDelta = Math.max(0, (pendingProfileImageCrop.height - cropSize) / 2);
+      const originX = Math.max(
+        0,
+        Math.min(
+          pendingProfileImageCrop.width - cropSize,
+          (pendingProfileImageCrop.width - cropSize) / 2 + profileCropOffsetX * maxOriginXDelta
+        )
+      );
+      const originY = Math.max(
+        0,
+        Math.min(
+          pendingProfileImageCrop.height - cropSize,
+          (pendingProfileImageCrop.height - cropSize) / 2 + profileCropOffsetY * maxOriginYDelta
+        )
+      );
+
+      const croppedImage = await manipulateAsync(
+        pendingProfileImageCrop.uri,
+        [
+          {
+            crop: {
+              originX,
+              originY,
+              width: cropSize,
+              height: cropSize,
+            },
+          },
+          { resize: { width: 512, height: 512 } },
+        ],
+        {
+          compress: 0.82,
+          format: SaveFormat.JPEG,
+        }
+      );
+
+      const imageUri = await uploadProfileImage({
+        memberId: user.id,
+        localUri: croppedImage.uri,
+        mimeType: 'image/jpeg',
+        accessToken: accessToken ?? undefined,
+      });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      await persistProfilePicture(imageUri);
+
+      setPendingProfileImageCrop(null);
+      setShowProfilePictureModal(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to update profile picture.';
+      setMemberActionError(message);
+      Alert.alert('Unable to update profile picture', message);
+    } finally {
+      setIsUpdatingProfilePicture(false);
+    }
   };
 
   const pickProfilePicture = async () => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
-        allowsEditing: true,
-        aspect: [1, 1],
         quality: 0.8,
       });
 
       if (!result.canceled && result.assets[0] && user) {
-        const asset = result.assets[0];
-        setIsUpdatingProfilePicture(true);
-        const imageUri = await uploadProfileImage({
-          memberId: user.id,
-          localUri: asset.uri,
-          mimeType: asset.mimeType ?? undefined,
-          accessToken: accessToken ?? undefined,
-        });
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        await persistProfilePicture(imageUri);
-
-        setShowProfilePictureModal(false);
+        beginProfileImageCrop(result.assets[0]);
       }
     } catch (error) {
-      setMemberActionError(error instanceof Error ? error.message : 'Unable to update profile picture.');
-    } finally {
-      setIsUpdatingProfilePicture(false);
+      const message = error instanceof Error ? error.message : 'Unable to update profile picture.';
+      setMemberActionError(message);
+      Alert.alert('Unable to update profile picture', message);
     }
   };
 
@@ -949,29 +1260,16 @@ export default function ProfileScreen() {
 
     try {
       const result = await ImagePicker.launchCameraAsync({
-        allowsEditing: true,
-        aspect: [1, 1],
         quality: 0.8,
       });
 
       if (!result.canceled && result.assets[0] && user) {
-        const asset = result.assets[0];
-        setIsUpdatingProfilePicture(true);
-        const imageUri = await uploadProfileImage({
-          memberId: user.id,
-          localUri: asset.uri,
-          mimeType: asset.mimeType ?? undefined,
-          accessToken: accessToken ?? undefined,
-        });
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        await persistProfilePicture(imageUri);
-
-        setShowProfilePictureModal(false);
+        beginProfileImageCrop(result.assets[0]);
       }
     } catch (error) {
-      setMemberActionError(error instanceof Error ? error.message : 'Unable to update profile picture.');
-    } finally {
-      setIsUpdatingProfilePicture(false);
+      const message = error instanceof Error ? error.message : 'Unable to update profile picture.';
+      setMemberActionError(message);
+      Alert.alert('Unable to update profile picture', message);
     }
   };
 
@@ -980,13 +1278,15 @@ export default function ProfileScreen() {
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const run = async () => {
-      try {
-        await persistProfilePicture(undefined);
-        setShowProfilePictureModal(false);
-      } catch (error) {
-        setMemberActionError(error instanceof Error ? error.message : 'Unable to remove profile picture.');
-      }
-    };
+        try {
+          await persistProfilePicture(undefined);
+          setShowProfilePictureModal(false);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Unable to remove profile picture.';
+          setMemberActionError(message);
+          Alert.alert('Unable to remove profile picture', message);
+        }
+      };
     void run();
   };
 
@@ -1063,17 +1363,18 @@ export default function ProfileScreen() {
       if (result.workouts.length > 0) {
         const uniqueWorkoutDates = Array.from(new Set(result.workouts.map((workout) => workout.date)));
         await Promise.all(
-          uniqueWorkoutDates.map((date) =>
-            setAttendanceStatus({
-              date,
-              flight: user.flight,
-              squadron: user.squadron,
-              memberId: user.id,
-              createdBy: user.id,
-              isAttending: true,
-              accessToken: accessToken ?? undefined,
-            }).catch(() => undefined)
-          )
+            uniqueWorkoutDates.map((date) =>
+              setAttendanceStatus({
+                date,
+                flight: user.flight,
+                squadron: user.squadron,
+                memberId: user.id,
+                createdBy: user.id,
+                isAttending: true,
+                source: 'workout',
+                accessToken: accessToken ?? undefined,
+              }).catch(() => undefined)
+            )
         );
 
         const nextSessions = await fetchAttendanceSessions(accessToken ?? undefined).catch(() => []);
@@ -1151,15 +1452,25 @@ export default function ProfileScreen() {
     setShowDeveloperContact(current => !current);
   };
 
-  const handleOpenDeveloperMessages = () => {
+  const handleOpenSupportMessages = (contactEmail: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setSupportError(null);
-    if (supportThread?.subject && !supportSubject.trim()) {
-      setSupportSubject(supportThread.subject);
-    }
-    if (supportThread?.id) {
-      void loadSupportConversation(supportThread.id, { markRead: true });
+    setActiveSupportRecipientEmail(contactEmail);
+    const nextThread =
+      supportThreads.find(
+        (thread) =>
+          thread.requesterEmail.toLowerCase() === user?.email?.toLowerCase() &&
+          thread.recipientEmail.toLowerCase() === contactEmail.toLowerCase()
+      ) ?? null;
+    if (nextThread?.subject) {
+      setSupportSubject(nextThread.subject);
     } else {
+      setSupportSubject('');
+    }
+    if (nextThread?.id) {
+      void loadSupportConversation(nextThread.id, { markRead: true });
+    } else {
+      setActiveSupportThreadId(null);
       setActiveSupportMessages([]);
     }
     setShowDeveloperMessageModal(true);
@@ -1173,6 +1484,7 @@ export default function ProfileScreen() {
       const nextThread = supportThreads.find((thread) => thread.id === nextThreadId);
       if (nextThread) {
         setSupportSubject(nextThread.subject);
+        setActiveSupportRecipientEmail(nextThread.recipientEmail);
       }
       void loadSupportConversation(nextThreadId, { markRead: true });
     }
@@ -1185,6 +1497,7 @@ export default function ProfileScreen() {
     const nextThread = supportThreads.find((thread) => thread.id === threadId);
     if (nextThread) {
       setSupportSubject(nextThread.subject);
+      setActiveSupportRecipientEmail(nextThread.recipientEmail);
     }
     void loadSupportConversation(threadId, { markRead: true });
   };
@@ -1195,13 +1508,16 @@ export default function ProfileScreen() {
       setSupportSubject(nextThread.subject);
     }
 
-    if (isOwnerReviewer) {
+    if (canViewSupportInbox) {
       setShowNotificationsModal(false);
       setShowSupportInboxModal(true);
       void loadSupportConversation(threadId, { markRead: true });
       return;
     }
 
+    if (nextThread) {
+      setActiveSupportRecipientEmail(nextThread.recipientEmail);
+    }
     setShowNotificationsModal(false);
     setShowDeveloperMessageModal(true);
     void loadSupportConversation(threadId, { markRead: true });
@@ -1280,32 +1596,43 @@ export default function ProfileScreen() {
         return;
       }
 
-      setManualWorkoutSubmitting(true);
-      setManualWorkoutError(null);
+        setManualWorkoutSubmitting(true);
+        setManualWorkoutError(null);
 
-      try {
-        const updatedSubmission = await reviewManualWorkoutSubmission({
-          submissionId: activeWorkoutSubmission.id,
-          reviewerMemberId: user.id,
-          reviewerName: getDisplayName(user),
-          approved,
-          note: manualWorkoutReviewNote,
-          accessToken,
-        });
+        try {
+          const attendanceAliases = getAttendanceAliases(activeWorkoutSubmission.memberId);
+          const hadAttendanceBeforeApproval = ptSessions.some(
+            (session) =>
+              session.date === activeWorkoutSubmission.workoutDate &&
+              session.flight === activeWorkoutSubmission.memberFlight &&
+              (session.squadron ?? 'Hawks') === activeWorkoutSubmission.squadron &&
+              session.attendees.some((attendeeId) => attendanceAliases.has(attendeeId))
+          );
 
-        if (approved) {
-          await setAttendanceStatus({
-            date: updatedSubmission.workoutDate,
-            flight: updatedSubmission.memberFlight,
-            squadron: updatedSubmission.squadron,
-            memberId: updatedSubmission.memberId,
-            createdBy: user.id,
-            isAttending: true,
+          const updatedSubmission = await reviewManualWorkoutSubmission({
+            submissionId: activeWorkoutSubmission.id,
+            reviewerMemberId: user.id,
+            reviewerName: getDisplayName(user),
+            approved,
+            note: manualWorkoutReviewNote,
+            attendanceMarkedBySubmission: approved ? !hadAttendanceBeforeApproval : false,
             accessToken,
           });
 
-          const [nextSessions, approvedManualWorkouts] = await Promise.all([
-            fetchAttendanceSessions(accessToken).catch(() => []),
+            if (approved) {
+              await setAttendanceStatus({
+                date: updatedSubmission.workoutDate,
+                flight: updatedSubmission.memberFlight,
+                squadron: updatedSubmission.squadron,
+                memberId: updatedSubmission.memberId,
+                createdBy: user.id,
+                isAttending: true,
+                source: 'workout',
+                accessToken,
+              });
+
+              const [nextSessions, approvedManualWorkouts] = await Promise.all([
+              fetchAttendanceSessions(accessToken).catch(() => []),
             fetchApprovedManualWorkouts(accessToken, updatedSubmission.squadron).catch(() => []),
           ]);
           syncPTSessions(nextSessions);
@@ -1339,7 +1666,7 @@ export default function ProfileScreen() {
   const handleSendSupportMessage = () => {
     const run = async () => {
       if (!user || !accessToken) {
-        setSupportError('You must be signed in to message the developer.');
+        setSupportError('You must be signed in to message the FitFlight team.');
         return;
       }
 
@@ -1351,7 +1678,7 @@ export default function ProfileScreen() {
       setSupportSending(true);
       setSupportError(null);
 
-      const threadOwner = isOwnerReviewer
+      const threadOwner = canViewSupportInbox
         ? supportThreads.find((thread) => thread.id === activeSupportThreadId)
         : supportThread;
 
@@ -1365,12 +1692,15 @@ export default function ProfileScreen() {
         requesterEmail,
         requesterName,
         requesterSquadron,
+        recipientMemberId: threadOwner?.recipientMemberId ?? activeSupportContact?.memberId ?? null,
+        recipientEmail: threadOwner?.recipientEmail ?? activeSupportContact?.email ?? OWNER_EMAIL,
+        recipientName: threadOwner?.recipientName ?? activeSupportContact?.name ?? DEVELOPER_NAME,
         senderMemberId: user.id,
         senderEmail: user.email,
         senderName: getDisplayName(user),
         subject: supportSubject.trim(),
         body: supportBody.trim(),
-        isFromOwner: isOwnerReviewer,
+        isFromOwner: canViewSupportInbox,
         accessToken,
       });
 
@@ -1394,7 +1724,7 @@ export default function ProfileScreen() {
   };
 
   const userStats: { exerciseMinutes: number; distanceRun: number; connectedApps: string[]; workouts: unknown[]; achievements: string[] } | Member | null = user
-    ? members.find(m => m.id === user.id) || {
+    ? resolveMemberForUser(user) || {
         exerciseMinutes: 0,
         distanceRun: 0,
         connectedApps: [],
@@ -1519,18 +1849,18 @@ export default function ProfileScreen() {
 
   const supportNotifications = useMemo<SupportNotificationItem[]>(
     () => supportThreads
-      .filter((thread) => (isOwnerReviewer ? thread.unreadForOwner : thread.unreadForRequester) > 0)
+      .filter((thread) => (canViewSupportInbox ? thread.unreadForOwner : thread.unreadForRequester) > 0)
       .map((thread) => ({
         id: `support-${thread.id}`,
-        title: isOwnerReviewer
+        title: canViewSupportInbox
           ? `New message from ${thread.requesterName}`
-          : 'Developer replied to your message',
+          : `${thread.recipientName} replied to your message`,
         message: thread.subject,
         unread: true,
         threadId: thread.id,
         kind: 'support',
       })),
-    [isOwnerReviewer, supportThreads]
+    [canViewSupportInbox, supportThreads]
   );
 
   const manualWorkoutNotifications = useMemo<ManualWorkoutNotificationItem[]>(
@@ -1565,6 +1895,28 @@ export default function ProfileScreen() {
     () => appNotifications,
     [appNotifications]
   );
+  const visibleUnreadSupportCount = supportNotifications.filter(
+    (notification) => !dismissedNotificationKeys.includes(notification.id)
+  ).length;
+  const visibleUnreadManualWorkoutCount = manualWorkoutNotifications.filter(
+    (notification) => !dismissedNotificationKeys.includes(notification.id)
+  ).length;
+  const totalUnreadCount = unreadNotifications.length + visibleUnreadSupportCount + visibleUnreadManualWorkoutCount;
+  const handleOpenNotificationsModal = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setDismissedNotificationKeys((current) => {
+      const next = new Set(current);
+      appNotifications.forEach((notification) => {
+        if (!notification.readAt) {
+          next.add(`backend-${notification.id}`);
+        }
+      });
+      supportNotifications.forEach((notification) => next.add(notification.id));
+      manualWorkoutNotifications.forEach((notification) => next.add(notification.id));
+      return Array.from(next);
+    });
+    setShowNotificationsModal(true);
+  };
 
   const userDisplayName = user ? getDisplayName(user) : 'Unknown';
   const accountColors = getAccountTypeColor(userAccountType);
@@ -1602,14 +1954,11 @@ export default function ProfileScreen() {
             </View>
 
             {/* Notifications Bell */}
-            {isAuthenticated && (
-              <Pressable
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  setShowNotificationsModal(true);
-                }}
-                className="relative w-10 h-10 bg-white/10 rounded-full items-center justify-center"
-              >
+              {isAuthenticated && (
+                <Pressable
+                  onPress={handleOpenNotificationsModal}
+                  className="relative w-10 h-10 bg-white/10 rounded-full items-center justify-center"
+                >
                 <Bell size={20} color="#C0C0C0" />
                 {totalUnreadCount > 0 && (
                   <View className="absolute -top-1 -right-1 w-5 h-5 bg-af-danger rounded-full items-center justify-center">
@@ -1658,8 +2007,8 @@ export default function ProfileScreen() {
                   <Camera size={12} color="white" />
                 </View>
               </Pressable>
-                <View className="flex-1">
-                  <Text className="text-white text-xl font-bold">{userDisplayName}</Text>
+                  <View className="flex-1 items-center">
+                    <Text className="text-white text-xl font-bold text-center">{userDisplayName}</Text>
                   <View className="mt-2 items-center">
                     <CompactTrophyBadges trophies={rarestTrophies} overflowCount={trophyOverflowCount} />
                   </View>
@@ -1788,47 +2137,44 @@ export default function ProfileScreen() {
               <View className="rounded-2xl border border-white/10 bg-white/5 p-4">
                 <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">History</Text>
                 <View className="flex-row flex-wrap" style={{ gap: 12 }}>
-                  <Pressable
-                    onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      setShowWorkoutHistoryModal(true);
-                    }}
-                    className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-black/10 p-4"
-                  >
-                    <View className="flex-row items-center">
-                      <Activity size={18} color="#A855F7" />
-                      <Text className="ml-2 text-white font-semibold">Workout History</Text>
-                    </View>
-                    <Text className="text-af-silver text-xs mt-1">View all logged workouts and details</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      setShowPFRAHistoryModal(true);
-                    }}
-                    className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-black/10 p-4"
-                  >
-                    <View className="flex-row items-center">
-                      <FileText size={18} color="#4A90D9" />
-                      <Text className="ml-2 text-white font-semibold">PFRA History</Text>
-                    </View>
-                    <Text className="text-af-silver text-xs mt-1">Review previous PFRA records and scores</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      setShowLeaderboardHistoryModal(true);
-                    }}
-                    className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-black/10 p-4"
-                  >
-                    <View className="flex-row items-center">
-                      <Trophy size={18} color="#FFD700" />
-                      <Text className="ml-2 text-white font-semibold">Leaderboard History</Text>
-                    </View>
-                    <Text className="text-af-silver text-xs mt-1">See your monthly placement and score history</Text>
-                  </Pressable>
+                    <Pressable
+                      onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        setShowWorkoutHistoryModal(true);
+                      }}
+                      className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-black/10 p-4 min-h-[76px] items-center justify-center"
+                    >
+                      <View className="items-center justify-center">
+                        <Activity size={18} color="#A855F7" />
+                        <Text className="mt-2 text-white font-semibold text-center text-sm leading-5">Workout History</Text>
+                      </View>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        setShowPFRAHistoryModal(true);
+                      }}
+                      className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-black/10 p-4 min-h-[76px] items-center justify-center"
+                    >
+                      <View className="items-center justify-center">
+                        <FileText size={18} color="#4A90D9" />
+                        <Text className="mt-2 text-white font-semibold text-center text-sm leading-5">PFRA History</Text>
+                      </View>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        setShowLeaderboardHistoryModal(true);
+                      }}
+                      className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-black/10 p-4 min-h-[76px] items-center justify-center"
+                    >
+                      <View className="items-center justify-center">
+                        <Trophy size={18} color="#FFD700" />
+                        <Text className="mt-2 text-white font-semibold text-center text-sm leading-5">Leaderboard History</Text>
+                      </View>
+                    </Pressable>
+                  </View>
                 </View>
-              </View>
             </Animated.View>
           </TutorialTarget>
 
@@ -1844,48 +2190,72 @@ export default function ProfileScreen() {
               className="mx-6 mt-4"
             >
             <Text className="text-white font-semibold text-lg mb-3">Quick Actions</Text>
-            <View className="flex-row">
-              <Pressable
-                onPress={() => {
+              <View className="flex-row">
+                <Pressable
+                  onPress={() => {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   router.push('/add-workout');
                 }}
-                className="flex-1 bg-af-accent/20 border border-af-accent/50 rounded-xl px-3 py-4 mr-2 min-h-[112px]"
-              >
-                <View className="flex-1 items-center justify-center">
-                  <Plus size={24} color="#4A90D9" />
-                  <Text className="text-white font-semibold mt-2 text-sm text-center leading-5">Add Manual Workout</Text>
-                </View>
-              </Pressable>
+                className="flex-1 bg-af-accent/20 border border-af-accent/50 rounded-xl px-3 py-3 mr-2 min-h-[96px]"
+                >
+                  <View className="flex-1 items-center justify-center">
+                    <Plus size={24} color="#4A90D9" />
+                    <Text className="text-white font-semibold mt-1.5 text-sm text-center leading-5">Add Manual Workout</Text>
+                  </View>
+                </Pressable>
               <Pressable
                 onPress={() => {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   router.push('/upload-fitness');
                 }}
-                className="flex-1 bg-af-success/20 border border-af-success/50 rounded-xl px-3 py-4 mx-1 min-h-[112px]"
-              >
-                <View className="flex-1 items-center justify-center">
-                  <FileText size={24} color="#22C55E" />
-                  <Text className="text-white font-semibold mt-2 text-sm text-center leading-5">Add Manual PFRA</Text>
-                </View>
-              </Pressable>
-              {canEditAttendance(userAccountType) && (
-                <Pressable
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    router.push('/schedule-session');
-                  }}
-                  className="flex-1 bg-af-gold/20 border border-af-gold/50 rounded-xl px-3 py-4 ml-2 min-h-[112px]"
+                  className="flex-1 bg-af-success/20 border border-af-success/50 rounded-xl px-3 py-3 mx-1 min-h-[96px]"
                 >
                   <View className="flex-1 items-center justify-center">
-                    <Calendar size={24} color="#FFD700" />
-                    <Text className="text-white font-semibold mt-2 text-sm text-center leading-5">Schedule PT Session</Text>
+                    <FileText size={24} color="#22C55E" />
+                    <Text className="text-white font-semibold mt-1.5 text-sm text-center leading-5">Add Manual PFRA</Text>
                   </View>
                 </Pressable>
-              )}
-            </View>
-            </Animated.View>
-          </TutorialTarget>
+                {canEditAttendance(userAccountType) && (
+                  <Pressable
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      router.push('/schedule-session');
+                    }}
+                      className="flex-1 bg-af-gold/20 border border-af-gold/50 rounded-xl px-3 py-3 ml-2 min-h-[96px]"
+                    >
+                      <View className="flex-1 items-center justify-center">
+                        <Calendar size={24} color="#FFD700" />
+                        <Text className="text-white font-semibold mt-1.5 text-sm text-center leading-5">Schedule PT Session</Text>
+                      </View>
+                    </Pressable>
+                )}
+                {!canEditAttendance(userAccountType) && (
+                  <Pressable
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      router.push('/schedule-session');
+                    }}
+                      className="flex-1 bg-af-gold/20 border border-af-gold/50 rounded-xl px-3 py-3 ml-2 min-h-[96px]"
+                    >
+                      <View className="flex-1 items-center justify-center">
+                        <Calendar size={24} color="#FFD700" />
+                        <Text className="text-white font-semibold mt-1.5 text-sm text-center leading-5">Schedule Personal PT</Text>
+                      </View>
+                    </Pressable>
+                )}
+              </View>
+              <Pressable
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setShowUpcomingPTSessionsModal(true);
+                }}
+                className="mt-3 flex-row items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-4"
+              >
+                <Calendar size={20} color="#FFD700" />
+                <Text className="ml-3 text-white font-semibold text-base">Upcoming PT Sessions</Text>
+              </Pressable>
+              </Animated.View>
+            </TutorialTarget>
 
           {/* Connected Apps */}
           <TutorialTarget
@@ -2181,7 +2551,7 @@ export default function ProfileScreen() {
               </View>
             </Pressable>
 
-            {isOwnerReviewer ? (
+            {canViewSupportInbox ? (
               <Pressable
                 onPress={handleOpenSupportInbox}
                 className="flex-row items-center bg-af-accent/10 border border-af-accent/30 rounded-xl p-4 mb-3"
@@ -2189,7 +2559,7 @@ export default function ProfileScreen() {
                 <Mail size={24} color="#4A90D9" />
                 <View className="ml-3 flex-1">
                   <Text className="text-white font-semibold">Support Inbox</Text>
-                  <Text className="text-af-silver text-xs">Review and reply to member messages</Text>
+                  <Text className="text-af-silver text-xs">Review and reply to FitFlight team messages</Text>
                 </View>
                 {unreadSupportCount > 0 ? (
                   <View className="bg-af-danger rounded-full px-2 py-1">
@@ -2206,7 +2576,7 @@ export default function ProfileScreen() {
               <View className="flex-row items-center">
                 <Mail size={24} color="#4A90D9" />
                 <View className="ml-3 flex-1">
-                  <Text className="text-white font-semibold">Contact the Developer</Text>
+                  <Text className="text-white font-semibold">Contact the FitFlight Team</Text>
                   <Text className="text-af-silver text-xs">View support contact information</Text>
                 </View>
                 {showDeveloperContact ? (
@@ -2218,23 +2588,51 @@ export default function ProfileScreen() {
 
               {showDeveloperContact && (
                 <View className="mt-4 pt-4 border-t border-white/10">
-                  <Text className="text-white font-semibold">SSgt Benjamin Broadhead</Text>
-                  <Text className="text-af-silver mt-1">benjamin.broadhead.2@us.af.mil</Text>
+                  <Text className="text-white font-semibold">{DEVELOPER_NAME}</Text>
+                  <Text className="text-af-silver text-sm mt-1">{DEVELOPER_TITLE}</Text>
+                  <Text className="text-af-silver mt-1">{OWNER_EMAIL}</Text>
                   <Pressable
-                    onPress={handleOpenDeveloperMessages}
+                    onPress={() => handleOpenSupportMessages(OWNER_EMAIL)}
                     className="flex-row items-center bg-af-accent/10 border border-af-accent/30 rounded-xl p-4 mt-4"
                   >
                     <MessageSquare size={22} color="#4A90D9" />
                     <View className="ml-3 flex-1">
                       <Text className="text-white font-semibold">Send a Message to the Developer</Text>
-                      <Text className="text-af-silver text-xs">Ask a question or report an issue in-app</Text>
                     </View>
-                    {supportThread && supportThread.unreadForRequester > 0 ? (
+                    {developerSupportThread && developerSupportThread.unreadForRequester > 0 ? (
                       <View className="bg-af-danger rounded-full px-2 py-1">
-                        <Text className="text-white text-xs font-bold">{supportThread.unreadForRequester}</Text>
+                        <Text className="text-white text-xs font-bold">{developerSupportThread.unreadForRequester}</Text>
                       </View>
                     ) : null}
                   </Pressable>
+
+                  <View className="mt-5 pt-5 border-t border-white/10">
+                    <Text className="text-white font-semibold">{PROJECT_COORDINATOR_NAME}</Text>
+                    <Text className="text-af-silver text-sm mt-1">{PROJECT_COORDINATOR_TITLE}</Text>
+                    <Text className="text-af-silver mt-1">{projectCoordinatorEmail || 'Email unavailable'}</Text>
+                    <Pressable
+                      onPress={() => projectCoordinatorEmail && handleOpenSupportMessages(projectCoordinatorEmail)}
+                      disabled={!projectCoordinatorEmail}
+                      className={cn(
+                        "flex-row items-center border rounded-xl p-4 mt-4",
+                        projectCoordinatorEmail
+                          ? "bg-af-accent/10 border-af-accent/30"
+                          : "bg-white/5 border-white/10"
+                      )}
+                    >
+                      <MessageSquare size={22} color={projectCoordinatorEmail ? "#4A90D9" : "#64748B"} />
+                      <View className="ml-3 flex-1">
+                        <Text className={cn("font-semibold", projectCoordinatorEmail ? "text-white" : "text-af-silver")}>
+                          Send a Message to the Project Coordinator
+                        </Text>
+                      </View>
+                      {coordinatorSupportThread && coordinatorSupportThread.unreadForRequester > 0 ? (
+                        <View className="bg-af-danger rounded-full px-2 py-1">
+                          <Text className="text-white text-xs font-bold">{coordinatorSupportThread.unreadForRequester}</Text>
+                        </View>
+                      ) : null}
+                    </Pressable>
+                  </View>
                 </View>
               )}
             </Pressable>
@@ -2924,8 +3322,10 @@ export default function ProfileScreen() {
           <View className="bg-af-navy rounded-t-3xl p-6 pb-10 max-h-[88%]">
             <View className="flex-row items-center justify-between mb-4">
               <View>
-                <Text className="text-white text-xl font-bold">Message the Developer</Text>
-                <Text className="text-af-silver text-sm mt-1">Send a support message without leaving the app</Text>
+                <Text className="text-white text-xl font-bold">Message the FitFlight Team</Text>
+                <Text className="text-af-silver text-sm mt-1">
+                  {activeSupportContact ? `Send a message to ${activeSupportContact.title.toLowerCase()} without leaving the app` : 'Send a support message without leaving the app'}
+                </Text>
               </View>
               <Pressable
                 onPress={() => setShowDeveloperMessageModal(false)}
@@ -2954,7 +3354,7 @@ export default function ProfileScreen() {
                     <Text className="text-af-silver text-center py-8">Loading conversation...</Text>
                   ) : activeSupportMessages.length === 0 ? (
                     <Text className="text-af-silver text-center py-8">
-                      Your message will start a private conversation with the developer.
+                      {activeSupportContact ? `Your message will start a private conversation with the ${activeSupportContact.title.toLowerCase()}.` : 'Your message will start a private conversation with the FitFlight team.'}
                     </Text>
                   ) : (
                     activeSupportMessages.map((message) => (
@@ -2969,7 +3369,7 @@ export default function ProfileScreen() {
                       >
                         <View className="flex-row items-center justify-between mb-1">
                           <Text className="text-white font-semibold">
-                            {message.isFromOwner ? 'Developer' : 'You'}
+                            {message.isFromOwner ? message.senderName : 'You'}
                           </Text>
                           <Text className="text-af-silver text-xs">
                             {new Date(message.createdAt).toLocaleString()}
@@ -3025,7 +3425,7 @@ export default function ProfileScreen() {
             <View className="flex-row items-center justify-between mb-4">
               <View>
                 <Text className="text-white text-xl font-bold">Support Inbox</Text>
-                <Text className="text-af-silver text-sm mt-1">Owner-only message center</Text>
+                <Text className="text-af-silver text-sm mt-1">FitFlight team message center</Text>
               </View>
               <Pressable
                 onPress={() => setShowSupportInboxModal(false)}
@@ -3211,7 +3611,7 @@ export default function ProfileScreen() {
                       <Text className="text-white font-semibold">{notification.title}</Text>
                       <Text className="text-af-silver text-sm mt-1">{notification.message}</Text>
                       <Text className="text-af-accent text-xs mt-2">
-                        Tap to open {isOwnerReviewer ? 'the support inbox' : 'your conversation'}
+                        Tap to open {canViewSupportInbox ? 'the support inbox' : 'your conversation'}
                       </Text>
                     </Pressable>
                   ))}
@@ -3373,9 +3773,9 @@ export default function ProfileScreen() {
       </Modal>
 
       {/* Profile Picture Modal */}
-      <Modal visible={showProfilePictureModal} transparent animationType="fade">
-        <View className="flex-1 bg-black/80 items-center justify-center p-6">
-          <View className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20">
+        <Modal visible={showProfilePictureModal} transparent animationType="fade">
+          <View className="flex-1 bg-black/80 items-center justify-center p-6">
+            <View className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20">
             <View className="flex-row items-center justify-between mb-6">
               <Text className="text-white text-xl font-bold">Profile Picture</Text>
               <Pressable
@@ -3454,11 +3854,146 @@ export default function ProfileScreen() {
                 <Text className="text-af-danger font-semibold ml-3">Remove Photo</Text>
               </Pressable>
             )}
+            </View>
           </View>
-        </View>
-      </Modal>
+        </Modal>
 
-      <Modal visible={showWorkoutReviewModal} transparent animationType="fade">
+        <Modal visible={!!pendingProfileImageCrop} transparent animationType="fade">
+          <View className="flex-1 bg-black/85 items-center justify-center p-6">
+            <View className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20">
+              <View className="flex-row items-center justify-between mb-4">
+                <View>
+                  <Text className="text-white text-xl font-bold">Crop Profile Picture</Text>
+                  <Text className="text-af-silver text-sm mt-1">Adjust the image before uploading it to FitFlight.</Text>
+                </View>
+                <Pressable
+                  onPress={cancelProfileImageCrop}
+                  disabled={isUpdatingProfilePicture}
+                  className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+                >
+                  <X size={20} color="#C0C0C0" />
+                </Pressable>
+              </View>
+
+              {profileCropPreview && pendingProfileImageCrop ? (
+                <View className="items-center mb-5">
+                  <View
+                    style={{
+                      width: profileCropPreview.frameSize,
+                      height: profileCropPreview.frameSize,
+                      borderRadius: 999,
+                      overflow: 'hidden',
+                      borderWidth: 2,
+                      borderColor: '#4A90D9',
+                      backgroundColor: 'rgba(255,255,255,0.05)',
+                    }}
+                  >
+                    <Image
+                      source={{ uri: pendingProfileImageCrop.uri }}
+                      style={{
+                        width: profileCropPreview.displayWidth,
+                        height: profileCropPreview.displayHeight,
+                        transform: [
+                          { translateX: profileCropPreview.translateX },
+                          { translateY: profileCropPreview.translateY },
+                        ],
+                      }}
+                      resizeMode="cover"
+                    />
+                  </View>
+                </View>
+              ) : null}
+
+              <View className="mb-4">
+                <View className="flex-row items-center justify-between mb-2">
+                  <Text className="text-white font-semibold">Zoom</Text>
+                  <Text className="text-af-silver text-xs">{profileCropZoom.toFixed(2)}x</Text>
+                </View>
+                <SmartSlider
+                  value={profileCropZoom}
+                  minimumValue={1}
+                  maximumValue={3}
+                  step={0.01}
+                  minimumTrackTintColor="#4A90D9"
+                  maximumTrackTintColor="rgba(255,255,255,0.18)"
+                  thumbTintColor="#4A90D9"
+                  onValueChange={setProfileCropZoom}
+                />
+              </View>
+
+              <View className="mb-4">
+                <View className="flex-row items-center justify-between mb-2">
+                  <Text className="text-white font-semibold">Horizontal Position</Text>
+                  <Text className="text-af-silver text-xs">
+                    {profileCropOffsetX > 0 ? 'Right' : profileCropOffsetX < 0 ? 'Left' : 'Centered'}
+                  </Text>
+                </View>
+                <SmartSlider
+                  value={profileCropOffsetX}
+                  minimumValue={-1}
+                  maximumValue={1}
+                  step={0.01}
+                  minimumTrackTintColor="#4A90D9"
+                  maximumTrackTintColor="rgba(255,255,255,0.18)"
+                  thumbTintColor="#4A90D9"
+                  onValueChange={setProfileCropOffsetX}
+                />
+              </View>
+
+              <View className="mb-6">
+                <View className="flex-row items-center justify-between mb-2">
+                  <Text className="text-white font-semibold">Vertical Position</Text>
+                  <Text className="text-af-silver text-xs">
+                    {profileCropOffsetY > 0 ? 'Down' : profileCropOffsetY < 0 ? 'Up' : 'Centered'}
+                  </Text>
+                </View>
+                <SmartSlider
+                  value={profileCropOffsetY}
+                  minimumValue={-1}
+                  maximumValue={1}
+                  step={0.01}
+                  minimumTrackTintColor="#4A90D9"
+                  maximumTrackTintColor="rgba(255,255,255,0.18)"
+                  thumbTintColor="#4A90D9"
+                  onValueChange={setProfileCropOffsetY}
+                />
+              </View>
+
+              {isUpdatingProfilePicture && (
+                <View className="mb-4 rounded-xl border border-af-accent/30 bg-af-accent/10 px-4 py-3">
+                  <Text className="text-af-silver text-sm">Uploading cropped image...</Text>
+                </View>
+              )}
+
+              <View className="flex-row">
+                <Pressable
+                  onPress={cancelProfileImageCrop}
+                  disabled={isUpdatingProfilePicture}
+                  className={cn(
+                    "flex-1 rounded-xl border px-4 py-3 mr-3 items-center",
+                    isUpdatingProfilePicture ? "border-white/10 bg-white/5 opacity-60" : "border-white/10 bg-white/5"
+                  )}
+                >
+                  <Text className="text-white font-semibold">Cancel</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => {
+                    void confirmProfileImageCrop();
+                  }}
+                  disabled={isUpdatingProfilePicture}
+                  className={cn(
+                    "flex-1 rounded-xl px-4 py-3 items-center",
+                    isUpdatingProfilePicture ? "bg-af-accent/40 opacity-70" : "bg-af-accent"
+                  )}
+                >
+                  <Text className="text-white font-semibold">Crop & Upload</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal visible={showWorkoutReviewModal} transparent animationType="fade">
         <View className="flex-1 bg-black/80 items-center justify-center p-6">
           <View className="bg-af-navy rounded-3xl p-6 w-full max-w-md border border-white/20">
             <View className="flex-row items-center justify-between mb-4">
@@ -3562,6 +4097,46 @@ export default function ProfileScreen() {
                       </Text>
                     </Pressable>
                   </View>
+                ) : activeWorkoutSubmission && activeWorkoutSubmission.memberId === user?.id ? (
+                  <View className="flex-row">
+                    <Pressable
+                      onPress={() => {
+                        setShowWorkoutReviewModal(false);
+                        setActiveWorkoutSubmission(null);
+                        setManualWorkoutReviewNote('');
+                        setManualWorkoutError(null);
+                      }}
+                      className="flex-1 bg-white/10 py-3 rounded-xl mr-2"
+                    >
+                      <Text className="text-white text-center font-semibold">Close</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => {
+                        const submission = activeWorkoutSubmission;
+                        setShowWorkoutReviewModal(false);
+                        setActiveWorkoutSubmission(null);
+                        setManualWorkoutReviewNote('');
+                        setManualWorkoutError(null);
+                        router.push({
+                          pathname: '/add-workout',
+                          params: {
+                            mode: 'edit',
+                            submissionId: submission.id,
+                            workoutType: submission.workoutType,
+                            duration: String(submission.duration),
+                            distance: typeof submission.distance === 'number' ? String(submission.distance) : '',
+                            isPrivate: String(submission.isPrivate),
+                            screenshotUri: submission.proofImageData,
+                            workoutDate: submission.workoutDate,
+                            attendanceMarkedBySubmission: String(submission.attendanceMarkedBySubmission),
+                          },
+                        });
+                      }}
+                      className="flex-1 bg-af-accent py-3 rounded-xl ml-2"
+                    >
+                      <Text className="text-white text-center font-semibold">Edit & Resubmit</Text>
+                    </Pressable>
+                  </View>
                 ) : (
                   <Pressable
                     onPress={() => {
@@ -3602,17 +4177,44 @@ export default function ProfileScreen() {
                   <View key={workout.id} className="rounded-2xl border border-white/10 bg-white/5 p-4 mb-4">
                     <View className="flex-row items-start justify-between">
                       <View className="flex-1">
-                        <Text className="text-white font-semibold">{workout.title ?? workout.type}</Text>
+                        <Text className="text-white font-semibold">{workout.source === 'attendance' ? 'Attendance' : getWorkoutDisplayTitle(workout.type)}</Text>
                         <Text className="text-af-silver text-xs mt-1">{workout.date}</Text>
                       </View>
-                      <View className="rounded-full bg-white/10 px-3 py-1">
-                        <Text className="text-af-silver text-xs">
-                          {workout.source === 'manual'
-                            ? 'Manual'
-                            : workout.source === 'attendance'
-                              ? 'Attendance'
-                              : workout.source}
-                        </Text>
+                      <View className="items-end">
+                        <View className="rounded-full bg-white/10 px-3 py-1">
+                          <Text className="text-af-silver text-xs">
+                            {workout.source === 'manual'
+                              ? 'Manual'
+                              : workout.source === 'attendance'
+                                ? 'Attendance'
+                                : workout.source}
+                          </Text>
+                        </View>
+                        {workout.source === 'manual' && workout.externalId ? (
+                          <Pressable
+                            onPress={() => {
+                              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                              setShowWorkoutHistoryModal(false);
+                              router.push({
+                                pathname: '/add-workout',
+                                params: {
+                                  mode: 'edit',
+                                  submissionId: workout.externalId,
+                                  workoutType: workout.type,
+                                  duration: String(workout.duration),
+                                  distance: typeof workout.distance === 'number' ? String(workout.distance) : '',
+                                  isPrivate: String(workout.isPrivate),
+                                  screenshotUri: workout.screenshotUri ?? '',
+                                  workoutDate: workout.date,
+                                  attendanceMarkedBySubmission: String(workout.attendanceMarkedBySubmission ?? false),
+                                },
+                              });
+                            }}
+                            className="mt-2 rounded-full border border-af-accent/40 bg-af-accent/10 px-3 py-1"
+                          >
+                            <Text className="text-af-accent text-xs font-semibold">Edit</Text>
+                          </Pressable>
+                        ) : null}
                       </View>
                     </View>
                     {workout.source === 'attendance' ? (
@@ -3641,16 +4243,14 @@ export default function ProfileScreen() {
                       </>
                     )}
                     {workout.screenshotUri ? (
-                      <Image
-                        source={{ uri: workout.screenshotUri }}
-                        className="w-full h-40 rounded-xl mt-4"
-                        resizeMode="cover"
-                      />
-                    ) : (
-                      <View className="mt-4 rounded-xl border border-white/10 bg-black/10 p-4 items-center">
-                        <Text className="text-af-silver text-xs">No image available for this workout.</Text>
-                      </View>
-                    )}
+                      <Pressable onPress={() => setExpandedWorkoutImageUri(workout.screenshotUri!)} className="mt-4">
+                        <Image
+                          source={{ uri: workout.screenshotUri }}
+                          className="w-full h-40 rounded-xl"
+                          resizeMode="cover"
+                        />
+                      </Pressable>
+                    ) : null}
                   </View>
                 ))
               )}
@@ -3758,6 +4358,93 @@ export default function ProfileScreen() {
             </ScrollView>
           </Animated.View>
         </Animated.View>
+      </Modal>
+
+      <Modal visible={showUpcomingPTSessionsModal} transparent animationType="none">
+        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View entering={SlideInDown.duration(260)} className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[82%]">
+            <View className="flex-row items-center justify-between mb-6">
+              <Text className="text-white text-xl font-bold">Upcoming PT Sessions</Text>
+              <Pressable
+                onPress={() => setShowUpcomingPTSessionsModal(false)}
+                className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+              >
+                <X size={20} color="#C0C0C0" />
+              </Pressable>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {upcomingPTSessions.length === 0 ? (
+                <Text className="text-white/40 text-center py-8">No upcoming PT sessions scheduled.</Text>
+              ) : (
+                upcomingPTSessions.map((session) => {
+                  const expanded = expandedUpcomingSessionIds.includes(session.id);
+                  return (
+                    <Pressable
+                      key={session.id}
+                      onPress={() => {
+                        setExpandedUpcomingSessionIds((current) =>
+                          current.includes(session.id)
+                            ? current.filter((id) => id !== session.id)
+                            : [...current, session.id]
+                        );
+                      }}
+                      className="mb-3 rounded-2xl border border-white/10 bg-white/5 p-4"
+                    >
+                      <View className="flex-row items-center justify-between">
+                        <View className="flex-1 pr-3">
+                          <Text className="text-white font-semibold">
+                            {new Date(`${session.date}T00:00:00`).toLocaleDateString()} at {session.time}
+                          </Text>
+                          <Text className="text-af-silver text-xs mt-1">
+                            {getScheduledSessionScopeLabel(session)}
+                            {session.scope !== 'personal' ? ' • ' : ' • Personal PT • '}
+                            {getScheduledSessionKindLabel(session.kind)}
+                          </Text>
+                        </View>
+                        {expanded ? <ChevronUp size={18} color="#C0C0C0" /> : <ChevronDown size={18} color="#C0C0C0" />}
+                      </View>
+
+                      {expanded ? (
+                        <View className="mt-3 border-t border-white/10 pt-3">
+                          <Text className="text-white text-sm">{session.description}</Text>
+                          <Text className="text-af-silver text-xs mt-2">
+                            Scheduled by {members.find((member) => member.id === session.createdBy)?.rank ?? ''} {members.find((member) => member.id === session.createdBy)?.firstName ?? ''} {members.find((member) => member.id === session.createdBy)?.lastName ?? 'Unknown member'}
+                          </Text>
+                          {session.scope !== 'personal' ? (
+                            <View className="flex-row flex-wrap mt-3" style={{ gap: 8 }}>
+                              {session.flights.map((flight) => (
+                                <View key={`${session.id}-${flight}`} className="rounded-full border border-white/10 bg-black/15 px-3 py-1.5">
+                                  <Text className="text-white text-xs font-medium">{flight}</Text>
+                                </View>
+                              ))}
+                            </View>
+                          ) : null}
+                        </View>
+                      ) : null}
+                    </Pressable>
+                  );
+                })
+              )}
+            </ScrollView>
+          </Animated.View>
+        </Animated.View>
+      </Modal>
+
+      <Modal visible={!!expandedWorkoutImageUri} transparent animationType="fade">
+        <View className="flex-1 bg-black/90 items-center justify-center p-6">
+          <Pressable
+            onPress={() => setExpandedWorkoutImageUri(null)}
+            className="absolute top-14 right-6 z-10 w-10 h-10 rounded-full bg-white/10 items-center justify-center"
+          >
+            <X size={22} color="#C0C0C0" />
+          </Pressable>
+          {expandedWorkoutImageUri ? (
+            <View style={{ width: '100%', maxWidth: 520, height: '70%' }}>
+              <Image source={{ uri: expandedWorkoutImageUri }} style={{ width: '100%', height: '100%', borderRadius: 16 }} resizeMode="contain" />
+            </View>
+          ) : null}
+        </View>
       </Modal>
 
       {/* Disconnect Integration Modal */}

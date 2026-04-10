@@ -6,9 +6,31 @@ create table if not exists public.scheduled_pt_sessions (
   squadron text not null,
   flights text[] not null default '{}',
   created_by text not null,
+  session_scope text not null default 'flight',
+  session_kind text not null default 'pt',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.scheduled_pt_sessions
+  add column if not exists session_scope text not null default 'flight';
+
+alter table public.scheduled_pt_sessions
+  add column if not exists session_kind text not null default 'pt';
+
+alter table public.scheduled_pt_sessions
+  drop constraint if exists scheduled_pt_sessions_session_scope_check;
+
+alter table public.scheduled_pt_sessions
+  add constraint scheduled_pt_sessions_session_scope_check
+  check (session_scope in ('squadron', 'flight', 'personal'));
+
+alter table public.scheduled_pt_sessions
+  drop constraint if exists scheduled_pt_sessions_session_kind_check;
+
+alter table public.scheduled_pt_sessions
+  add constraint scheduled_pt_sessions_session_kind_check
+  check (session_kind in ('pt', 'pfra_mock', 'pfra_diagnostic', 'pfra_official'));
 
 create index if not exists idx_scheduled_pt_sessions_squadron_date
   on public.scheduled_pt_sessions(squadron, session_date, session_time);
@@ -35,7 +57,15 @@ for all
 to authenticated
 using (
   public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
+  or (
+    session_scope = 'personal'
+    and created_by = auth.uid()::text
+  )
 )
 with check (
   public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
+  or (
+    session_scope = 'personal'
+    and created_by = auth.uid()::text
+  )
 );

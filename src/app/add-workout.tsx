@@ -1,32 +1,72 @@
-import React, { useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { View, Text, Pressable, ScrollView, TextInput, Modal, Image, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ChevronLeft, Camera, Upload, X, Check, Clock, MapPin, Lock, Unlock, AlertCircle } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeIn, ZoomIn } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { format } from 'date-fns';
 import { useMemberStore, useAuthStore, getDisplayName, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
-import { createManualWorkoutSubmission, uploadWorkoutProofImage } from '@/lib/supabaseData';
+import { createManualWorkoutSubmission, fetchApprovedManualWorkouts, fetchAttendanceSessions, setAttendanceStatus, updateManualWorkoutSubmission, uploadWorkoutProofImage } from '@/lib/supabaseData';
+
+const getLocalDateString = (date: Date) => format(date, 'yyyy-MM-dd');
+const getWorkoutDisplayTitle = (type: WorkoutType) => {
+  switch (type) {
+    case 'Running':
+      return 'Run';
+    case 'Walking':
+      return 'Walk';
+    case 'Cycling':
+      return 'Ride';
+    case 'Swimming':
+      return 'Swim';
+    default:
+      return type;
+  }
+};
 
 export default function AddWorkoutScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{
+    mode?: string;
+    submissionId?: string;
+    workoutType?: WorkoutType;
+    duration?: string;
+    distance?: string;
+    isPrivate?: string;
+    screenshotUri?: string;
+    workoutDate?: string;
+    attendanceMarkedBySubmission?: string;
+  }>();
   const user = useAuthStore(s => s.user);
   const accessToken = useAuthStore(s => s.accessToken);
   const members = useMemberStore(s => s.members);
+  const syncApprovedManualWorkouts = useMemberStore(s => s.syncApprovedManualWorkouts);
+  const syncPTSessions = useMemberStore(s => s.syncPTSessions);
+  const isEditing = params.mode === 'edit' && !!params.submissionId;
 
-  const [screenshotUri, setScreenshotUri] = useState<string | null>(null);
-  const [workoutType, setWorkoutType] = useState<WorkoutType>('Running');
-  const [duration, setDuration] = useState('');
-  const [distance, setDistance] = useState('');
-  const [isPrivate, setIsPrivate] = useState(false);
+  const [screenshotUri, setScreenshotUri] = useState<string | null>(params.screenshotUri ?? null);
+  const [workoutType, setWorkoutType] = useState<WorkoutType>(params.workoutType ?? 'Running');
+  const [selectedDate, setSelectedDate] = useState(() => {
+    const seed = params.workoutDate ? new Date(`${params.workoutDate}T00:00:00`) : new Date();
+    return Number.isNaN(seed.getTime()) ? new Date() : seed;
+  });
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [duration, setDuration] = useState(params.duration ?? '');
+  const [distance, setDistance] = useState(params.distance ?? '');
+  const [isPrivate, setIsPrivate] = useState(params.isPrivate === 'true');
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const workoutTypeScrollRef = useRef<ScrollView>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [screenshotMimeType, setScreenshotMimeType] = useState<string | undefined>(undefined);
+  const existingProofUri = useMemo(() => params.screenshotUri ?? null, [params.screenshotUri]);
+  const attendanceMarkedBySubmission = params.attendanceMarkedBySubmission === 'true';
+  const isWeb = Platform.OS === 'web';
 
   const canSubmit = duration && screenshotUri;
   const webWorkoutTypeScrollProps = Platform.OS === 'web'
@@ -79,30 +119,69 @@ export default function AddWorkoutScreen() {
       setIsSubmitting(true);
 
       try {
-        const submissionId = `manual-workout-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-        const proofImageData = await uploadWorkoutProofImage({
-          memberId: user.id,
-          submissionId,
-          localUri: screenshotUri,
-          mimeType: screenshotMimeType,
-          accessToken,
-        });
-        await createManualWorkoutSubmission({
-          submissionId,
-          memberId: user.id,
-          memberEmail: user.email,
-          memberName: getDisplayName(user),
-          memberRank: user.rank,
-          memberFlight: user.flight,
-          squadron: user.squadron,
-          workoutDate: new Date().toISOString().split('T')[0],
-          workoutType,
-          duration: parseInt(duration, 10) || 0,
-          distance: distance ? parseFloat(distance) : undefined,
-          isPrivate,
-          proofImageData,
-          accessToken,
-        });
+        const submissionId = params.submissionId ?? `manual-workout-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        const proofImageData = existingProofUri && screenshotUri === existingProofUri
+          ? screenshotUri
+          : await uploadWorkoutProofImage({
+              memberId: user.id,
+              submissionId,
+              localUri: screenshotUri,
+              mimeType: screenshotMimeType,
+              accessToken,
+            });
+
+        if (isEditing) {
+          if (attendanceMarkedBySubmission) {
+            await setAttendanceStatus({
+              date: params.workoutDate ?? getLocalDateString(selectedDate),
+              flight: user.flight,
+              squadron: user.squadron,
+              memberId: user.id,
+              createdBy: user.id,
+              isAttending: false,
+              accessToken,
+            }).catch(() => undefined);
+          }
+
+          await updateManualWorkoutSubmission({
+            submissionId,
+            workoutDate: getLocalDateString(selectedDate),
+            workoutType,
+            duration: parseInt(duration, 10) || 0,
+            distance: distance ? parseFloat(distance) : undefined,
+            isPrivate,
+            proofImageData,
+            accessToken,
+          });
+
+          const [approvedManualWorkouts, nextSessions] = await Promise.all([
+            fetchApprovedManualWorkouts(accessToken, user.squadron).catch(() => [{ memberId: user.id, workouts: [] }]),
+            fetchAttendanceSessions(accessToken).catch(() => []),
+          ]);
+          syncApprovedManualWorkouts(
+            approvedManualWorkouts.some((entry) => entry.memberId === user.id)
+              ? approvedManualWorkouts
+              : [...approvedManualWorkouts, { memberId: user.id, workouts: [] }]
+          );
+          syncPTSessions(nextSessions);
+        } else {
+          await createManualWorkoutSubmission({
+            submissionId,
+            memberId: user.id,
+            memberEmail: user.email,
+            memberName: getDisplayName(user),
+            memberRank: user.rank,
+            memberFlight: user.flight,
+            squadron: user.squadron,
+            workoutDate: getLocalDateString(selectedDate),
+            workoutType,
+            duration: parseInt(duration, 10) || 0,
+            distance: distance ? parseFloat(distance) : undefined,
+            isPrivate,
+            proofImageData,
+            accessToken,
+          });
+        }
 
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         router.back();
@@ -115,6 +194,21 @@ export default function AddWorkoutScreen() {
     };
 
     void run();
+  };
+
+  const handleDateChange = (_event: unknown, date?: Date) => {
+    setShowDatePicker(false);
+    if (date) {
+      setSelectedDate(date);
+    }
+  };
+
+  const handleWebDateChange = (value: string) => {
+    if (!value) return;
+    const nextDate = new Date(`${value}T00:00:00`);
+    if (!Number.isNaN(nextDate.getTime())) {
+      setSelectedDate(nextDate);
+    }
   };
 
   return (
@@ -141,7 +235,7 @@ export default function AddWorkoutScreen() {
           >
             <ChevronLeft size={24} color="#C0C0C0" />
           </Pressable>
-          <Text className="text-white text-xl font-bold">Add Manual Workout</Text>
+          <Text className="text-white text-xl font-bold">{isEditing ? 'Edit Manual Workout' : 'Add Manual Workout'}</Text>
         </Animated.View>
 
         <ScrollView
@@ -149,6 +243,14 @@ export default function AddWorkoutScreen() {
           contentContainerStyle={{ paddingBottom: 40 }}
           showsVerticalScrollIndicator={false}
         >
+          {isEditing ? (
+            <Animated.View entering={FadeInDown.delay(125).springify()} className="mt-4 rounded-2xl border border-af-warning/30 bg-af-warning/10 p-4">
+              <Text className="text-af-warning font-semibold">Editing requires re-approval</Text>
+              <Text className="text-af-silver text-sm mt-1">
+                Once you resubmit this workout, it will go back to pending review before it counts toward your attendance again.
+              </Text>
+            </Animated.View>
+          ) : null}
           {/* Screenshot Upload - Required */}
           <Animated.View
             entering={FadeInDown.delay(150).springify()}
@@ -239,6 +341,46 @@ export default function AddWorkoutScreen() {
                 ))}
               </View>
             </ScrollView>
+          </Animated.View>
+
+          <Animated.View
+            entering={FadeInDown.delay(275).springify()}
+            className="mt-4"
+          >
+            <Text className="text-white/60 text-sm mb-2">Workout Date</Text>
+            {isWeb ? (
+              <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10">
+                <Clock size={20} color="#C0C0C0" />
+                <View className="flex-1 ml-3">
+                  <Text className="text-white/60 text-xs mb-1">Date</Text>
+                  <input
+                    type="date"
+                    value={getLocalDateString(selectedDate)}
+                    max={getLocalDateString(new Date())}
+                    onChange={(event) => handleWebDateChange(event.target.value)}
+                    style={{
+                      width: '100%',
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'white',
+                      outline: 'none',
+                      fontSize: 16,
+                    }}
+                  />
+                </View>
+              </View>
+            ) : (
+              <Pressable
+                onPress={() => setShowDatePicker(true)}
+                className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10"
+              >
+                <Clock size={20} color="#C0C0C0" />
+                <View className="flex-1 ml-3">
+                  <Text className="text-white/60 text-xs mb-1">Date</Text>
+                  <Text className="text-white text-base">{format(selectedDate, 'EEEE, MMMM d, yyyy')}</Text>
+                </View>
+              </Pressable>
+            )}
           </Animated.View>
 
           {/* Duration */}
@@ -338,7 +480,7 @@ export default function AddWorkoutScreen() {
             {!screenshotUri && (
               <View className="flex-row items-center justify-center mb-3 bg-af-warning/10 p-3 rounded-xl">
                 <AlertCircle size={16} color="#F59E0B" />
-                <Text className="text-af-warning text-sm ml-2">Screenshot/image proof is required to add workout</Text>
+                  <Text className="text-af-warning text-sm ml-2">Screenshot/image proof is required to add workout</Text>
               </View>
             )}
             <Pressable
@@ -372,7 +514,7 @@ export default function AddWorkoutScreen() {
             entering={ZoomIn.duration(300)}
             className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20"
           >
-            <Text className="text-white text-xl font-bold mb-4">Submit Manual Workout</Text>
+            <Text className="text-white text-xl font-bold mb-4">{isEditing ? 'Resubmit Manual Workout' : 'Submit Manual Workout'}</Text>
 
             {screenshotUri && (
               <Image
@@ -385,7 +527,11 @@ export default function AddWorkoutScreen() {
             <View className="bg-white/5 rounded-xl p-4 mb-4">
               <View className="flex-row justify-between mb-2">
                 <Text className="text-af-silver">Type</Text>
-                <Text className="text-white font-semibold">{workoutType}</Text>
+                <Text className="text-white font-semibold">{getWorkoutDisplayTitle(workoutType)}</Text>
+              </View>
+              <View className="flex-row justify-between mb-2">
+                <Text className="text-af-silver">Date</Text>
+                <Text className="text-white font-semibold">{getLocalDateString(selectedDate)}</Text>
               </View>
               <View className="flex-row justify-between mb-2">
                 <Text className="text-af-silver">Duration</Text>
@@ -410,7 +556,9 @@ export default function AddWorkoutScreen() {
 
             <View className="bg-af-accent/10 border border-af-accent/20 rounded-xl p-4 mb-4">
               <Text className="text-white text-sm leading-5">
-                This workout will be sent to your squadron's PFLs, UFPM, and Owner for approval. It will only count toward your attendance and account after approval.
+                {isEditing
+                  ? 'This edited workout will be re-submitted to your squadron\'s PFLs and UFPM for approval. It will not count toward your attendance until it is approved again.'
+                  : 'This workout will be sent to your squadron\'s PFLs and UFPM for approval. It will only count toward your attendance after approval.'}
               </Text>
             </View>
 
@@ -428,12 +576,22 @@ export default function AddWorkoutScreen() {
                 }}
                 className="flex-1 bg-af-accent py-3 rounded-xl ml-2"
               >
-                <Text className="text-white text-center font-semibold">Send for Review</Text>
+                <Text className="text-white text-center font-semibold">{isEditing ? 'Resubmit for Review' : 'Send for Review'}</Text>
               </Pressable>
             </View>
           </Animated.View>
         </View>
       </Modal>
+      {showDatePicker ? (
+        <DateTimePicker
+          value={selectedDate}
+          mode="date"
+          display="spinner"
+          onChange={handleDateChange}
+          maximumDate={new Date()}
+          themeVariant="dark"
+        />
+      ) : null}
     </View>
   );
 }

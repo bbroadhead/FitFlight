@@ -77,7 +77,7 @@ function findMatchingMember<T extends Pick<Member, 'id' | 'email' | 'firstName' 
 }
 
 function getPostLoginRoute(member: Pick<Member, 'mustChangePassword' | 'hasLoggedIntoApp'>) {
-  if (member.mustChangePassword) {
+  if (member.mustChangePassword && !member.hasLoggedIntoApp) {
     return '/reset-password?mode=first-login';
   }
 
@@ -168,6 +168,7 @@ export default function LoginScreen() {
   const members = useMemberStore(s => s.members);
   const addMember = useMemberStore(s => s.addMember);
   const updateMember = useMemberStore(s => s.updateMember);
+  const syncMembersFromRoster = useMemberStore(s => s.syncMembersFromRoster);
 
   const [isSignUp, setIsSignUp] = useState(false);
   const [firstName, setFirstName] = useState('');
@@ -235,6 +236,7 @@ export default function LoginScreen() {
         const member = existingMember
           ? {
               ...existingMember,
+              id: authUser.id,
               firstName: normalizedSpecialName.firstName,
               lastName: normalizedSpecialName.lastName,
               email: normalizedEmail,
@@ -269,12 +271,26 @@ export default function LoginScreen() {
               hasLoggedIntoApp: false,
             };
 
+        const normalizedRosterMembers = rosterMembers.map((rosterMember) => {
+          const matchesCurrentUser =
+            (rosterMember.email && rosterMember.email.toLowerCase() === normalizedEmail) ||
+            (
+              rosterMember.firstName.trim().toLowerCase() === member.firstName.trim().toLowerCase() &&
+              rosterMember.lastName.trim().toLowerCase() === member.lastName.trim().toLowerCase()
+            );
+
+          return matchesCurrentUser ? { ...rosterMember, id: authUser.id, email: normalizedEmail } : rosterMember;
+        });
+
+        syncMembersFromRoster(normalizedRosterMembers);
+
         if (!existingMember) {
           addMember(member);
           await createRosterMember(member, sessionFromHash.accessToken).catch(() => undefined);
         } else if (!localExistingMember) {
           addMember({
             ...existingMember,
+            id: authUser.id,
             email: normalizedEmail,
             isVerified: true,
           });
@@ -337,7 +353,7 @@ export default function LoginScreen() {
     };
 
     void finalizeEmailConfirmation();
-  }, [addMember, email, login, members, router, setSessionTokens, updateMember]);
+  }, [addMember, email, login, members, router, setSessionTokens, syncMembersFromRoster, updateMember]);
 
   const handleSignIn = () => {
     const run = async () => {
@@ -374,6 +390,7 @@ export default function LoginScreen() {
       const member = existingMember
         ? {
             ...existingMember,
+            id: response.user.id,
             firstName: normalizedSpecialName.firstName,
             lastName: normalizedSpecialName.lastName,
             email: normalizedEmail,
@@ -409,12 +426,26 @@ export default function LoginScreen() {
             hasLoggedIntoApp: false,
           };
 
+      const normalizedRosterMembers = rosterMembers.map((rosterMember) => {
+        const matchesCurrentUser =
+          (rosterMember.email && rosterMember.email.toLowerCase() === normalizedEmail) ||
+          (
+            rosterMember.firstName.trim().toLowerCase() === member.firstName.trim().toLowerCase() &&
+            rosterMember.lastName.trim().toLowerCase() === member.lastName.trim().toLowerCase()
+          );
+
+        return matchesCurrentUser ? { ...rosterMember, id: response.user.id, email: normalizedEmail } : rosterMember;
+      });
+
+      syncMembersFromRoster(normalizedRosterMembers);
+
       if (!existingMember) {
         addMember(member);
         await createRosterMember(member, response.access_token).catch(() => undefined);
       } else if (!localExistingMember) {
         addMember({
           ...existingMember,
+          id: response.user.id,
           email: member.email,
           isVerified: true,
         });
@@ -536,7 +567,7 @@ export default function LoginScreen() {
     refreshToken?: string,
     authUserId?: string
   ) => {
-    const newMemberId = existingMemberOverride?.id ?? authUserId ?? Date.now().toString();
+    const newMemberId = authUserId ?? existingMemberOverride?.id ?? Date.now().toString();
     const accountType = getInitialAccountType(firstName, lastName);
     const normalizedSpecialName = normalizeSpecialMemberName(firstName, lastName);
 

@@ -69,6 +69,7 @@ export default function StravaCallbackScreen() {
                   memberId: user.id,
                   createdBy: user.id,
                   isAttending: true,
+                  source: 'workout',
                   accessToken,
                 }).catch(() => undefined)
               )

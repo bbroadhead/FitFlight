@@ -12,6 +12,21 @@ import { TrophyCase, CompactTrophyBadges } from '@/components/TrophyCase';
 import { buildTrophyStats, getRarestEarnedTrophies } from '@/lib/trophies';
 import { formatMonthLabel, getAvailableMonthKeys, getMemberEffectiveWorkouts, getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
 
+function getWorkoutDisplayTitle(type: WorkoutType) {
+  switch (type) {
+    case 'Running':
+      return 'Run';
+    case 'Walking':
+      return 'Walk';
+    case 'Cycling':
+      return 'Ride';
+    case 'Swimming':
+      return 'Swim';
+    default:
+      return type;
+  }
+}
+
 // Workout type colors
 const WORKOUT_TYPE_COLORS: Record<WorkoutType, string> = {
   Running: '#22C55E',
@@ -89,6 +104,7 @@ export default function MemberProfileScreen() {
   const [showWorkoutHistoryModal, setShowWorkoutHistoryModal] = useState(false);
   const [showPFRAHistoryModal, setShowPFRAHistoryModal] = useState(false);
   const [showLeaderboardHistoryModal, setShowLeaderboardHistoryModal] = useState(false);
+  const [expandedWorkoutImageUri, setExpandedWorkoutImageUri] = useState<string | null>(null);
 
   const member = useMemo(() => members.find(m => m.id === id), [members, id]);
   const canViewMember =
@@ -284,7 +300,7 @@ export default function MemberProfileScreen() {
           >
             <ChevronLeft size={24} color="#C0C0C0" />
           </Pressable>
-          <Text className="text-white text-xl font-bold">Account</Text>
+          <Text className="text-white text-xl font-bold">Profile</Text>
         </Animated.View>
 
         <ScrollView
@@ -677,7 +693,7 @@ export default function MemberProfileScreen() {
                         {workout.screenshotUri && (
                           <View className="flex-row items-center">
                             <ImageIcon size={14} color="#A855F7" />
-                            <Text className="text-purple-400 text-sm ml-1">Has screenshot</Text>
+                            <Text className="text-purple-400 text-sm ml-1">Has image</Text>
                           </View>
                         )}
                       </View>
@@ -726,7 +742,7 @@ export default function MemberProfileScreen() {
                       <View key={workout.id} className="rounded-2xl border border-white/10 bg-white/5 p-4 mb-4">
                         <View className="flex-row items-start justify-between">
                           <View className="flex-1">
-                            <Text className="text-white font-semibold">{workout.title ?? workout.type}</Text>
+                            <Text className="text-white font-semibold">{workout.source === 'attendance' ? 'Attendance' : getWorkoutDisplayTitle(workout.type)}</Text>
                             <Text className="text-af-silver text-xs mt-1">{workout.date}</Text>
                           </View>
                           <View className="rounded-full bg-white/10 px-3 py-1">
@@ -746,14 +762,23 @@ export default function MemberProfileScreen() {
                             <Text className="text-af-silver text-sm">Logged by PFL/UFPM</Text>
                           ) : (
                             <>
-                              <Text className="text-af-silver text-sm">Duration: {workout.duration} min</Text>
-                              <Text className="text-af-silver text-sm mt-1">Distance: {workout.distance ? `${workout.distance.toFixed(1)} mi` : 'N/A'}</Text>
-                              <Text className="text-af-silver text-sm mt-1">Visibility: {workout.isPrivate ? 'Private' : 'Visible to squadron'}</Text>
-                            </>
-                          )}
+                                <Text className="text-af-silver text-sm">Duration: {workout.duration} min</Text>
+                                <Text className="text-af-silver text-sm mt-1">Distance: {workout.distance ? `${workout.distance.toFixed(1)} mi` : 'N/A'}</Text>
+                                <Text className="text-af-silver text-sm mt-1">Visibility: {workout.isPrivate ? 'Private' : 'Visible to squadron'}</Text>
+                              </>
+                            )}
+                          </View>
+                          {workout.screenshotUri ? (
+                            <Pressable onPress={() => setExpandedWorkoutImageUri(workout.screenshotUri!)} className="mt-4">
+                              <Image
+                                source={{ uri: workout.screenshotUri }}
+                                className="w-full h-40 rounded-xl"
+                                resizeMode="cover"
+                              />
+                            </Pressable>
+                          ) : null}
                         </View>
-                      </View>
-                    ))
+                      ))
                 )}
               </ScrollView>
             </Animated.View>
@@ -851,6 +876,22 @@ export default function MemberProfileScreen() {
               </ScrollView>
             </Animated.View>
           </Animated.View>
+        </Modal>
+
+        <Modal visible={!!expandedWorkoutImageUri} transparent animationType="fade">
+          <View className="flex-1 bg-black/90 items-center justify-center p-6">
+            <Pressable
+              onPress={() => setExpandedWorkoutImageUri(null)}
+              className="absolute top-14 right-6 z-10 w-10 h-10 rounded-full bg-white/10 items-center justify-center"
+            >
+              <X size={22} color="#C0C0C0" />
+            </Pressable>
+            {expandedWorkoutImageUri ? (
+              <View style={{ width: '100%', maxWidth: 520, height: '70%' }}>
+                <Image source={{ uri: expandedWorkoutImageUri }} style={{ width: '100%', height: '100%', borderRadius: 16 }} resizeMode="contain" />
+              </View>
+            ) : null}
+          </View>
         </Modal>
       </SafeAreaView>
     </View>

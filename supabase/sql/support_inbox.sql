@@ -1,13 +1,45 @@
 create table if not exists public.support_threads (
   id text primary key,
   requester_member_id text not null,
-  requester_email text not null unique,
+  requester_email text not null,
   requester_name text not null,
   requester_squadron text not null,
+  recipient_member_id text,
+  recipient_email text,
+  recipient_name text,
   subject text not null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.support_threads
+add column if not exists recipient_member_id text;
+
+alter table public.support_threads
+add column if not exists recipient_email text;
+
+alter table public.support_threads
+add column if not exists recipient_name text;
+
+update public.support_threads
+set
+  recipient_email = coalesce(recipient_email, 'benjamin.broadhead.2@us.af.mil'),
+  recipient_name = coalesce(recipient_name, 'SSgt Benjamin Broadhead')
+where recipient_email is null
+   or recipient_name is null;
+
+alter table public.support_threads
+alter column recipient_email set not null;
+
+alter table public.support_threads
+alter column recipient_name set not null;
+
+alter table public.support_threads
+drop constraint if exists support_threads_requester_email_key;
+
+drop index if exists support_threads_requester_email_recipient_email_key;
+create unique index if not exists support_threads_requester_email_recipient_email_key
+on public.support_threads (lower(requester_email), lower(recipient_email));
 
 create table if not exists public.support_messages (
   id text primary key,
@@ -39,6 +71,7 @@ for select
 to authenticated
 using (
   public.current_member_role() = 'fitflight_creator'
+  or lower(recipient_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
   or lower(requester_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
 );
 
@@ -58,10 +91,12 @@ for update
 to authenticated
 using (
   public.current_member_role() = 'fitflight_creator'
+  or lower(recipient_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
   or lower(requester_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
 )
 with check (
   public.current_member_role() = 'fitflight_creator'
+  or lower(recipient_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
   or lower(requester_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
 );
 
@@ -72,6 +107,12 @@ for select
 to authenticated
 using (
   public.current_member_role() = 'fitflight_creator'
+  or exists (
+    select 1
+    from public.support_threads st
+    where st.id = support_messages.thread_id
+      and lower(st.recipient_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+  )
   or exists (
     select 1
     from public.support_threads st
@@ -87,7 +128,15 @@ for insert
 to authenticated
 with check (
   (
-    public.current_member_role() = 'fitflight_creator'
+    (
+      public.current_member_role() = 'fitflight_creator'
+      or exists (
+        select 1
+        from public.support_threads st
+        where st.id = support_messages.thread_id
+          and lower(st.recipient_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+      )
+    )
     and is_from_owner = true
   )
   or exists (
@@ -110,12 +159,26 @@ using (
     select 1
     from public.support_threads st
     where st.id = support_messages.thread_id
+      and lower(st.recipient_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+  )
+  or exists (
+    select 1
+    from public.support_threads st
+    where st.id = support_messages.thread_id
       and lower(st.requester_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
   )
 )
 with check (
   (
-    public.current_member_role() = 'fitflight_creator'
+    (
+      public.current_member_role() = 'fitflight_creator'
+      or exists (
+        select 1
+        from public.support_threads st
+        where st.id = support_messages.thread_id
+          and lower(st.recipient_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+      )
+    )
     and sender_member_id = support_messages.sender_member_id
     and sender_email = support_messages.sender_email
     and sender_name = support_messages.sender_name

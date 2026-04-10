@@ -9,6 +9,8 @@ export type AccountType = 'fitflight_creator' | 'ufpm' | 'squadron_leadership' |
 export type Squadron = 'Hawks' | 'Tigers';
 export type WorkoutType = 'Running' | 'Walking' | 'Cycling' | 'Strength' | 'HIIT' | 'Swimming' | 'Sports' | 'Cardio' | 'Flexibility' | 'Other';
 export type IntegrationService = 'apple_health' | 'strava' | 'garmin';
+export type ScheduledPTScope = 'squadron' | 'flight' | 'personal';
+export type ScheduledPTKind = 'pt' | 'pfra_mock' | 'pfra_diagnostic' | 'pfra_official';
 
 export const SQUADRONS: Squadron[] = ['Hawks', 'Tigers'];
 export const WORKOUT_TYPES: WorkoutType[] = ['Running', 'Walking', 'Cycling', 'Strength', 'HIIT', 'Swimming', 'Sports', 'Cardio', 'Flexibility', 'Other'];
@@ -42,6 +44,8 @@ export interface SharedWorkout {
   steps: string[];
   createdBy: string; // member id
   createdAt: string; // ISO date
+  editedBy?: string;
+  editedAt?: string;
   squadron: Squadron;
   thumbsUp: string[]; // member ids who liked
   thumbsDown: string[]; // member ids who disliked
@@ -72,6 +76,7 @@ export interface Workout {
   screenshotUri?: string;
   title?: string;
   isPrivate: boolean;
+  attendanceMarkedBySubmission?: boolean;
 }
 
 export interface IntegrationConnection {
@@ -110,6 +115,8 @@ export interface ScheduledPTSession {
   flights: Flight[];
   squadron: Squadron;
   createdBy: string;
+  scope: ScheduledPTScope;
+  kind: ScheduledPTKind;
 }
 
 export interface Member {
@@ -145,6 +152,7 @@ export interface PTSession {
   flight: Flight;
   squadron: Squadron;
   attendees: string[];
+  attendeeSources?: Record<string, 'manual' | 'workout'>;
   createdBy: string;
 }
 
@@ -461,7 +469,7 @@ interface MemberState {
   addWorkout: (memberId: string, workout: Workout) => void;
   importWorkouts: (memberId: string, workouts: Workout[]) => void;
   pruneOldWorkoutMedia: (currentMonthKey?: string) => void;
-  syncApprovedManualWorkouts: (entries: Array<{ memberId: string; workouts: Workout[] }>) => void;
+  syncApprovedManualWorkouts: (entries: Array<{ memberId?: string; memberEmail?: string; workouts: Workout[] }>) => void;
   syncFitnessAssessments: (entries: Array<{ memberId?: string; memberEmail?: string; assessments: FitnessAssessment[] }>) => void;
   syncLeaderboardHistory: () => void;
 
@@ -507,6 +515,7 @@ const OWNER_ACCOUNT: Member = {
 
 const INITIAL_MEMBERS: Member[] = [];
 const ROSTER_BACKED_SQUADRON: Squadron = 'Hawks';
+const AUTH_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const normalizeOwnerMember = (member: Member): Member => {
   if (member.email.toLowerCase() !== OWNER_ACCOUNT.email.toLowerCase()) {
@@ -543,7 +552,11 @@ const mergeMember = (base: Member, existing?: Member): Member => {
 
   const mergedMember = {
     ...base,
-    id: existing.id || base.id,
+    id: AUTH_ID_PATTERN.test(base.id)
+      ? base.id
+      : AUTH_ID_PATTERN.test(existing.id)
+        ? existing.id
+        : (existing.id || base.id),
     email: existing.email || base.email,
     accountType: existing.accountType !== 'standard' ? existing.accountType : base.accountType,
     profilePicture: existing.profilePicture ?? base.profilePicture,
@@ -607,6 +620,8 @@ const summarizeWorkouts = (workouts: Workout[]) => ({
 const normalizeScheduledSession = (session: ScheduledPTSession): ScheduledPTSession => ({
   ...session,
   flights: session.flights?.length ? [...new Set(session.flights)] : [],
+  scope: session.scope ?? 'flight',
+  kind: session.kind ?? 'pt',
 });
 
 const applyLeaderboardHistory = (members: Member[], ptSessions: PTSession[]) => {
@@ -746,13 +761,18 @@ export const useMemberStore = create<MemberState>()(
           nextMembers.find((member) => member.accountType === 'fitflight_creator')?.id ??
           nextMembers[0]?.id ??
           null;
-        const nextPtSessions = state.ptSessions.map((session) => ({
-          ...session,
-          squadron: session.squadron ?? 'Hawks',
-          attendees: [...new Set(session.attendees.map(mapMemberId).filter((memberId) => validMemberIds.has(memberId)))],
-          createdBy:
-            validMemberIds.has(mapMemberId(session.createdBy))
-              ? mapMemberId(session.createdBy)
+          const nextPtSessions = state.ptSessions.map((session) => ({
+            ...session,
+            squadron: session.squadron ?? 'Hawks',
+            attendees: [...new Set(session.attendees.map(mapMemberId).filter((memberId) => validMemberIds.has(memberId)))],
+            attendeeSources: Object.fromEntries(
+              Object.entries(session.attendeeSources ?? {})
+                .map(([memberId, source]) => [mapMemberId(memberId), source] as const)
+                .filter(([memberId]) => validMemberIds.has(memberId))
+            ),
+            createdBy:
+              validMemberIds.has(mapMemberId(session.createdBy))
+                ? mapMemberId(session.createdBy)
               : fallbackCreatorId ?? session.createdBy,
         }));
         const nextScheduledSessions = state.scheduledSessions.map((session) => normalizeScheduledSession({
@@ -809,12 +829,13 @@ export const useMemberStore = create<MemberState>()(
         members: hydrateDerivedMemberState(state.members, [...state.ptSessions, session], state.sharedWorkouts),
       })),
 
-      syncPTSessions: (sessions) => set((state) => {
-        const nextSessions = sessions.map((session) => ({
-          ...session,
-          squadron: session.squadron ?? 'Hawks',
-          attendees: [...new Set(session.attendees)],
-        }));
+        syncPTSessions: (sessions) => set((state) => {
+          const nextSessions = sessions.map((session) => ({
+            ...session,
+            squadron: session.squadron ?? 'Hawks',
+            attendees: [...new Set(session.attendees)],
+            attendeeSources: session.attendeeSources ?? {},
+          }));
 
         return {
           ptSessions: nextSessions,
@@ -988,17 +1009,21 @@ export const useMemberStore = create<MemberState>()(
         })),
       })),
 
-      syncApprovedManualWorkouts: (entries) => set((state) => {
-        const workoutsByMember = new Map(entries.map((entry) => [entry.memberId, entry.workouts]));
-        const nextMembers = state.members.map((member) => {
-          const approvedManualWorkouts = workoutsByMember.get(member.id);
-          if (!approvedManualWorkouts) {
-            return member;
-          }
+        syncApprovedManualWorkouts: (entries) => set((state) => {
+          const nextMembers = state.members.map((member) => {
+            const matchingEntry = entries.find((entry) =>
+              (entry.memberId && entry.memberId === member.id) ||
+              (entry.memberEmail && entry.memberEmail.toLowerCase() === member.email.toLowerCase())
+            );
 
-          const preservedWorkouts = member.workouts.filter(
-            (workout) => !(workout.source === 'manual' && Boolean(workout.externalId))
-          );
+            if (!matchingEntry) {
+              return member;
+            }
+            const approvedManualWorkouts = matchingEntry.workouts ?? [];
+
+            const preservedWorkouts = member.workouts.filter(
+              (workout) => !(workout.source === 'manual' && Boolean(workout.externalId))
+            );
           const mergedWorkouts = mergeWorkouts(preservedWorkouts, approvedManualWorkouts);
           const summary = summarizeWorkouts(mergedWorkouts);
 

@@ -9,11 +9,19 @@ create table if not exists public.shared_workouts (
   steps text[] not null default '{}',
   created_by text not null,
   created_at timestamptz not null default now(),
+  edited_by text,
+  edited_at timestamptz,
   squadron text not null,
   thumbs_up text[] not null default '{}',
   thumbs_down text[] not null default '{}',
   favorited_by text[] not null default '{}'
 );
+
+alter table public.shared_workouts
+  add column if not exists edited_by text;
+
+alter table public.shared_workouts
+  add column if not exists edited_at timestamptz;
 
 alter table public.shared_workouts enable row level security;
 

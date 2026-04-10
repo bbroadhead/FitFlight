@@ -43,6 +43,36 @@ export default function ResetPasswordScreen() {
     }
   }, [isFirstLoginPasswordChange, storedAccessToken]);
 
+  const handleContinueToFitFlight = () => {
+    const run = async () => {
+      if (!isFirstLoginPasswordChange || !authUser?.email || !accessToken) {
+        router.replace(authUser?.hasLoggedIntoApp ? '/' : '/welcome');
+        return;
+      }
+
+      await updateRosterPasswordStatus(
+        authUser.email,
+        {
+          mustChangePassword: false,
+        },
+        accessToken
+      ).catch(() => undefined);
+
+      updateUser({
+        mustChangePassword: false,
+      });
+      updateMember(authUser.id, {
+        mustChangePassword: false,
+      });
+
+      router.replace(authUser.hasLoggedIntoApp ? '/' : '/welcome');
+    };
+
+    run().catch(() => {
+      router.replace(authUser?.hasLoggedIntoApp ? '/' : '/welcome');
+    });
+  };
+
   const handleUpdatePassword = () => {
     const run = async () => {
       setError('');
@@ -181,7 +211,7 @@ export default function ResetPasswordScreen() {
 
               {isFirstLoginPasswordChange ? (
                 <Pressable
-              onPress={() => router.replace(authUser?.hasLoggedIntoApp ? '/' : '/welcome')}
+                  onPress={handleContinueToFitFlight}
                   className="bg-white/10 py-4 rounded-xl items-center justify-center active:opacity-80"
                 >
                   <Text className="text-white font-semibold">Continue to FitFlight</Text>
