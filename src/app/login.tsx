@@ -210,6 +210,12 @@ export default function LoginScreen() {
   const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false);
   const [resetEmail, setResetEmail] = useState('');
   const [resetMessage, setResetMessage] = useState('');
+  const isStandaloneWeb = Platform.OS === 'web' && typeof window !== 'undefined'
+    ? (
+        window.matchMedia?.('(display-mode: standalone)')?.matches ||
+        ((window.navigator as Navigator & { standalone?: boolean }).standalone ?? false)
+      )
+    : false;
 
   const validateEmail = (emailToValidate: string): boolean => {
     return emailToValidate.toLowerCase().endsWith('@us.af.mil');
@@ -762,7 +768,7 @@ export default function LoginScreen() {
           >
             {/* Logo Section */}
             <Animated.View
-              entering={FadeInDown.delay(100).springify()}
+              entering={isStandaloneWeb ? undefined : FadeInDown.delay(100).springify()}
               className="items-center mb-8"
             >
               <View className="w-20 h-20 bg-white/10 rounded-full items-center justify-center mb-4 border border-white/20 overflow-hidden">
@@ -778,7 +784,7 @@ export default function LoginScreen() {
 
             {/* Form Card */}
             <Animated.View
-              entering={FadeInUp.delay(200).springify()}
+              entering={isStandaloneWeb ? undefined : FadeInUp.delay(200).springify()}
               className="bg-white/10 rounded-3xl p-6 border border-white/20"
             >
               {/* Toggle Login/Sign Up */}
