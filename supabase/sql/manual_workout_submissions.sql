@@ -9,6 +9,7 @@ create table if not exists public.manual_workout_submissions (
   workout_date date not null,
   workout_type text not null,
   duration integer not null,
+  duration_seconds integer not null default 0,
   distance numeric null,
   is_private boolean not null default false,
   proof_image_data text not null,
@@ -25,6 +26,9 @@ create table if not exists public.manual_workout_submissions (
 
 alter table public.manual_workout_submissions
   add column if not exists attendance_marked_by_submission boolean not null default false;
+
+alter table public.manual_workout_submissions
+  add column if not exists duration_seconds integer not null default 0;
 
 create index if not exists idx_manual_workout_submissions_member_id
   on public.manual_workout_submissions(member_id);

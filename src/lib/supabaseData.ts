@@ -92,6 +92,19 @@ type AppNotificationRow = {
   read_at: string | null;
   created_at: string;
 };
+type MemberTrophyRow = {
+  id: string;
+  member_id: string | null;
+  member_email: string;
+  squadron: Squadron;
+  trophy_id: string;
+  earned_at: string;
+  awarded_by_member_id: string | null;
+  is_active: boolean;
+  revoked_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
 type SupportThreadRow = {
   id: string;
   requester_member_id: string;
@@ -151,6 +164,7 @@ type ManualWorkoutSubmissionRow = {
   workout_date: string;
   workout_type: WorkoutType;
   duration: number;
+  duration_seconds?: number | null;
   distance: number | null;
   is_private: boolean;
   proof_image_data: string;
@@ -208,6 +222,7 @@ export type ManualWorkoutSubmission = {
   workoutDate: string;
   workoutType: WorkoutType;
   duration: number;
+  durationSeconds: number;
   distance?: number;
   isPrivate: boolean;
   proofImageData: string;
@@ -240,9 +255,40 @@ export type AppNotification = {
   createdAt: string;
 };
 
+export type MemberTrophyRecord = {
+  id: string;
+  memberId: string | null;
+  memberEmail: string;
+  squadron: Squadron;
+  trophyId: string;
+  earnedAt: string;
+  awardedByMemberId: string | null;
+  isActive: boolean;
+  revokedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 function isMissingAttendanceMarkedBySubmissionError(message: string) {
   const normalized = message.toLowerCase();
   return normalized.includes('attendance_marked_by_submission') && normalized.includes('schema cache');
+}
+
+function isMissingSupportRecipientColumnError(message: string) {
+  const normalized = message.toLowerCase();
+  return normalized.includes('support_threads.recipient_email') || (
+    normalized.includes('recipient_email') && normalized.includes('support_threads')
+  );
+}
+
+function getSupportInboxErrorMessage(payload: unknown, fallbackMessage: string) {
+  const rawMessage =
+    typeof (payload as { message?: unknown }).message === 'string'
+      ? (payload as { message: string }).message
+      : fallbackMessage;
+  return isMissingSupportRecipientColumnError(rawMessage)
+    ? 'FitFlight team messaging needs a Supabase update. Re-run supabase/sql/support_inbox.sql, then try again.'
+    : rawMessage;
 }
 
 function getManualWorkoutWriteErrorMessage(payload: unknown, fallbackMessage: string) {
@@ -604,6 +650,7 @@ function normalizeManualWorkoutSubmissionRow(row: ManualWorkoutSubmissionRow): M
     workoutDate: row.workout_date,
     workoutType: row.workout_type,
     duration: row.duration,
+    durationSeconds: typeof row.duration_seconds === 'number' ? row.duration_seconds : 0,
     distance: typeof row.distance === 'number' ? row.distance : undefined,
     isPrivate: row.is_private,
     proofImageData: getDisplayImageUri(row.proof_image_data) ?? row.proof_image_data,
@@ -694,6 +741,22 @@ function normalizeAppNotificationRow(row: AppNotificationRow): AppNotification {
     actionPayload: row.action_payload ?? {},
     readAt: row.read_at,
     createdAt: row.created_at,
+  };
+}
+
+function normalizeMemberTrophyRow(row: MemberTrophyRow): MemberTrophyRecord {
+  return {
+    id: row.id,
+    memberId: row.member_id,
+    memberEmail: row.member_email.toLowerCase(),
+    squadron: row.squadron,
+    trophyId: row.trophy_id,
+    earnedAt: row.earned_at,
+    awardedByMemberId: row.awarded_by_member_id,
+    isActive: row.is_active,
+    revokedAt: row.revoked_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -974,6 +1037,85 @@ export async function fetchRosterMembers(accessToken?: string, squadron: Squadro
   return rows
     .map(normalizeRosterRow)
     .filter((member): member is Member => Boolean(member));
+}
+
+export async function fetchMemberTrophies(accessToken?: string, squadron?: Squadron, includeInactive = false) {
+  const query = new URLSearchParams();
+  query.set(
+    'select',
+    'id,member_id,member_email,squadron,trophy_id,earned_at,awarded_by_member_id,is_active,revoked_at,created_at,updated_at'
+  );
+  query.set('order', 'earned_at.asc');
+  if (squadron) {
+    query.set('squadron', `eq.${squadron}`);
+  }
+  if (!includeInactive) {
+    query.set('is_active', 'eq.true');
+  }
+
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/member_trophies?${query.toString()}`, {
+    method: 'GET',
+    headers: await getHeaders(accessToken),
+  });
+
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to load member trophies from Supabase.';
+    throw new Error(message);
+  }
+
+  return (payload as MemberTrophyRow[]).map(normalizeMemberTrophyRow);
+}
+
+export async function awardMemberTrophy(params: {
+  memberId?: string | null;
+  memberEmail: string;
+  squadron: Squadron;
+  trophyId: string;
+  awardedByMemberId?: string | null;
+  earnedAt?: string;
+  accessToken?: string;
+}) {
+  const now = params.earnedAt ?? new Date().toISOString();
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/member_trophies?on_conflict=member_email,trophy_id`,
+    {
+      method: 'POST',
+      headers: {
+        ...(await getHeaders(params.accessToken)),
+        'Content-Type': 'application/json',
+        Prefer: 'resolution=ignore-duplicates,return=representation',
+      },
+      body: JSON.stringify({
+        id: createSupportId('member-trophy'),
+        member_id: params.memberId ?? null,
+        member_email: params.memberEmail.trim().toLowerCase(),
+        squadron: params.squadron,
+        trophy_id: params.trophyId,
+        earned_at: now,
+        awarded_by_member_id: params.awardedByMemberId ?? null,
+        is_active: true,
+        revoked_at: null,
+        created_at: now,
+        updated_at: now,
+      }),
+    }
+  );
+
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to award trophy in Supabase.';
+    throw new Error(message);
+  }
+
+  const awardedRow = Array.isArray(payload) ? (payload as MemberTrophyRow[])[0] : null;
+  return awardedRow ? normalizeMemberTrophyRow(awardedRow) : null;
 }
 
 export async function fetchAttendanceSessions(accessToken?: string) {
@@ -1922,11 +2064,7 @@ export async function fetchSupportThreads(params: {
 
   const threadsPayload = await threadsResponse.json().catch(() => []);
   if (!threadsResponse.ok) {
-    const message =
-      typeof (threadsPayload as { message?: unknown }).message === 'string'
-        ? (threadsPayload as { message: string }).message
-        : 'Unable to load support threads from Supabase.';
-    throw new Error(message);
+    throw new Error(getSupportInboxErrorMessage(threadsPayload, 'Unable to load support threads from Supabase.'));
   }
 
   const threads = threadsPayload as SupportThreadRow[];
@@ -1947,11 +2085,7 @@ export async function fetchSupportThreads(params: {
 
   const messagesPayload = await messagesResponse.json().catch(() => []);
   if (!messagesResponse.ok) {
-    const message =
-      typeof (messagesPayload as { message?: unknown }).message === 'string'
-        ? (messagesPayload as { message: string }).message
-        : 'Unable to load support messages from Supabase.';
-    throw new Error(message);
+    throw new Error(getSupportInboxErrorMessage(messagesPayload, 'Unable to load support messages from Supabase.'));
   }
 
   const messagesByThread = new Map<string, SupportMessage[]>();
@@ -1978,11 +2112,7 @@ export async function fetchSupportMessages(threadId: string, accessToken?: strin
 
   const payload = await response.json().catch(() => []);
   if (!response.ok) {
-    const message =
-      typeof (payload as { message?: unknown }).message === 'string'
-        ? (payload as { message: string }).message
-        : 'Unable to load support conversation.';
-    throw new Error(message);
+    throw new Error(getSupportInboxErrorMessage(payload, 'Unable to load support conversation.'));
   }
 
   return (payload as SupportMessageRow[]).map(normalizeSupportMessage);
@@ -2011,11 +2141,7 @@ async function upsertSupportThread(params: {
 
   const lookupPayload = await lookupResponse.json().catch(() => []);
   if (!lookupResponse.ok) {
-    const message =
-      typeof (lookupPayload as { message?: unknown }).message === 'string'
-        ? (lookupPayload as { message: string }).message
-        : 'Unable to look up FitFlight team support thread.';
-    throw new Error(message);
+    throw new Error(getSupportInboxErrorMessage(lookupPayload, 'Unable to look up FitFlight team support thread.'));
   }
 
   const existing = (lookupPayload as SupportThreadRow[])[0];
@@ -2044,11 +2170,7 @@ async function upsertSupportThread(params: {
 
     const updatePayload = await updateResponse.json().catch(() => []);
     if (!updateResponse.ok) {
-      const message =
-        typeof (updatePayload as { message?: unknown }).message === 'string'
-          ? (updatePayload as { message: string }).message
-          : 'Unable to update FitFlight team support thread.';
-      throw new Error(message);
+      throw new Error(getSupportInboxErrorMessage(updatePayload, 'Unable to update FitFlight team support thread.'));
     }
 
     return (updatePayload as SupportThreadRow[])[0] ?? existing;
@@ -2070,11 +2192,7 @@ async function upsertSupportThread(params: {
 
   const createPayload = await createResponse.json().catch(() => []);
   if (!createResponse.ok) {
-    const message =
-      typeof (createPayload as { message?: unknown }).message === 'string'
-        ? (createPayload as { message: string }).message
-        : 'Unable to create FitFlight team support thread.';
-    throw new Error(message);
+    throw new Error(getSupportInboxErrorMessage(createPayload, 'Unable to create FitFlight team support thread.'));
   }
 
   return (createPayload as SupportThreadRow[])[0] ?? {
@@ -2137,11 +2255,7 @@ export async function sendSupportMessage(params: {
 
   const payload = await response.json().catch(() => []);
   if (!response.ok) {
-    const message =
-      typeof (payload as { message?: unknown }).message === 'string'
-        ? (payload as { message: string }).message
-        : 'Unable to send support message.';
-    throw new Error(message);
+    throw new Error(getSupportInboxErrorMessage(payload, 'Unable to send support message.'));
   }
 
   await fetch(`${SUPABASE_URL}/rest/v1/support_threads?id=eq.${thread.id}`, {
@@ -2284,6 +2398,7 @@ export async function createManualWorkoutSubmission(params: {
   workoutDate: string;
   workoutType: WorkoutType;
   duration: number;
+  durationSeconds?: number;
   distance?: number;
   isPrivate: boolean;
   proofImageData: string;
@@ -2303,6 +2418,7 @@ export async function createManualWorkoutSubmission(params: {
     workout_date: params.workoutDate,
     workout_type: params.workoutType,
     duration: params.duration,
+    duration_seconds: params.durationSeconds ?? 0,
     distance: params.distance ?? null,
     is_private: params.isPrivate,
     proof_image_data: serializeImageReference(params.proofImageData),
@@ -2417,6 +2533,7 @@ export async function updateManualWorkoutSubmission(params: {
   workoutDate: string;
   workoutType: WorkoutType;
   duration: number;
+  durationSeconds?: number;
   distance?: number;
   isPrivate: boolean;
   proofImageData: string;
@@ -2431,6 +2548,7 @@ export async function updateManualWorkoutSubmission(params: {
     workout_date: params.workoutDate,
     workout_type: params.workoutType,
     duration: params.duration,
+    duration_seconds: params.durationSeconds ?? 0,
     distance: params.distance ?? null,
     is_private: params.isPrivate,
     proof_image_data: serializeImageReference(params.proofImageData),
@@ -2544,6 +2662,7 @@ export async function fetchApprovedManualWorkouts(accessToken?: string, squadron
       date: submission.workoutDate,
       type: submission.workoutType,
       duration: submission.duration,
+      durationSeconds: submission.durationSeconds,
       distance: submission.distance,
       source: 'manual' as const,
       screenshotUri: submission.proofImageData,

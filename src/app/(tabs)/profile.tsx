@@ -170,6 +170,7 @@ export default function ProfileScreen() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showManageModal, setShowManageModal] = useState(false);
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showPTLRequestModal, setShowPTLRequestModal] = useState(false);
   const [showChangeSquadronModal, setShowChangeSquadronModal] = useState(false);
   const [showProfilePictureModal, setShowProfilePictureModal] = useState(false);
@@ -1138,7 +1139,7 @@ export default function ProfileScreen() {
       await updateRosterMember(currentMember, updatedMember, accessToken);
     }
 
-      updateMember(user.id, { profilePicture });
+      updateMember(currentMember.id, { profilePicture });
       updateUser({ profilePicture });
 
       const nextStorageValue = profilePicture?.trim();
@@ -1184,25 +1185,27 @@ export default function ProfileScreen() {
 
     try {
       setIsUpdatingProfilePicture(true);
+      setMemberActionError('');
 
       const baseCropSize = Math.min(pendingProfileImageCrop.width, pendingProfileImageCrop.height);
       const cropSize = baseCropSize / profileCropZoom;
       const maxOriginXDelta = Math.max(0, (pendingProfileImageCrop.width - cropSize) / 2);
       const maxOriginYDelta = Math.max(0, (pendingProfileImageCrop.height - cropSize) / 2);
-      const originX = Math.max(
+      const originX = Math.round(Math.max(
         0,
         Math.min(
           pendingProfileImageCrop.width - cropSize,
           (pendingProfileImageCrop.width - cropSize) / 2 + profileCropOffsetX * maxOriginXDelta
         )
-      );
-      const originY = Math.max(
+      ));
+      const originY = Math.round(Math.max(
         0,
         Math.min(
           pendingProfileImageCrop.height - cropSize,
           (pendingProfileImageCrop.height - cropSize) / 2 + profileCropOffsetY * maxOriginYDelta
         )
-      );
+      ));
+      const normalizedCropSize = Math.max(1, Math.round(cropSize));
 
       const croppedImage = await manipulateAsync(
         pendingProfileImageCrop.uri,
@@ -1211,8 +1214,8 @@ export default function ProfileScreen() {
             crop: {
               originX,
               originY,
-              width: cropSize,
-              height: cropSize,
+              width: normalizedCropSize,
+              height: normalizedCropSize,
             },
           },
           { resize: { width: 512, height: 512 } },
@@ -1979,19 +1982,29 @@ export default function ProfileScreen() {
               <Text className="text-af-silver text-sm mt-1">Manage your account</Text>
             </View>
 
-            {/* Notifications Bell */}
-              {isAuthenticated && (
+            {isAuthenticated && (
+              <View className="flex-row items-center">
+                <Pressable
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setShowSettingsModal(true);
+                  }}
+                  className="w-10 h-10 bg-white/10 rounded-full items-center justify-center mr-3"
+                >
+                  <Settings size={20} color="#C0C0C0" />
+                </Pressable>
                 <Pressable
                   onPress={handleOpenNotificationsModal}
                   className="relative w-10 h-10 bg-white/10 rounded-full items-center justify-center"
                 >
-                <Bell size={20} color="#C0C0C0" />
-                {totalUnreadCount > 0 && (
-                  <View className="absolute -top-1 -right-1 w-5 h-5 bg-af-danger rounded-full items-center justify-center">
-                    <Text className="text-white text-xs font-bold">{totalUnreadCount}</Text>
-                  </View>
-                )}
-              </Pressable>
+                  <Bell size={20} color="#C0C0C0" />
+                  {totalUnreadCount > 0 && (
+                    <View className="absolute -top-1 -right-1 w-5 h-5 bg-af-danger rounded-full items-center justify-center">
+                      <Text className="text-white text-xs font-bold">{totalUnreadCount}</Text>
+                    </View>
+                  )}
+                </Pressable>
+              </View>
             )}
           </Animated.View>
 
@@ -2581,17 +2594,6 @@ export default function ProfileScreen() {
               </View>
             </Pressable>
 
-            <Pressable
-              onPress={handleOpenInstallHelp}
-              className="flex-row items-center bg-white/5 border border-white/10 rounded-xl p-4 mb-3"
-            >
-              <LogIn size={24} color="#4A90D9" />
-              <View className="ml-3 flex-1">
-                <Text className="text-white font-semibold">Add to Home Screen</Text>
-                <Text className="text-af-silver text-xs">Install FitFlight on your phone or computer</Text>
-              </View>
-            </Pressable>
-
             {canViewSupportInbox ? (
               <Pressable
                 onPress={handleOpenSupportInbox}
@@ -2686,29 +2688,13 @@ export default function ProfileScreen() {
             className="mx-6 mt-6"
           >
             {isAuthenticated ? (
-              <>
-                {/* Change Squadron Button */}
-                <Pressable
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    setSelectedSquadron(user?.squadron ?? 'Hawks');
-                    setShowChangeSquadronModal(true);
-                  }}
-                  className="flex-row items-center justify-center bg-white/10 border border-white/20 rounded-xl p-4 mb-3"
-                >
-                  <Building2 size={20} color="#C0C0C0" />
-                  <Text className="text-white font-semibold ml-2">Change My Squadron</Text>
-                </Pressable>
-
-                {/* Sign Out Button */}
-                <Pressable
-                  onPress={handleLogout}
-                  className="flex-row items-center justify-center bg-af-danger/20 border border-af-danger/50 rounded-xl p-4"
-                >
-                  <LogOut size={20} color="#EF4444" />
-                  <Text className="text-af-danger font-semibold ml-2">Sign Out</Text>
-                </Pressable>
-              </>
+              <Pressable
+                onPress={handleLogout}
+                className="flex-row items-center justify-center bg-af-danger/20 border border-af-danger/50 rounded-xl p-4"
+              >
+                <LogOut size={20} color="#EF4444" />
+                <Text className="text-af-danger font-semibold ml-2">Sign Out</Text>
+              </Pressable>
             ) : (
               <Pressable
                 onPress={() => router.replace('/login')}
@@ -3361,16 +3347,20 @@ export default function ProfileScreen() {
       <Modal visible={showDeveloperMessageModal} transparent animationType="slide">
         <View className="flex-1 bg-black/80 justify-end">
           <View className="bg-af-navy rounded-t-3xl p-6 pb-10 max-h-[88%]">
-            <View className="flex-row items-center justify-between mb-4">
-              <View>
+            <View className="flex-row items-start justify-between mb-4">
+              <View className="flex-1 pr-4">
                 <Text className="text-white text-xl font-bold">Message the FitFlight Team</Text>
                 <Text className="text-af-silver text-sm mt-1">
-                  {activeSupportContact ? `Send a message to ${activeSupportContact.title.toLowerCase()} without leaving the app` : 'Send a support message without leaving the app'}
+                  {activeSupportContact?.key === 'project_coordinator'
+                    ? 'Message the project coordinator in-app.'
+                    : activeSupportContact
+                      ? `Message the ${activeSupportContact.title.toLowerCase()} in-app.`
+                      : 'Send a support message without leaving the app.'}
                 </Text>
               </View>
               <Pressable
                 onPress={() => setShowDeveloperMessageModal(false)}
-                className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+                className="mt-1 w-8 h-8 bg-white/10 rounded-full items-center justify-center"
               >
                 <X size={20} color="#C0C0C0" />
               </Pressable>
@@ -3734,6 +3724,58 @@ export default function ProfileScreen() {
             >
               <Text className="text-af-silver text-center">Cancel</Text>
             </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showSettingsModal} transparent animationType="fade">
+        <View className="flex-1 bg-black/80 items-center justify-center p-6">
+          <View className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20">
+            <View className="flex-row items-center justify-between mb-4">
+              <View className="flex-1 pr-4">
+                <Text className="text-white text-xl font-bold">Settings</Text>
+                <Text className="text-af-silver text-sm mt-1">Account and app preferences.</Text>
+              </View>
+              <Pressable
+                onPress={() => setShowSettingsModal(false)}
+                className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+              >
+                <X size={20} color="#C0C0C0" />
+              </Pressable>
+            </View>
+
+            <Pressable
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setShowSettingsModal(false);
+                setSelectedSquadron(user?.squadron ?? 'Hawks');
+                setShowChangeSquadronModal(true);
+              }}
+              className="flex-row items-center rounded-xl border border-white/20 bg-white/10 p-4"
+            >
+              <Building2 size={20} color="#C0C0C0" />
+              <View className="ml-3 flex-1">
+                <Text className="text-white font-semibold">Change My Squadron</Text>
+                <Text className="text-af-silver text-xs mt-1">Update the squadron tied to this account.</Text>
+              </View>
+            </Pressable>
+
+            {isWeb ? (
+              <Pressable
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setShowSettingsModal(false);
+                  handleOpenInstallHelp();
+                }}
+                className="flex-row items-center rounded-xl border border-white/20 bg-white/10 p-4 mt-3"
+              >
+                <LogIn size={20} color="#4A90D9" />
+                <View className="ml-3 flex-1">
+                  <Text className="text-white font-semibold">Add to Home Screen</Text>
+                  <Text className="text-af-silver text-xs mt-1">Install FitFlight on your phone or computer.</Text>
+                </View>
+              </Pressable>
+            ) : null}
           </View>
         </View>
       </Modal>
@@ -4165,6 +4207,7 @@ export default function ProfileScreen() {
                             submissionId: submission.id,
                             workoutType: submission.workoutType,
                             duration: String(submission.duration),
+                            durationSeconds: String(submission.durationSeconds ?? 0),
                             distance: typeof submission.distance === 'number' ? String(submission.distance) : '',
                             isPrivate: String(submission.isPrivate),
                             screenshotUri: submission.proofImageData,
@@ -4243,6 +4286,7 @@ export default function ProfileScreen() {
                                   submissionId: workout.externalId,
                                   workoutType: workout.type,
                                   duration: String(workout.duration),
+                                  durationSeconds: String(workout.durationSeconds ?? 0),
                                   distance: typeof workout.distance === 'number' ? String(workout.distance) : '',
                                   isPrivate: String(workout.isPrivate),
                                   screenshotUri: workout.screenshotUri ?? '',

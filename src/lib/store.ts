@@ -75,6 +75,7 @@ export interface Workout {
   date: string;
   type: WorkoutType;
   duration: number; // minutes
+  durationSeconds?: number;
   distance?: number; // miles
   source: 'manual' | 'screenshot' | 'apple_health' | 'strava' | 'garmin' | 'attendance';
   screenshotUri?: string;
@@ -247,30 +248,13 @@ const WEEKLY_WARRIOR_SESSION_TARGET = 5;
 export const getEffectiveAchievementIds = (
   member: Pick<Member, 'achievements' | 'trophyCount' | 'monthlyPlacements'>
 ) => {
-  const sanitized = member.achievements.filter(
+  return member.achievements.filter(
     (achievementId) => !REMOVED_TROPHY_IDS.has(achievementId) && TROPHY_IDS.has(achievementId)
   );
-  const nextAchievements = new Set(sanitized);
-
-  if (member.trophyCount > 0 || member.monthlyPlacements.length > 0) {
-    nextAchievements.add('top_3_month');
-  }
-
-  return Array.from(nextAchievements);
 };
 
 const withCompletionist = (member: Pick<Member, 'achievements' | 'trophyCount' | 'monthlyPlacements'>) => {
-  const effectiveAchievements = new Set(getEffectiveAchievementIds(member));
-  effectiveAchievements.delete('completionist');
-  const shouldUnlockCompletionist = ALL_ACHIEVEMENTS
-    .filter((achievement) => achievement.id !== 'completionist')
-    .every((achievement) => effectiveAchievements.has(achievement.id));
-
-  if (shouldUnlockCompletionist) {
-    effectiveAchievements.add('completionist');
-  }
-
-  return Array.from(effectiveAchievements);
+  return Array.from(new Set(getEffectiveAchievementIds(member)));
 };
 
 const getWeekStartKey = (dateValue: string) => {
@@ -307,7 +291,7 @@ const countMaxConsecutiveWeeks = (weekKeys: string[]) => {
   return longest;
 };
 
-const getAutomaticAchievementIds = (
+export const getAutomaticAchievementIds = (
   member: Pick<Member, 'id' | 'workouts' | 'distanceRun' | 'fitnessAssessments' | 'requiredPTSessionsPerWeek' | 'trophyCount' | 'monthlyPlacements' | 'flight' | 'squadron'>,
   ptSessions: PTSession[],
   sharedWorkouts: SharedWorkout[]
@@ -392,16 +376,9 @@ const getAutomaticAchievementIds = (
 };
 
 const buildMemberWithDerivedAchievements = (member: Member, ptSessions: PTSession[], sharedWorkouts: SharedWorkout[]) => {
-  const automaticAchievements = getAutomaticAchievementIds(member, ptSessions, sharedWorkouts);
-  const existingAchievements = getEffectiveAchievementIds(member);
-  const mergedAchievements = Array.from(new Set([...existingAchievements, ...automaticAchievements]));
-
   return {
     ...member,
-    achievements: withCompletionist({
-      ...member,
-      achievements: mergedAchievements,
-    }),
+    achievements: withCompletionist(member),
   };
 };
 
@@ -474,6 +451,7 @@ interface MemberState {
   syncApprovedManualWorkouts: (entries: Array<{ memberId?: string; memberEmail?: string; workouts: Workout[] }>) => void;
   syncFitnessAssessments: (entries: Array<{ memberId?: string; memberEmail?: string; assessments: FitnessAssessment[] }>) => void;
   syncLeaderboardHistory: () => void;
+  syncMemberAchievements: (entries: Array<{ memberId?: string; memberEmail?: string; achievements: string[] }>) => void;
 
   // Achievement actions
   awardAchievement: (memberId: string, achievementId: string) => void;
@@ -587,7 +565,7 @@ const mergeMember = (base: Member, existing?: Member): Member => {
     connectedApps: existing.connectedApps,
     fitnessAssessments: existing.fitnessAssessments,
     workouts: existing.workouts,
-    achievements: existing.achievements,
+    achievements: base.achievements,
     requiredPTSessionsPerWeek: existing.requiredPTSessionsPerWeek,
     isVerified: existing.isVerified,
     ptlPendingApproval: existing.ptlPendingApproval,
@@ -859,6 +837,9 @@ export const useMemberStore = create<MemberState>()(
           ptSessions: nextPtSessions,
           scheduledSessions: nextScheduledSessions,
           sharedWorkouts: nextSharedWorkouts,
+          recentAchievementId:
+            findNewlyEarnedAchievementId(state.members, hydrateDerivedMemberState(nextMembers, nextPtSessions, nextSharedWorkouts)) ??
+            state.recentAchievementId,
           ufpmId:
             state.ufpmId && validMemberIds.has(mapMemberId(state.ufpmId))
               ? mapMemberId(state.ufpmId)
@@ -1154,6 +1135,32 @@ export const useMemberStore = create<MemberState>()(
       syncLeaderboardHistory: () => set((state) => ({
         members: hydrateDerivedMemberState(state.members, state.ptSessions, state.sharedWorkouts),
       })),
+
+      syncMemberAchievements: (entries) => set((state) => {
+        const nextMembers = state.members.map((member) => {
+          const match = entries.find((entry) =>
+            (entry.memberId && entry.memberId === member.id) ||
+            (entry.memberEmail && entry.memberEmail.trim().toLowerCase() === member.email.trim().toLowerCase())
+          );
+
+          if (!match) {
+            return member;
+          }
+
+          return {
+            ...member,
+            achievements: withCompletionist({
+              ...member,
+              achievements: match.achievements,
+            }),
+          };
+        });
+
+        return {
+          members: nextMembers,
+          recentAchievementId: findNewlyEarnedAchievementId(state.members, nextMembers) ?? state.recentAchievementId,
+        };
+      }),
 
       // Achievement actions
       awardAchievement: (memberId, achievementId) => set((state) => ({

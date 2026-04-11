@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ScrollView, Text, View, Pressable, Modal, Platform } from 'react-native';
+import { ScrollView, Text, View, Pressable, Modal, Platform, Image } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -45,6 +45,7 @@ function NavCard({
   bgClass,
   borderClass,
   onPress,
+  imageUri,
 }: {
   title: string;
   icon: React.ElementType;
@@ -52,13 +53,22 @@ function NavCard({
   bgClass: string;
   borderClass: string;
   onPress: () => void;
+  imageUri?: string;
 }) {
   return (
     <Pressable onPress={onPress} className={`flex-1 rounded-2xl border p-4 min-h-[132px] ${bgClass} ${borderClass}`}>
       <View className="flex-1 justify-between">
-        <View className="w-12 h-12 rounded-2xl items-center justify-center bg-white/10">
-          <Icon size={24} color={color} />
-        </View>
+        {imageUri ? (
+          <Image
+            source={{ uri: imageUri }}
+            className="w-12 h-12 rounded-2xl"
+            resizeMode="cover"
+          />
+        ) : (
+          <View className="w-12 h-12 rounded-2xl items-center justify-center bg-white/10">
+            <Icon size={24} color={color} />
+          </View>
+        )}
         <View className="mt-4">
           <Text className="text-white text-base font-semibold">{title}</Text>
         </View>
@@ -408,6 +418,7 @@ export default function HomeScreen() {
                   color="#C0C0C0"
                   bgClass="bg-white/5"
                   borderClass="border-white/10"
+                  imageUri={user?.profilePicture}
                   onPress={() => navigate('/profile')}
                 />
               </View>

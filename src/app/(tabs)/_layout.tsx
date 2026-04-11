@@ -4,10 +4,12 @@ import { createMaterialTopTabNavigator } from "@react-navigation/material-top-ta
 import { Ionicons } from "@expo/vector-icons";
 import { ActivityIndicator, Image, View } from "react-native";
 import { TabSwipeProvider, useTabSwipe } from "@/contexts/TabSwipeContext";
-import { useAuthStore, useMemberStore } from "@/lib/store";
+import { ALL_ACHIEVEMENTS, getAutomaticAchievementIds, useAuthStore, useMemberStore } from "@/lib/store";
 import {
+  awardMemberTrophy,
   fetchApprovedManualWorkouts,
   fetchAttendanceSessions,
+  fetchMemberTrophies,
   fetchPFRARecords,
   fetchRosterMembers,
   fetchScheduledPTSessions,
@@ -41,6 +43,7 @@ function TabsInner() {
   const syncApprovedManualWorkouts = useMemberStore((state) => state.syncApprovedManualWorkouts);
   const syncFitnessAssessments = useMemberStore((state) => state.syncFitnessAssessments);
   const syncLeaderboardHistory = useMemberStore((state) => state.syncLeaderboardHistory);
+  const syncMemberAchievements = useMemberStore((state) => state.syncMemberAchievements);
   const pruneOldWorkoutMedia = useMemberStore((state) => state.pruneOldWorkoutMedia);
   const lastRosterSyncKeyRef = useRef<string | null>(null);
   const lastAttendanceSyncKeyRef = useRef<string | null>(null);
@@ -116,6 +119,7 @@ function TabsInner() {
         accountType: member.accountType,
         email: member.email,
         profilePicture: member.profilePicture ?? null,
+        achievements: [...member.achievements].sort(),
         mustChangePassword: member.mustChangePassword ?? false,
         hasLoggedIntoApp: member.hasLoggedIntoApp ?? false,
       }))
@@ -132,17 +136,48 @@ function TabsInner() {
       try {
         pruneOldWorkoutMedia(getMonthKey());
         const squadron = user?.squadron ?? 'Hawks';
-        const [rosterMembers, attendanceSessions, sharedWorkouts, approvedManualWorkouts, pfraRecords, scheduledSessions] = await Promise.all([
+        const [rosterMembers, attendanceSessions, sharedWorkouts, approvedManualWorkouts, pfraRecords, scheduledSessions, trophyRows] = await Promise.all([
           fetchRosterMembers(accessToken ?? undefined, squadron),
           fetchAttendanceSessions(accessToken ?? undefined).catch(() => []),
           fetchSharedWorkouts(accessToken ?? undefined, squadron).catch(() => []),
           fetchApprovedManualWorkouts(accessToken ?? undefined, squadron).catch(() => []),
           fetchPFRARecords(accessToken ?? undefined, squadron).catch(() => []),
           fetchScheduledPTSessions(accessToken ?? undefined, squadron).catch(() => []),
+          fetchMemberTrophies(accessToken ?? undefined, squadron, true).catch(() => []),
         ]);
         if (isCancelled) {
           return;
         }
+
+        const activeTrophiesByMember = new Map<string, Set<string>>();
+        const knownTrophiesByMember = new Map<string, Set<string>>();
+
+        trophyRows.forEach((row) => {
+          const emailKey = row.memberEmail.trim().toLowerCase();
+          const knownForEmail = knownTrophiesByMember.get(emailKey) ?? new Set<string>();
+          knownForEmail.add(row.trophyId);
+          knownTrophiesByMember.set(emailKey, knownForEmail);
+
+          if (row.memberId) {
+            const knownForId = knownTrophiesByMember.get(row.memberId) ?? new Set<string>();
+            knownForId.add(row.trophyId);
+            knownTrophiesByMember.set(row.memberId, knownForId);
+          }
+
+          if (!row.isActive) {
+            return;
+          }
+
+          const activeForEmail = activeTrophiesByMember.get(emailKey) ?? new Set<string>();
+          activeForEmail.add(row.trophyId);
+          activeTrophiesByMember.set(emailKey, activeForEmail);
+
+          if (row.memberId) {
+            const activeForId = activeTrophiesByMember.get(row.memberId) ?? new Set<string>();
+            activeForId.add(row.trophyId);
+            activeTrophiesByMember.set(row.memberId, activeForId);
+          }
+        });
 
         const normalizedRosterMembers = user
           ? rosterMembers.map((member) => {
@@ -158,12 +193,31 @@ function TabsInner() {
                 return {
                   ...member,
                   id: user.id,
+                  achievements: Array.from(
+                    activeTrophiesByMember.get(user.email?.toLowerCase() ?? '') ??
+                    activeTrophiesByMember.get(user.id) ??
+                    []
+                  ),
                 };
               }
 
-              return member;
+              return {
+                ...member,
+                achievements: Array.from(
+                  activeTrophiesByMember.get(member.email.toLowerCase()) ??
+                  activeTrophiesByMember.get(member.id) ??
+                  []
+                ),
+              };
             })
-          : rosterMembers;
+          : rosterMembers.map((member) => ({
+              ...member,
+              achievements: Array.from(
+                activeTrophiesByMember.get(member.email.toLowerCase()) ??
+                activeTrophiesByMember.get(member.id) ??
+                []
+              ),
+            }));
 
         const { mapMemberId, hasMemberId } = buildMemberIdMap(normalizedRosterMembers);
         const remappedAttendanceSessions = attendanceSessions.map((session) => ({
@@ -238,6 +292,71 @@ function TabsInner() {
           syncLeaderboardHistory();
         }
 
+        const currentStoreState = useMemberStore.getState();
+        const trophySyncEntries = currentStoreState.members.map((member) => {
+          const emailKey = member.email.trim().toLowerCase();
+          const activeAchievements = new Set([
+            ...(activeTrophiesByMember.get(emailKey) ?? []),
+            ...(activeTrophiesByMember.get(member.id) ?? []),
+          ]);
+          const knownAchievements = new Set([
+            ...(knownTrophiesByMember.get(emailKey) ?? []),
+            ...(knownTrophiesByMember.get(member.id) ?? []),
+          ]);
+          const automaticAchievements = new Set(
+            getAutomaticAchievementIds(member, currentStoreState.ptSessions, currentStoreState.sharedWorkouts)
+          );
+          const missingAchievements = Array.from(automaticAchievements).filter(
+            (achievementId) => !knownAchievements.has(achievementId)
+          );
+          const desiredAchievements = new Set<string>([
+            ...Array.from(activeAchievements),
+            ...missingAchievements,
+          ]);
+          const shouldUnlockCompletionist = ALL_ACHIEVEMENTS
+            .filter((achievement) => achievement.id !== "completionist")
+            .every((achievement) => desiredAchievements.has(achievement.id));
+
+          if (shouldUnlockCompletionist && !knownAchievements.has("completionist")) {
+            missingAchievements.push("completionist");
+            desiredAchievements.add("completionist");
+          }
+
+          return {
+            memberId: member.id,
+            memberEmail: member.email,
+            squadron: member.squadron,
+            achievements: Array.from(desiredAchievements),
+            missingAchievements,
+          };
+        });
+
+        syncMemberAchievements(
+          trophySyncEntries.map((entry) => ({
+            memberId: entry.memberId,
+            memberEmail: entry.memberEmail,
+            achievements: entry.achievements,
+          }))
+        );
+
+        await Promise.all(
+          trophySyncEntries.flatMap((entry) =>
+            entry.missingAchievements.map((trophyId) =>
+              awardMemberTrophy({
+                memberId: entry.memberId,
+                memberEmail: entry.memberEmail,
+                squadron: entry.squadron,
+                trophyId,
+                awardedByMemberId: user?.id ?? null,
+                accessToken: accessToken ?? undefined,
+              }).catch((error) => {
+                console.error(`Unable to persist trophy ${trophyId} for ${entry.memberEmail}.`, error);
+                return null;
+              })
+            )
+          )
+        );
+
         if (user) {
           const matchingMember = normalizedRosterMembers.find((member) => {
             if (member.email && user.email && member.email.toLowerCase() === user.email.toLowerCase()) {
@@ -277,7 +396,7 @@ function TabsInner() {
       isCancelled = true;
       clearInterval(interval);
     };
-  }, [accessToken, hasCheckedAuth, isAuthenticated, pruneOldWorkoutMedia, syncApprovedManualWorkouts, syncFitnessAssessments, syncLeaderboardHistory, syncMembersFromRoster, syncPTSessions, syncScheduledSessions, syncSharedWorkouts, updateUser, user]);
+  }, [accessToken, hasCheckedAuth, isAuthenticated, pruneOldWorkoutMedia, syncApprovedManualWorkouts, syncFitnessAssessments, syncLeaderboardHistory, syncMemberAchievements, syncMembersFromRoster, syncPTSessions, syncScheduledSessions, syncSharedWorkouts, updateUser, user]);
 
   if (!hasCheckedAuth) {
     return (

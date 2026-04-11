@@ -36,6 +36,7 @@ export default function AddWorkoutScreen() {
     submissionId?: string;
     workoutType?: WorkoutType;
     duration?: string;
+    durationSeconds?: string;
     distance?: string;
     isPrivate?: string;
     screenshotUri?: string;
@@ -57,6 +58,7 @@ export default function AddWorkoutScreen() {
   });
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [duration, setDuration] = useState(params.duration ?? '');
+  const [durationSeconds, setDurationSeconds] = useState(params.durationSeconds ?? '');
   const [distance, setDistance] = useState(params.distance ?? '');
   const [isPrivate, setIsPrivate] = useState(params.isPrivate === 'true');
   const [showConfirmation, setShowConfirmation] = useState(false);
@@ -68,7 +70,7 @@ export default function AddWorkoutScreen() {
   const attendanceMarkedBySubmission = params.attendanceMarkedBySubmission === 'true';
   const isWeb = Platform.OS === 'web';
 
-  const canSubmit = duration && screenshotUri;
+  const canSubmit = !!((duration || durationSeconds) && screenshotUri);
   const webWorkoutTypeScrollProps = Platform.OS === 'web'
     ? ({
         onWheel: (event: any) => {
@@ -113,12 +115,14 @@ export default function AddWorkoutScreen() {
 
   const handleSubmit = () => {
     const run = async () => {
-      if (!user || !duration || !screenshotUri || !accessToken) return;
+      if (!user || !(duration || durationSeconds) || !screenshotUri || !accessToken) return;
 
       setSubmitError(null);
       setIsSubmitting(true);
 
       try {
+        const parsedMinutes = parseInt(duration || '0', 10) || 0;
+        const parsedSeconds = Math.min(59, Math.max(0, parseInt(durationSeconds || '0', 10) || 0));
         const submissionId = params.submissionId ?? `manual-workout-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
         const proofImageData = existingProofUri && screenshotUri === existingProofUri
           ? screenshotUri
@@ -147,7 +151,8 @@ export default function AddWorkoutScreen() {
             submissionId,
             workoutDate: getLocalDateString(selectedDate),
             workoutType,
-            duration: parseInt(duration, 10) || 0,
+            duration: parsedMinutes,
+            durationSeconds: parsedSeconds,
             distance: distance ? parseFloat(distance) : undefined,
             isPrivate,
             proofImageData,
@@ -175,7 +180,8 @@ export default function AddWorkoutScreen() {
             squadron: user.squadron,
             workoutDate: getLocalDateString(selectedDate),
             workoutType,
-            duration: parseInt(duration, 10) || 0,
+            duration: parsedMinutes,
+            durationSeconds: parsedSeconds,
             distance: distance ? parseFloat(distance) : undefined,
             isPrivate,
             proofImageData,
@@ -388,7 +394,7 @@ export default function AddWorkoutScreen() {
             entering={FadeInDown.delay(300).springify()}
             className="mt-4"
           >
-            <Text className="text-white/60 text-sm mb-2">Duration (minutes) *</Text>
+            <Text className="text-white/60 text-sm mb-2">Duration *</Text>
             <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10">
               <Clock size={20} color="#C0C0C0" />
               <TextInput
@@ -399,7 +405,16 @@ export default function AddWorkoutScreen() {
                 keyboardType="numeric"
                 className="flex-1 ml-3 text-white text-base"
               />
-              <Text className="text-af-silver">min</Text>
+              <Text className="text-af-silver mr-3">min</Text>
+              <TextInput
+                value={durationSeconds}
+                onChangeText={(value) => setDurationSeconds(value.replace(/[^0-9]/g, '').slice(0, 2))}
+                placeholder="00"
+                placeholderTextColor="#ffffff40"
+                keyboardType="numeric"
+                className="w-12 text-white text-base text-right"
+              />
+              <Text className="text-af-silver ml-2">sec</Text>
             </View>
           </Animated.View>
 
@@ -535,7 +550,9 @@ export default function AddWorkoutScreen() {
               </View>
               <View className="flex-row justify-between mb-2">
                 <Text className="text-af-silver">Duration</Text>
-                <Text className="text-white font-semibold">{duration} min</Text>
+                <Text className="text-white font-semibold">
+                  {(parseInt(duration || '0', 10) || 0)} min {String(Math.min(59, Math.max(0, parseInt(durationSeconds || '0', 10) || 0))).padStart(2, '0')} sec
+                </Text>
               </View>
               {distance && (
                 <View className="flex-row justify-between mb-2">

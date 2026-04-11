@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { Alert, View, Text, Pressable, ScrollView, TextInput, Modal, KeyboardAvoidingView, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Plus, Search, X, ThumbsUp, ThumbsDown, Star, Trash2, Clock, Flame, ChevronDown, Check, ListOrdered, Filter, Pencil } from 'lucide-react-native';
+import { Plus, Search, X, ThumbsUp, ThumbsDown, Star, Trash2, Clock, Flame, ChevronDown, ChevronUp, Check, ListOrdered, Filter, Pencil } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeInRight } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import SmartSlider from "../../components/SmartSlider";
@@ -202,11 +202,11 @@ function WorkoutCard({
               </Text>
             </Pressable>
           </View>
-          <ChevronDown
-            size={20}
-            color="#C0C0C0"
-            style={{ transform: [{ rotate: expanded ? '180deg' : '0deg' }] }}
-          />
+          {expanded ? (
+            <ChevronUp size={20} color="#C0C0C0" />
+          ) : (
+            <ChevronDown size={20} color="#C0C0C0" />
+          )}
         </View>
       </Pressable>
 
