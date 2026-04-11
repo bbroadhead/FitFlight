@@ -1,13 +1,13 @@
 import { DarkTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack, usePathname } from 'expo-router';
+import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
-import { useEffect, useMemo, useState } from 'react';
-import { Image, Platform, ScrollView, Text, View } from 'react-native';
-import { useAuthStore, useMemberStore, ALL_ACHIEVEMENTS } from '@/lib/store';
+import { useEffect } from 'react';
+import { Image, ScrollView, Text, View } from 'react-native';
+import { useMemberStore, ALL_ACHIEVEMENTS } from '@/lib/store';
 import { AchievementCelebration } from '@/components/AchievementCelebration';
 import { TutorialTourProvider } from '@/contexts/TutorialTourContext';
 
@@ -31,97 +31,6 @@ const AirForceDarkTheme = {
     primary: '#4A90D9',
   },
 };
-
-function StartupDiagnostics() {
-  const pathname = usePathname();
-  const hasCheckedAuth = useAuthStore((state) => state.hasCheckedAuth);
-  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
-  const user = useAuthStore((state) => state.user);
-  const [logs, setLogs] = useState<string[]>([]);
-
-  const isStandaloneWeb = useMemo(() => {
-    if (Platform.OS !== 'web' || typeof window === 'undefined') {
-      return false;
-    }
-
-    return (
-      (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
-      // @ts-expect-error iOS Safari standalone
-      window.navigator.standalone === true
-    );
-  }, []);
-
-  useEffect(() => {
-    if (!isStandaloneWeb || typeof window === 'undefined') {
-      return;
-    }
-
-    setLogs((current) => {
-      if (current.length > 0) {
-        return current;
-      }
-
-      const initial = [
-        `standalone=${String(isStandaloneWeb)}`,
-        `href=${window.location.href}`,
-      ];
-      return initial;
-    });
-  }, [isStandaloneWeb]);
-
-  useEffect(() => {
-    if (!isStandaloneWeb) {
-      return;
-    }
-
-    const nextLine = [
-      pathname || '(root)',
-      `checked=${String(hasCheckedAuth)}`,
-      `auth=${String(isAuthenticated)}`,
-      `user=${user?.email ?? 'none'}`,
-    ].join(' | ');
-
-    setLogs((current) => {
-      if (current[current.length - 1] === nextLine) {
-        return current;
-      }
-
-      return [...current.slice(-7), nextLine];
-    });
-  }, [hasCheckedAuth, isAuthenticated, isStandaloneWeb, pathname, user?.email]);
-
-  if (!isStandaloneWeb) {
-    return null;
-  }
-
-  return (
-    <View
-      pointerEvents="none"
-      style={{
-        position: 'absolute',
-        left: 10,
-        right: 10,
-        top: 48,
-        zIndex: 9999,
-        borderRadius: 16,
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.14)',
-        backgroundColor: 'rgba(5, 12, 24, 0.82)',
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-      }}
-    >
-      <Text style={{ color: '#4A90D9', fontSize: 11, fontWeight: '700', marginBottom: 4 }}>
-        Startup Diagnostics
-      </Text>
-      {logs.map((line, index) => (
-        <Text key={`${index}-${line}`} style={{ color: '#FFFFFF', fontSize: 10, lineHeight: 14 }}>
-          {line}
-        </Text>
-      ))}
-    </View>
-  );
-}
 
 function RootLayoutNav() {
   const recentAchievementId = useMemberStore((state) => state.recentAchievementId);
@@ -162,7 +71,6 @@ function RootLayoutNav() {
             onDismiss={dismissAchievementCelebration}
           />
         ) : null}
-        <StartupDiagnostics />
       </TutorialTourProvider>
     </ThemeProvider>
   );

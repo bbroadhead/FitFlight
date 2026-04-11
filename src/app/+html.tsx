@@ -11,7 +11,7 @@ export default function Root({ children }: { children: React.ReactNode }) {
       <head>
         <meta charSet="utf-8" />
         <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
-        <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no, viewport-fit=cover" />
         <link rel="manifest" href={`${basePath}/manifest.json`} />
         <link rel="shortcut icon" href={`${basePath}/favicon.png`} />
         <link
@@ -47,6 +47,13 @@ const responsiveBackground = `
 body {
   background-color: #fff;
 }
+
+input,
+textarea,
+select {
+  font-size: 16px !important;
+}
+
 @media (prefers-color-scheme: dark) {
   body {
     background-color: #000;
