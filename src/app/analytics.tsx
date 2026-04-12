@@ -224,7 +224,7 @@ export default function AnalyticsScreen() {
           attendance: weeklyAttendance,
           workouts: weeklyWorkouts.length,
           minutes: weeklyMinutes,
-          miles: Number(weeklyMiles.toFixed(1)),
+        miles: Number(weeklyMiles.toFixed(2)),
         };
       })
       .sort((left, right) =>
@@ -306,7 +306,7 @@ export default function AnalyticsScreen() {
         <td>${flight.sessions}</td>
         <td>${flight.avgAttendance}</td>
         <td>${flight.totalMinutes}</td>
-        <td>${flight.totalMiles.toFixed(1)}</td>
+        <td>${flight.totalMiles.toFixed(2)}</td>
       </tr>
     `).join('');
 
@@ -716,7 +716,7 @@ export default function AnalyticsScreen() {
                     <View className="items-end">
                       <Text className="text-white text-sm">{member.attendance}/5 attendance</Text>
                       <Text className="text-af-silver text-xs">
-                        {member.workouts} workouts, {member.minutes} min, {member.miles.toFixed(1)} mi
+                    {member.workouts} workouts, {member.minutes} min, {member.miles.toFixed(2)} mi
                       </Text>
                     </View>
                   </View>
@@ -780,7 +780,7 @@ export default function AnalyticsScreen() {
                     const heightPercent = analytics.maxPFRAAverage > 0 ? (entry.average / analytics.maxPFRAAverage) * 100 : 0;
                     return (
                       <View key={entry.label} className="flex-1 items-center">
-                        <Text className="text-af-silver text-[11px] mb-2">{entry.average ? entry.average.toFixed(1) : '--'}</Text>
+                        <Text className="text-af-silver text-[11px] mb-2">{entry.average ? entry.average.toFixed(2) : '--'}</Text>
                         <View className="h-24 w-12 justify-end">
                           <View
                             className="w-12 rounded-t-xl bg-af-accent/80 border border-af-accent/30"
@@ -930,7 +930,7 @@ export default function AnalyticsScreen() {
                   </View>
                   <View>
                     <Text className="text-af-silver text-xs">Miles</Text>
-                    <Text className="text-white font-semibold">{flight.totalMiles.toFixed(1)}</Text>
+                    <Text className="text-white font-semibold">{flight.totalMiles.toFixed(2)}</Text>
                   </View>
                   <View>
                     <Text className="text-af-silver text-xs">Sessions</Text>

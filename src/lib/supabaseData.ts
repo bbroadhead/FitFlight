@@ -104,6 +104,7 @@ type MemberTrophyRow = {
   earned_at: string;
   awarded_by_member_id: string | null;
   is_active: boolean;
+  celebration_shown_at: string | null;
   revoked_at: string | null;
   created_at: string;
   updated_at: string;
@@ -267,6 +268,7 @@ export type MemberTrophyRecord = {
   earnedAt: string;
   awardedByMemberId: string | null;
   isActive: boolean;
+  celebrationShownAt: string | null;
   revokedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -757,6 +759,7 @@ function normalizeMemberTrophyRow(row: MemberTrophyRow): MemberTrophyRecord {
     earnedAt: row.earned_at,
     awardedByMemberId: row.awarded_by_member_id,
     isActive: row.is_active,
+    celebrationShownAt: row.celebration_shown_at,
     revokedAt: row.revoked_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -1064,7 +1067,7 @@ export async function fetchMemberTrophies(accessToken?: string, squadron?: Squad
   const query = new URLSearchParams();
   query.set(
     'select',
-    'id,member_id,member_email,squadron,trophy_id,earned_at,awarded_by_member_id,is_active,revoked_at,created_at,updated_at'
+    'id,member_id,member_email,squadron,trophy_id,earned_at,awarded_by_member_id,is_active,celebration_shown_at,revoked_at,created_at,updated_at'
   );
   query.set('order', 'earned_at.asc');
   if (squadron) {
@@ -1119,6 +1122,7 @@ export async function awardMemberTrophy(params: {
         earned_at: now,
         awarded_by_member_id: params.awardedByMemberId ?? null,
         is_active: true,
+        celebration_shown_at: null,
         revoked_at: null,
         created_at: now,
         updated_at: now,
@@ -1137,6 +1141,31 @@ export async function awardMemberTrophy(params: {
 
   const awardedRow = Array.isArray(payload) ? (payload as MemberTrophyRow[])[0] : null;
   return awardedRow ? normalizeMemberTrophyRow(awardedRow) : null;
+}
+
+export async function markMemberTrophyCelebrationShown(id: string, accessToken?: string) {
+  const timestamp = new Date().toISOString();
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/member_trophies?id=eq.${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: {
+      ...(await getHeaders(accessToken)),
+      'Content-Type': 'application/json',
+      Prefer: 'return=minimal',
+    },
+    body: JSON.stringify({
+      celebration_shown_at: timestamp,
+      updated_at: timestamp,
+    }),
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to mark trophy celebration as shown.';
+    throw new Error(message);
+  }
 }
 
 export async function fetchAttendanceSessions(accessToken?: string) {
@@ -2756,10 +2785,20 @@ export async function fetchGoogleAnalyticsUsage(accessToken?: string) {
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const message =
+    const rawMessage =
       typeof (payload as { error?: unknown }).error === 'string'
         ? (payload as { error: string }).error
         : 'Unable to load app usage analytics.';
+    const normalized = rawMessage.toLowerCase();
+    const message = normalized.includes('missing environment variable')
+      ? 'App Usage Analytics is missing a Google Analytics secret in Supabase.'
+      : normalized.includes('permission')
+        ? 'Your account does not have permission to view App Usage Analytics.'
+        : normalized.includes('unable to authorize google analytics access')
+          ? 'Google Analytics authentication failed. Recheck the GA service-account secrets in Supabase.'
+          : normalized.includes('property')
+            ? 'Google Analytics could not access the configured property. Recheck the Property ID and service-account access.'
+            : rawMessage;
     throw new Error(message);
   }
 

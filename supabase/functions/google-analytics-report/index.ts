@@ -8,6 +8,8 @@ const corsHeaders = {
 };
 
 const ALLOWED_ROLES = new Set(['fitflight_creator', 'ufpm', 'demo', 'squadron_leadership']);
+const OWNER_EMAIL = 'benjamin.broadhead.2@us.af.mil';
+const DEMO_EMAIL = 'fitflight@us.af.mil';
 const GOOGLE_OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const GOOGLE_ANALYTICS_DATA_URL = 'https://analyticsdata.googleapis.com/v1beta';
 const GOOGLE_ANALYTICS_SCOPE = 'https://www.googleapis.com/auth/analytics.readonly';
@@ -194,7 +196,9 @@ Deno.serve(async (request) => {
     }
 
     const requesterRole = roleRows?.[0]?.app_role;
-    if (!ALLOWED_ROLES.has(requesterRole)) {
+    const requesterEmail = user.email.toLowerCase();
+    const isImplicitlyAllowedUser = requesterEmail === OWNER_EMAIL || requesterEmail === DEMO_EMAIL;
+    if (!isImplicitlyAllowedUser && !ALLOWED_ROLES.has(requesterRole)) {
       return json({ error: 'You do not have permission to view app usage analytics.' }, { status: 403 });
     }
 

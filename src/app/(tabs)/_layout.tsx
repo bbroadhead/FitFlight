@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from "react";
 import { Redirect, withLayoutContext } from "expo-router";
 import { createMaterialTopTabNavigator } from "@react-navigation/material-top-tabs";
 import { Ionicons } from "@expo/vector-icons";
-import { ActivityIndicator, Image, View } from "react-native";
+import { ActivityIndicator, Image, Platform, View } from "react-native";
 import { TabSwipeProvider, useTabSwipe } from "@/contexts/TabSwipeContext";
 import { ALL_ACHIEVEMENTS, getAutomaticAchievementIds, useAuthStore, useMemberStore } from "@/lib/store";
 import {
@@ -14,6 +14,7 @@ import {
   fetchRosterMembers,
   fetchScheduledPTSessions,
   fetchSharedWorkouts,
+  markMemberTrophyCelebrationShown,
 } from "@/lib/supabaseData";
 import { getMonthKey } from "@/lib/monthlyStats";
 
@@ -44,6 +45,7 @@ function TabsInner() {
   const syncFitnessAssessments = useMemberStore((state) => state.syncFitnessAssessments);
   const syncLeaderboardHistory = useMemberStore((state) => state.syncLeaderboardHistory);
   const syncMemberAchievements = useMemberStore((state) => state.syncMemberAchievements);
+  const previewAchievementCelebration = useMemberStore((state) => state.previewAchievementCelebration);
   const pruneOldWorkoutMedia = useMemberStore((state) => state.pruneOldWorkoutMedia);
   const lastRosterSyncKeyRef = useRef<string | null>(null);
   const lastAttendanceSyncKeyRef = useRef<string | null>(null);
@@ -151,6 +153,7 @@ function TabsInner() {
 
         const activeTrophiesByMember = new Map<string, Set<string>>();
         const knownTrophiesByMember = new Map<string, Set<string>>();
+        const pendingCelebrationRowsByMember = new Map<string, typeof trophyRows>();
 
         trophyRows.forEach((row) => {
           const emailKey = row.memberEmail.trim().toLowerCase();
@@ -176,6 +179,18 @@ function TabsInner() {
             const activeForId = activeTrophiesByMember.get(row.memberId) ?? new Set<string>();
             activeForId.add(row.trophyId);
             activeTrophiesByMember.set(row.memberId, activeForId);
+          }
+
+          if (!row.celebrationShownAt) {
+            const pendingForEmail = pendingCelebrationRowsByMember.get(emailKey) ?? [];
+            pendingForEmail.push(row);
+            pendingCelebrationRowsByMember.set(emailKey, pendingForEmail);
+
+            if (row.memberId) {
+              const pendingForId = pendingCelebrationRowsByMember.get(row.memberId) ?? [];
+              pendingForId.push(row);
+              pendingCelebrationRowsByMember.set(row.memberId, pendingForId);
+            }
           }
         });
 
@@ -339,7 +354,7 @@ function TabsInner() {
           }))
         );
 
-        await Promise.all(
+        const awardedRows = await Promise.all(
           trophySyncEntries.flatMap((entry) =>
             entry.missingAchievements.map((trophyId) =>
               awardMemberTrophy({
@@ -356,6 +371,36 @@ function TabsInner() {
             )
           )
         );
+
+        if (user) {
+          const currentUserKeys = new Set([
+            user.id,
+            user.email.trim().toLowerCase(),
+          ]);
+          const pendingCelebrationRows = Array.from(
+            new Map(
+              [
+                ...(Array.from(currentUserKeys).flatMap((key) => pendingCelebrationRowsByMember.get(key) ?? [])),
+                ...awardedRows.filter((row): row is NonNullable<typeof row> => Boolean(row)).filter(
+                  (row) =>
+                    row.memberEmail.trim().toLowerCase() === user.email.trim().toLowerCase() ||
+                    row.memberId === user.id
+                ),
+              ].map((row) => [row.id, row] as const)
+            ).values()
+          ).sort((left, right) => left.earnedAt.localeCompare(right.earnedAt));
+
+          const nextCelebration = pendingCelebrationRows.find((row) =>
+            ALL_ACHIEVEMENTS.some((achievement) => achievement.id === row.trophyId)
+          );
+
+          if (nextCelebration) {
+            previewAchievementCelebration(nextCelebration.trophyId);
+            void markMemberTrophyCelebrationShown(nextCelebration.id, accessToken ?? undefined).catch((error) => {
+              console.error(`Unable to mark trophy celebration ${nextCelebration.trophyId} as shown.`, error);
+            });
+          }
+        }
 
         if (user) {
           const matchingMember = normalizedRosterMembers.find((member) => {
@@ -448,14 +493,21 @@ function TabsInner() {
           backgroundColor: "#071226",
           borderTopWidth: 1,
           borderTopColor: "rgba(255,255,255,0.08)",
-          height: 66,
+          height: Platform.OS === 'web' ? 60 : 66,
+          paddingBottom: 0,
+          paddingTop: 0,
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 0,
           elevation: 0,
           shadowOpacity: 0,
         },
         tabBarItemStyle: {
           justifyContent: "center",
           alignItems: "center",
-          paddingVertical: 4,
+          paddingVertical: 0,
+          height: "100%",
         },
         tabBarLabelStyle: {
           fontSize: 12,

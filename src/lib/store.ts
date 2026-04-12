@@ -1284,6 +1284,10 @@ export const useMemberStore = create<MemberState>()(
     {
       name: 'flighttrack-members',
       storage: createJSONStorage(() => AsyncStorage),
+      partialize: (state) => {
+        const { recentAchievementId, ...persistedState } = state;
+        return persistedState;
+      },
     }
   )
 );

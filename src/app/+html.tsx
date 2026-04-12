@@ -67,12 +67,17 @@ const responsiveBackground = `
 html {
   background-color: #0A1628;
   height: 100%;
+  min-height: 100%;
+  min-height: 100dvh;
 }
 
 body {
   background-color: #0A1628;
+  margin: 0;
   min-height: 100vh;
+  min-height: 100dvh;
   min-height: -webkit-fill-available;
+  padding: 0;
 }
 
 input,
@@ -83,7 +88,9 @@ select {
 
 body > div:first-child,
 #root {
+  height: 100%;
   min-height: 100vh;
+  min-height: 100dvh;
   min-height: -webkit-fill-available;
   background-color: #0A1628;
 }

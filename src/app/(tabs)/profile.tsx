@@ -51,7 +51,7 @@ import {
 } from '@/lib/supabaseData';
 
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
-const RANKS = ['AB', 'Amn', 'A1C', 'SrA', 'SSgt', 'TSgt', 'MSgt', 'SMSgt', 'CMSgt'];
+const RANKS = ['AB', 'Amn', 'A1C', 'SrA', 'SSgt', 'TSgt', 'MSgt', 'SMSgt', 'CMSgt', 'Lt. Col.'];
 const OWNER_EMAIL = 'benjamin.broadhead.2@us.af.mil';
 const DEVELOPER_NAME = 'SSgt Benjamin Broadhead';
 const DEVELOPER_TITLE = 'Developer';
@@ -172,6 +172,7 @@ export default function ProfileScreen() {
   const [showManageModal, setShowManageModal] = useState(false);
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showChangeRankModal, setShowChangeRankModal] = useState(false);
   const [showPTLRequestModal, setShowPTLRequestModal] = useState(false);
   const [showChangeSquadronModal, setShowChangeSquadronModal] = useState(false);
   const [showProfilePictureModal, setShowProfilePictureModal] = useState(false);
@@ -201,6 +202,7 @@ export default function ProfileScreen() {
   const [stravaBusyAction, setStravaBusyAction] = useState<'connect' | 'sync' | 'disconnect' | null>(null);
   const [stravaMessage, setStravaMessage] = useState<string | null>(null);
   const [selectedSquadron, setSelectedSquadron] = useState<Squadron | null>(null);
+  const [selectedRank, setSelectedRank] = useState(user?.rank ?? 'SSgt');
   const [selectedPTLRequest, setSelectedPTLRequest] = useState<string | null>(null);
   const [newMemberFirstName, setNewMemberFirstName] = useState('');
   const [newMemberLastName, setNewMemberLastName] = useState('');
@@ -545,9 +547,11 @@ export default function ProfileScreen() {
               thread.requesterEmail.toLowerCase() === user.email.toLowerCase() &&
               thread.recipientEmail.toLowerCase() === (activeSupportContact?.email.toLowerCase() ?? OWNER_EMAIL)
           ) ?? null;
-        setActiveSupportThreadId((current) => current ?? ownThread?.id ?? null);
+        setActiveSupportThreadId(ownThread?.id ?? null);
         if (ownThread && !supportSubject.trim()) {
           setSupportSubject(ownThread.subject);
+        } else if (!ownThread) {
+          setActiveSupportMessages([]);
         }
       } else if (nextThreads.length > 0) {
         setActiveSupportThreadId((current) => current ?? nextThreads[0].id);
@@ -1201,6 +1205,43 @@ export default function ProfileScreen() {
     }
   };
 
+  const persistOwnRank = async (nextRank: string) => {
+    if (!user) {
+      return;
+    }
+
+    const resolvedMember = resolveMemberForUser(user);
+    if (!resolvedMember) {
+      updateUser({ rank: nextRank });
+      return;
+    }
+
+    const updatedMember: Member = {
+      ...resolvedMember,
+      rank: nextRank,
+    };
+
+    try {
+      setIsUpdatingProfileSettings(true);
+      if (accessToken) {
+        await updateRosterMember(resolvedMember, updatedMember, accessToken);
+      }
+
+      updateMember(resolvedMember.id, { rank: nextRank });
+      updateUser({ rank: nextRank });
+      setSelectedRank(nextRank);
+      setShowChangeRankModal(false);
+      setShowSettingsModal(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to update your rank.';
+      setMemberActionError(message);
+      Alert.alert('Unable to update rank', message);
+    } finally {
+      setIsUpdatingProfileSettings(false);
+    }
+  };
+
   const beginProfileImageCrop = (asset: ImagePicker.ImagePickerAsset) => {
     if (!asset.uri || !asset.width || !asset.height) {
       Alert.alert('Unable to use image', 'This image could not be prepared for cropping.');
@@ -1524,6 +1565,16 @@ export default function ProfileScreen() {
   const handleOpenSupportMessages = (contactEmail: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setSupportError(null);
+    setDismissedNotificationKeys((current) => {
+      const next = new Set(current);
+      supportNotifications
+        .filter((notification) => {
+          const thread = supportThreads.find((entry) => entry.id === notification.threadId);
+          return thread?.recipientEmail.toLowerCase() === contactEmail.toLowerCase();
+        })
+        .forEach((notification) => next.add(notification.id));
+      return Array.from(next);
+    });
     setActiveSupportRecipientEmail(contactEmail);
     const nextThread =
       supportThreads.find(
@@ -1536,6 +1587,7 @@ export default function ProfileScreen() {
     } else {
       setSupportSubject('');
     }
+    setActiveSupportThreadId(nextThread?.id ?? null);
     if (nextThread?.id) {
       void loadSupportConversation(nextThread.id, { markRead: true });
     } else {
@@ -2010,6 +2062,10 @@ export default function ProfileScreen() {
   const userDisplayName = user ? getDisplayName(user) : 'Unknown';
   const accountColors = getAccountTypeColor(userAccountType);
 
+  useEffect(() => {
+    setSelectedRank(user?.rank ?? 'SSgt');
+  }, [user?.rank]);
+
   return (
     <View className="flex-1">
       <LinearGradient
@@ -2221,7 +2277,7 @@ export default function ProfileScreen() {
               <View className="items-center flex-1">
                   <RunningIcon size={20} color="#22C55E" />
                 <Text className="text-white font-bold text-lg mt-1">
-                  {monthlyUserSummary.miles.toFixed(1)}
+                  {monthlyUserSummary.miles.toFixed(2)}
                 </Text>
                 <Text className="text-af-silver text-xs">Miles</Text>
               </View>
@@ -3824,6 +3880,22 @@ export default function ProfileScreen() {
               <Pressable
                 onPress={() => {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setSelectedRank(user?.rank ?? 'SSgt');
+                  setShowSettingsModal(false);
+                  setShowChangeRankModal(true);
+                }}
+                className="flex-row items-center rounded-xl border border-white/20 bg-white/10 p-4 mt-3"
+              >
+                <User size={20} color="#C0C0C0" />
+                <View className="ml-3 flex-1">
+                  <Text className="text-white font-semibold">Change My Rank</Text>
+                  <Text className="text-af-silver text-xs mt-1">Update how your rank appears on your Account and Profile.</Text>
+                </View>
+              </Pressable>
+
+              <Pressable
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   setShowSettingsModal(false);
                   setSelectedSquadron(user?.squadron ?? 'Hawks');
                   setShowChangeSquadronModal(true);
@@ -3916,6 +3988,73 @@ export default function ProfileScreen() {
                 </View>
               </View>
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showChangeRankModal} transparent animationType="fade">
+        <View className="flex-1 bg-black/80 items-center justify-center p-6">
+          <View className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20">
+            <View className="flex-row items-center justify-between mb-4">
+              <View className="flex-1 pr-4">
+                <Text className="text-white text-xl font-bold">Change My Rank</Text>
+                <Text className="text-af-silver text-sm mt-1">Choose how your rank should appear in FitFlight.</Text>
+              </View>
+              <Pressable
+                onPress={() => setShowChangeRankModal(false)}
+                className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+              >
+                <X size={20} color="#C0C0C0" />
+              </Pressable>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 4 }}>
+              <View className="flex-row flex-wrap" style={{ gap: 10 }}>
+                {RANKS.map((rank) => {
+                  const isSelected = selectedRank === rank;
+                  return (
+                    <Pressable
+                      key={rank}
+                      onPress={() => {
+                        Haptics.selectionAsync();
+                        setSelectedRank(rank);
+                      }}
+                      className={cn(
+                        "rounded-full border px-4 py-2",
+                        isSelected ? "border-af-accent bg-af-accent/20" : "border-white/10 bg-white/5"
+                      )}
+                    >
+                      <Text className={cn("font-semibold", isSelected ? "text-af-accent" : "text-white")}>
+                        {rank}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </ScrollView>
+
+            <View className="flex-row mt-6">
+              <Pressable
+                onPress={() => setShowChangeRankModal(false)}
+                className="flex-1 bg-white/10 py-3 rounded-xl mr-2"
+              >
+                <Text className="text-white text-center font-semibold">Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  void persistOwnRank(selectedRank);
+                }}
+                disabled={isUpdatingProfileSettings || selectedRank === (user?.rank ?? 'SSgt')}
+                className={cn(
+                  "flex-1 py-3 rounded-xl ml-2",
+                  isUpdatingProfileSettings || selectedRank === (user?.rank ?? 'SSgt') ? "bg-white/10" : "bg-af-accent"
+                )}
+              >
+                <Text className="text-white text-center font-semibold">
+                  {isUpdatingProfileSettings ? 'Saving...' : 'Save Rank'}
+                </Text>
+              </Pressable>
+            </View>
           </View>
         </View>
       </Modal>
@@ -4262,7 +4401,7 @@ export default function ProfileScreen() {
                   <View className="flex-row justify-between mb-2">
                     <Text className="text-af-silver">Distance</Text>
                     <Text className="text-white font-semibold">
-                      {typeof activeWorkoutSubmission.distance === 'number' ? `${activeWorkoutSubmission.distance} mi` : 'N/A'}
+                      {typeof activeWorkoutSubmission.distance === 'number' ? `${activeWorkoutSubmission.distance.toFixed(2)} mi` : 'N/A'}
                     </Text>
                   </View>
                   <View className="flex-row justify-between">
@@ -4459,7 +4598,7 @@ export default function ProfileScreen() {
                         </View>
                         <View className="mt-2 flex-row justify-between">
                           <Text className="text-af-silver text-sm">Distance</Text>
-                          <Text className="text-white font-semibold">{typeof workout.distance === 'number' ? `${workout.distance} mi` : 'N/A'}</Text>
+                          <Text className="text-white font-semibold">{typeof workout.distance === 'number' ? `${workout.distance.toFixed(2)} mi` : 'N/A'}</Text>
                         </View>
                         <View className="mt-2 flex-row justify-between">
                           <Text className="text-af-silver text-sm">Visibility</Text>

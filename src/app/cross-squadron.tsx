@@ -140,11 +140,11 @@ export default function CrossSquadronScreen() {
                 {/* Quick Stats */}
                 <View className="flex-row mt-3 pt-3 border-t border-white/10">
                   <View className="flex-1 items-center">
-                    <Text className="text-white font-bold">{Math.round(stats.totalMinutes / 60)}h</Text>
+                    <Text className="text-white font-bold">{(stats.totalMinutes / 60).toFixed(2)}h</Text>
                     <Text className="text-af-silver text-xs">Exercise</Text>
                   </View>
                   <View className="flex-1 items-center">
-                    <Text className="text-white font-bold">{stats.totalDistance.toFixed(0)}mi</Text>
+                    <Text className="text-white font-bold">{stats.totalDistance.toFixed(2)}mi</Text>
                     <Text className="text-af-silver text-xs">Distance</Text>
                   </View>
                   <View className="flex-1 items-center">
@@ -175,7 +175,7 @@ export default function CrossSquadronScreen() {
                   <View className="items-center flex-1">
                     <Timer size={24} color="#4A90D9" />
                     <Text className="text-white font-bold text-xl mt-1">
-                      {Math.round(selectedStats.totalMinutes / 60)}
+                      {(selectedStats.totalMinutes / 60).toFixed(2)}
                     </Text>
                     <Text className="text-af-silver text-xs">Hours</Text>
                   </View>
@@ -183,7 +183,7 @@ export default function CrossSquadronScreen() {
                   <View className="items-center flex-1">
                     <MapPin size={24} color="#22C55E" />
                     <Text className="text-white font-bold text-xl mt-1">
-                      {selectedStats.totalDistance.toFixed(0)}
+                      {selectedStats.totalDistance.toFixed(2)}
                     </Text>
                     <Text className="text-af-silver text-xs">Miles</Text>
                   </View>

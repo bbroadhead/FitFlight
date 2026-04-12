@@ -172,12 +172,21 @@ export default function HomeScreen() {
   };
 
   React.useEffect(() => {
+    const tabNavigation = navigation as NavigationProp<ParamListBase> & {
+      addListener?: (event: string, callback: () => void) => (() => void) | void;
+    };
+    const unsubscribeSelf = tabNavigation.addListener?.('tabPress', () => {
+      setShowingLeaderboard(false);
+    });
     const parentNavigation = navigation.getParent() as { addListener?: (event: string, callback: () => void) => () => void } | undefined;
-    const unsubscribe = parentNavigation?.addListener?.('tabPress', () => {
+    const unsubscribeParent = parentNavigation?.addListener?.('tabPress', () => {
       setShowingLeaderboard(false);
     });
 
-    return unsubscribe;
+    return () => {
+      unsubscribeSelf?.();
+      unsubscribeParent?.();
+    };
   }, [navigation]);
 
   React.useEffect(() => {

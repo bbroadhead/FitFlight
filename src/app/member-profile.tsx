@@ -451,7 +451,7 @@ export default function MemberProfileScreen() {
               <View className="items-center flex-1">
                 <MapPin size={24} color="#22C55E" />
                 <Text className="text-white font-bold text-xl mt-1">
-                  {monthlySummary.miles.toFixed(1)}
+                  {monthlySummary.miles.toFixed(2)}
                 </Text>
                 <Text className="text-af-silver text-xs">Miles</Text>
               </View>
@@ -705,7 +705,7 @@ export default function MemberProfileScreen() {
                         {workout.distance !== undefined && workout.distance > 0 && (
                           <View className="flex-row items-center mr-4">
                             <MapPin size={14} color="#22C55E" />
-                            <Text className="text-af-silver text-sm ml-1">{workout.distance.toFixed(1)} mi</Text>
+                            <Text className="text-af-silver text-sm ml-1">{workout.distance.toFixed(2)} mi</Text>
                           </View>
                         )}
                         {workout.screenshotUri && (
@@ -782,7 +782,7 @@ export default function MemberProfileScreen() {
                           ) : (
                             <>
                                 <Text className="text-af-silver text-sm">Duration: {workout.duration} min</Text>
-                                <Text className="text-af-silver text-sm mt-1">Distance: {workout.distance ? `${workout.distance.toFixed(1)} mi` : 'N/A'}</Text>
+                            <Text className="text-af-silver text-sm mt-1">Distance: {workout.distance ? `${workout.distance.toFixed(2)} mi` : 'N/A'}</Text>
                                 <Text className="text-af-silver text-sm mt-1">Visibility: {workout.isPrivate ? 'Private' : 'Visible to squadron'}</Text>
                               </>
                             )}

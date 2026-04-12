@@ -7,6 +7,7 @@ create table if not exists public.member_trophies (
   earned_at timestamptz not null default now(),
   awarded_by_member_id text null,
   is_active boolean not null default true,
+  celebration_shown_at timestamptz null,
   revoked_at timestamptz null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
