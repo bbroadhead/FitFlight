@@ -13,6 +13,7 @@ import * as Sharing from 'expo-sharing';
 import { format, startOfWeek, addDays, subWeeks, addWeeks, isSameDay } from 'date-fns';
 import { useMemberStore, useAuthStore, type Flight, type ScheduledPTSession, canEditAttendance, canManagePTPrograms, formatRankDisplay } from '@/lib/store';
 import { cn } from '@/lib/cn';
+import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { useTabSwipe } from '@/contexts/TabSwipeContext';
 import { deleteScheduledPTSession as deleteScheduledPTSessionFromSupabase, fetchAttendanceSessions, setAttendanceStatus } from '@/lib/supabaseData';
 import ExcelJS from 'exceljs';
@@ -352,6 +353,13 @@ export default function AttendanceScreen() {
         });
 
       syncPTSessions(updatedSessions);
+      if (!currentlyAttending) {
+        trackAnalyticsEvent('mark_attendance', {
+          squadron,
+          flight,
+          source: 'manual',
+        });
+      }
     } catch (error) {
       console.error('Unable to update attendance in Supabase.', error);
     }
@@ -750,64 +758,64 @@ export default function AttendanceScreen() {
           </Pressable>
         </Animated.View>
 
-        <Animated.View entering={FadeInDown.delay(200).springify()} className="px-6 mb-4">
-          <View className="rounded-2xl border border-white/10 bg-white/5 p-3">
-            <View onLayout={handleFlightStripLayout}>
-              <ScrollView
-                ref={flightScrollRef}
-                horizontal
-                bounces={false}
-                scrollEnabled={flightHorizontalOverflow > 0}
-                showsHorizontalScrollIndicator={false}
-                scrollEventThrottle={16}
-                onScroll={(event) => {
-                  const x = event.nativeEvent.contentOffset.x;
-                  flightScrollXRef.current = x;
-                }}
-                onTouchStart={() => setSwipeEnabled(false)}
-                onTouchEnd={() => setSwipeEnabled(true)}
-                onTouchCancel={() => setSwipeEnabled(true)}
-                onScrollBeginDrag={() => setSwipeEnabled(false)}
-                onScrollEndDrag={() => setSwipeEnabled(true)}
-                onMomentumScrollEnd={() => setSwipeEnabled(true)}
-                style={{ flexGrow: 0 }}
-              >
-                <View className="flex-row">
-                  <Pressable
-                    onPress={() => {
-                      setSelectedFlight('all');
-                      Haptics.selectionAsync();
-                    }}
-                    className={cn(
-                      'px-4 py-2 rounded-full mr-2 border',
-                      selectedFlight === 'all' ? 'bg-af-accent border-af-accent' : 'bg-white/5 border-white/10'
-                    )}
-                  >
-                    <Text className={cn('font-medium', selectedFlight === 'all' ? 'text-white' : 'text-white/60')}>All</Text>
-                  </Pressable>
-
-                  {FLIGHTS.map((flight) => (
+        <ScrollView className="flex-1 px-6" contentContainerStyle={{ paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
+          <Animated.View entering={FadeInDown.delay(200).springify()} className="mb-4">
+            <View className="rounded-2xl border border-white/10 bg-white/5 p-3">
+              <View onLayout={handleFlightStripLayout}>
+                <ScrollView
+                  ref={flightScrollRef}
+                  horizontal
+                  bounces={false}
+                  scrollEnabled={flightHorizontalOverflow > 0}
+                  showsHorizontalScrollIndicator={false}
+                  scrollEventThrottle={16}
+                  onScroll={(event) => {
+                    const x = event.nativeEvent.contentOffset.x;
+                    flightScrollXRef.current = x;
+                  }}
+                  onTouchStart={() => setSwipeEnabled(false)}
+                  onTouchEnd={() => setSwipeEnabled(true)}
+                  onTouchCancel={() => setSwipeEnabled(true)}
+                  onScrollBeginDrag={() => setSwipeEnabled(false)}
+                  onScrollEndDrag={() => setSwipeEnabled(true)}
+                  onMomentumScrollEnd={() => setSwipeEnabled(true)}
+                  style={{ flexGrow: 0 }}
+                >
+                  <View className="flex-row">
                     <Pressable
-                      key={flight}
                       onPress={() => {
-                        setSelectedFlight(flight);
+                        setSelectedFlight('all');
                         Haptics.selectionAsync();
                       }}
                       className={cn(
                         'px-4 py-2 rounded-full mr-2 border',
-                        selectedFlight === flight ? 'bg-af-accent border-af-accent' : 'bg-white/5 border-white/10'
+                        selectedFlight === 'all' ? 'bg-af-accent border-af-accent' : 'bg-white/5 border-white/10'
                       )}
                     >
-                      <Text className={cn('font-medium', selectedFlight === flight ? 'text-white' : 'text-white/60')}>{flight}</Text>
+                      <Text className={cn('font-medium', selectedFlight === 'all' ? 'text-white' : 'text-white/60')}>All</Text>
                     </Pressable>
-                  ))}
-                </View>
-              </ScrollView>
-            </View>
-          </View>
-        </Animated.View>
 
-        <ScrollView className="flex-1 px-6" contentContainerStyle={{ paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
+                    {FLIGHTS.map((flight) => (
+                      <Pressable
+                        key={flight}
+                        onPress={() => {
+                          setSelectedFlight(flight);
+                          Haptics.selectionAsync();
+                        }}
+                        className={cn(
+                          'px-4 py-2 rounded-full mr-2 border',
+                          selectedFlight === flight ? 'bg-af-accent border-af-accent' : 'bg-white/5 border-white/10'
+                        )}
+                      >
+                        <Text className={cn('font-medium', selectedFlight === flight ? 'text-white' : 'text-white/60')}>{flight}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </ScrollView>
+              </View>
+            </View>
+          </Animated.View>
+
           <Animated.View entering={FadeInDown.delay(110).springify()} className="mb-3">
             <Pressable
               onPress={() => {

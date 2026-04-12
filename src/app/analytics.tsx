@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, Pressable, ScrollView, Alert, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -14,6 +14,7 @@ import Svg, { Circle } from 'react-native-svg';
 import { format, startOfWeek, addDays } from 'date-fns';
 import { useMemberStore, useAuthStore, getDisplayName, type Flight, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
+import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import ExcelJS from 'exceljs';
 import { formatMonthLabel, getAvailableMonthKeys, getMemberMonthSummary, getMonthKey, getMonthSessions } from '@/lib/monthlyStats';
 
@@ -120,6 +121,12 @@ export default function AnalyticsScreen() {
   const activeMonthKey = availableMonthKeys.includes(selectedMonthKey)
     ? selectedMonthKey
     : availableMonthKeys[0] ?? getMonthKey();
+
+  useEffect(() => {
+    trackAnalyticsEvent('view_analytics_dashboard', {
+      squadron: userSquadron,
+    });
+  }, [userSquadron]);
 
   // Calculate analytics
   const analytics = useMemo(() => {
@@ -492,6 +499,10 @@ export default function AnalyticsScreen() {
           });
         }
       }
+      trackAnalyticsEvent('export_analytics_report', {
+        format: 'excel',
+        squadron: userSquadron,
+      });
     } catch (error) {
       console.error('Export error:', error);
     } finally {
@@ -529,6 +540,10 @@ export default function AnalyticsScreen() {
           });
         }
       }
+      trackAnalyticsEvent('export_analytics_report', {
+        format: 'pdf',
+        squadron: userSquadron,
+      });
     } catch (error) {
       console.error('Export error:', error);
     } finally {
@@ -800,7 +815,7 @@ export default function AnalyticsScreen() {
               <View className="items-center flex-1">
                 <Activity size={20} color="#4A90D9" />
                 <Text className="text-white font-bold text-xl mt-1">
-                  {Math.round(analytics.totalMinutes / 60)}
+                  {(analytics.totalMinutes / 60).toFixed(2)}
                 </Text>
                 <Text className="text-af-silver text-xs">Hours</Text>
               </View>
@@ -808,7 +823,7 @@ export default function AnalyticsScreen() {
               <View className="items-center flex-1">
                 <RunningIcon size={20} color="#22C55E" />
                 <Text className="text-white font-bold text-xl mt-1">
-                  {analytics.totalMiles.toFixed(0)}
+                  {analytics.totalMiles.toFixed(2)}
                 </Text>
                 <Text className="text-af-silver text-xs">Miles</Text>
               </View>

@@ -3,7 +3,7 @@ import { View, Text, Pressable, ScrollView, Image, Modal } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ChevronLeft, Timer, MapPin, Trophy, Lock, Unlock, TrendingUp, Shield, Camera, Dumbbell, Activity, Image as ImageIcon, BarChart3, User, X, Award, ClipboardList, FileText } from 'lucide-react-native';
+import { ChevronLeft, Timer, MapPin, Trophy, Lock, Unlock, TrendingUp, Shield, Camera, Dumbbell, Activity, Image as ImageIcon, BarChart3, User, X, FileText } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeInUp, useAnimatedStyle, useSharedValue, withSpring, withDelay } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { useMemberStore, useAuthStore, getDisplayName, ALL_ACHIEVEMENTS, canManagePTPrograms, type AccountType, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
@@ -106,7 +106,15 @@ export default function MemberProfileScreen() {
   const [showLeaderboardHistoryModal, setShowLeaderboardHistoryModal] = useState(false);
   const [expandedWorkoutImageUri, setExpandedWorkoutImageUri] = useState<string | null>(null);
 
-  const member = useMemo(() => members.find(m => m.id === id), [members, id]);
+  const member = useMemo(() => {
+    const rawId = Array.isArray(id) ? id[0] : id;
+    const normalizedId = rawId?.trim();
+    const normalizedLowerId = normalizedId?.toLowerCase();
+    return members.find((candidate) =>
+      candidate.id === normalizedId ||
+      candidate.email.trim().toLowerCase() === normalizedLowerId
+    );
+  }, [members, id]);
   const canViewMember =
     !!member &&
     (!!currentUser && (member.id === currentUser.id || member.squadron === currentUserSquadron || currentUser.accountType === 'fitflight_creator'));
@@ -114,6 +122,9 @@ export default function MemberProfileScreen() {
   // All hooks must be called before early returns
   const isOwnProfile = currentUser?.id === member?.id;
   const canViewAllWorkouts = isOwnProfile || canManagePTPrograms(currentUser?.accountType ?? 'standard');
+  const canViewWorkoutHistorySection = isOwnProfile || (member?.showWorkoutHistoryOnProfile ?? true);
+  const canViewWorkoutUploadsSection = isOwnProfile || (member?.showWorkoutUploadsOnProfile ?? true);
+  const canViewPFRASection = isOwnProfile || (member?.showPFRARecordsOnProfile ?? true);
 
   const allEffectiveWorkouts = useMemo(() => {
     if (!member) return [];
@@ -319,9 +330,9 @@ export default function MemberProfileScreen() {
             <View className="items-center">
               {/* Profile Picture with gold border for completionist */}
               <View className="relative">
-                {member.profilePicture ? (
+                {(member.profilePicture || (isOwnProfile ? currentUser?.profilePicture : undefined)) ? (
                   <Image
-                    source={{ uri: member.profilePicture }}
+                    source={{ uri: member.profilePicture || currentUser?.profilePicture }}
                     className={cn(
                       "w-20 h-20 rounded-full mb-4",
                       member.achievements.includes('completionist') && "border-4 border-af-gold"
@@ -471,44 +482,45 @@ export default function MemberProfileScreen() {
           >
             <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">History</Text>
             <View className="flex-row flex-wrap" style={{ gap: 12 }}>
-              <Pressable
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  setShowWorkoutHistoryModal(true);
-                }}
-                className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-white/5 p-4"
-              >
-                <View className="flex-row items-center">
-                  <ClipboardList size={18} color="#A855F7" />
-                  <Text className="ml-2 text-white font-semibold">Workout History</Text>
-                </View>
-                <Text className="text-af-silver text-xs mt-1">View logged workouts and attendance entries</Text>
-              </Pressable>
-              <Pressable
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  setShowPFRAHistoryModal(true);
-                }}
-                className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-white/5 p-4"
-              >
-                <View className="flex-row items-center">
-                  <FileText size={18} color="#4A90D9" />
-                  <Text className="ml-2 text-white font-semibold">PFRA History</Text>
-                </View>
-                <Text className="text-af-silver text-xs mt-1">Review previous PFRA results and details</Text>
-              </Pressable>
+              {canViewWorkoutHistorySection ? (
+                <Pressable
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setShowWorkoutHistoryModal(true);
+                  }}
+                  className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-black/10 p-4 min-h-[76px] items-center justify-center"
+                >
+                  <View className="items-center justify-center">
+                    <Activity size={18} color="#A855F7" />
+                    <Text className="mt-2 text-white font-semibold text-center text-sm leading-5">Workout History</Text>
+                  </View>
+                </Pressable>
+              ) : null}
+              {canViewPFRASection ? (
+                <Pressable
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setShowPFRAHistoryModal(true);
+                  }}
+                  className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-black/10 p-4 min-h-[76px] items-center justify-center"
+                >
+                  <View className="items-center justify-center">
+                    <FileText size={18} color="#4A90D9" />
+                    <Text className="mt-2 text-white font-semibold text-center text-sm leading-5">PFRA History</Text>
+                  </View>
+                </Pressable>
+              ) : null}
               <Pressable
                 onPress={() => {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   setShowLeaderboardHistoryModal(true);
                 }}
-                className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-white/5 p-4"
+                className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-black/10 p-4 min-h-[76px] items-center justify-center"
               >
-                <View className="flex-row items-center">
-                  <Award size={18} color="#FFD700" />
-                  <Text className="ml-2 text-white font-semibold">Leaderboard History</Text>
+                <View className="items-center justify-center">
+                  <Trophy size={18} color="#FFD700" />
+                  <Text className="mt-2 text-white font-semibold text-center text-sm leading-5">Leaderboard History</Text>
                 </View>
-                <Text className="text-af-silver text-xs mt-1">See monthly placement and score history</Text>
               </Pressable>
             </View>
           </Animated.View>
@@ -537,6 +549,7 @@ export default function MemberProfileScreen() {
           )}
 
           {/* PFRA Section */}
+          {canViewPFRASection ? (
           <Animated.View
             entering={FadeInDown.delay(250).springify()}
             className="mt-4"
@@ -634,8 +647,10 @@ export default function MemberProfileScreen() {
               </View>
             )}
           </Animated.View>
+          ) : null}
 
           {/* Workout Uploads Section */}
+          {canViewWorkoutUploadsSection ? (
           <Animated.View
             entering={FadeInDown.delay(275).springify()}
             className="mt-4"
@@ -720,6 +735,7 @@ export default function MemberProfileScreen() {
               </View>
             )}
           </Animated.View>
+          ) : null}
 
         </ScrollView>
 

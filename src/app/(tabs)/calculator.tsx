@@ -14,6 +14,7 @@ import { Buffer } from 'buffer';
 
 import SmartSlider from '@/components/SmartSlider';
 import { TutorialTarget } from '@/contexts/TutorialTourContext';
+import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { useAuthStore, useMemberStore } from '@/lib/store';
 import { savePFRARecord } from '@/lib/supabaseData';
 import {
@@ -720,6 +721,10 @@ export default function CalculatorScreen() {
   const disableSwipe = () => tabSwipe?.setSwipeEnabled(false);
   const enableSwipe = () => tabSwipe?.setSwipeEnabled(true);
 
+  useEffect(() => {
+    trackAnalyticsEvent('view_score_calculator');
+  }, []);
+
   const [audioCollapsed, setAudioCollapsed] = useState(true);
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [showOfficialSaveModal, setShowOfficialSaveModal] = useState(false);
@@ -1164,6 +1169,9 @@ export default function CalculatorScreen() {
       }
 
       setShowSaveModal(false);
+      trackAnalyticsEvent('export_calculator_score', {
+        format: 'pdf',
+      });
     } finally {
       setIsSavingPdf(false);
     }

@@ -9,6 +9,7 @@ import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { useAuthStore, useMemberStore, type AccountType, type Flight, type Member, type Squadron, type User as UserType, getDisplayName, SQUADRONS } from '@/lib/store';
 import { cn } from '@/lib/cn';
+import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { clearUrlHashSession, getUserForAccessToken, readSessionFromUrlHash, requestPasswordReset, signInWithPassword, signUpWithPassword } from '@/lib/supabaseAuth';
 import { createRosterMember, ensureMemberRole, fetchRoleForEmail, fetchRosterMembers, sendAppNotification, updateRosterMember } from '@/lib/supabaseData';
 
@@ -359,6 +360,11 @@ export default function LoginScreen() {
           accessToken: sessionFromHash.accessToken,
           refreshToken: sessionFromHash.refreshToken ?? null,
         });
+        trackAnalyticsEvent('login', {
+          method: 'email',
+          squadron: member.squadron,
+          role: member.accountType,
+        });
 
         login({
           id: member.id,
@@ -535,6 +541,11 @@ export default function LoginScreen() {
         accessToken: response.access_token,
         refreshToken: response.refresh_token,
       });
+      trackAnalyticsEvent('login', {
+        method: 'email',
+        squadron: member.squadron,
+        role: member.accountType,
+      });
       login(user, { rememberSession: stayLoggedIn });
       router.replace(getPostLoginRoute(member));
     };
@@ -562,6 +573,13 @@ export default function LoginScreen() {
     } catch (error) {
       throw new Error(getFriendlyEmailSendError(error, 'Unable to create account.'));
     }
+
+    trackAnalyticsEvent('sign_up', {
+      method: 'email',
+      squadron: selectedSquadron,
+      role_request: wantsPTL ? 'ptl_requested' : 'standard',
+      verification_required: !result.session,
+    });
 
     if (!result.session) {
       setShowVerificationModal(true);
@@ -694,6 +712,11 @@ export default function LoginScreen() {
     setSessionTokens({
       accessToken: accessToken ?? null,
       refreshToken: refreshToken ?? null,
+    });
+    trackAnalyticsEvent('login', {
+      method: 'email',
+      squadron: newMember.squadron,
+      role: accountType,
     });
     login(user, { rememberSession: stayLoggedIn });
     router.replace('/welcome'); // Redirect to tutorial for new users

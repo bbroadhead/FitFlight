@@ -6,6 +6,7 @@ import { ScrollViewStyleReset } from 'expo-router/html';
 // do not have access to the DOM or browser APIs.
 export default function Root({ children }: { children: React.ReactNode }) {
   const basePath = '/FitFlight';
+  const measurementId = process.env.EXPO_PUBLIC_GA_MEASUREMENT_ID?.trim() || 'G-9BC4BSPGG2';
   return (
     <html lang="en">
       <head>
@@ -28,6 +29,25 @@ export default function Root({ children }: { children: React.ReactNode }) {
         <meta name="apple-mobile-web-app-title" content="FitFlight" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <meta name="theme-color" content="#001F5C" />
+        {measurementId ? (
+          <>
+            <script async src={`https://www.googletagmanager.com/gtag/js?id=${measurementId}`} />
+            <script
+              dangerouslySetInnerHTML={{
+                __html: `
+                  window.dataLayer = window.dataLayer || [];
+                  function gtag(){window.dataLayer.push(arguments);}
+                  window.gtag = gtag;
+                  gtag('js', new Date());
+                  gtag('config', '${measurementId}', {
+                    send_page_view: true,
+                    page_path: window.location.pathname + window.location.search
+                  });
+                `,
+              }}
+            />
+          </>
+        ) : null}
         {/* 
           Disable body scrolling on web. This makes ScrollView components work closer to how they do on native. 
           However, body scrolling is often nice to have for mobile web. If you want to enable it, remove this line.
@@ -44,8 +64,15 @@ export default function Root({ children }: { children: React.ReactNode }) {
 }
 
 const responsiveBackground = `
+html {
+  background-color: #0A1628;
+  height: 100%;
+}
+
 body {
-  background-color: #fff;
+  background-color: #0A1628;
+  min-height: 100vh;
+  min-height: -webkit-fill-available;
 }
 
 input,
@@ -54,8 +81,18 @@ select {
   font-size: 16px !important;
 }
 
+body > div:first-child,
+#root {
+  min-height: 100vh;
+  min-height: -webkit-fill-available;
+  background-color: #0A1628;
+}
+
 @media (prefers-color-scheme: dark) {
-  body {
-    background-color: #000;
+  html,
+  body,
+  body > div:first-child,
+  #root {
+    background-color: #0A1628;
   }
 }`;

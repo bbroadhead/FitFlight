@@ -10,6 +10,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { addDays, format, startOfWeek } from 'date-fns';
 import { useMemberStore, useAuthStore, type Flight, type ScheduledPTKind, type ScheduledPTScope, type ScheduledPTSession, canManagePTPrograms, formatRankDisplay } from '@/lib/store';
 import { cn } from '@/lib/cn';
+import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { createScheduledPTSession, deleteScheduledPTSession as deleteScheduledPTSessionFromSupabase, updateScheduledPTSession as updateScheduledPTSessionInSupabase } from '@/lib/supabaseData';
 
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
@@ -117,6 +118,14 @@ export default function ScheduleSessionScreen() {
       const saved = mode === 'edit' ? await updateScheduledPTSessionInSupabase(base, accessToken) : await createScheduledPTSession(base, accessToken);
       if (mode === 'edit' && editingSession) updateScheduledSession(editingSession.id, saved);
       else addScheduledSession(saved);
+      if (mode === 'create') {
+        trackAnalyticsEvent('create_pt_session', {
+          squadron: userSquadron,
+          scope: selectedScope,
+          kind: selectedKind,
+          flights_count: flights.length,
+        });
+      }
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       resetForm();
     } catch (error) {

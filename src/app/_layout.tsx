@@ -55,6 +55,7 @@ function RootLayoutNav() {
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="member-profile" options={{ headerShown: false }} />
           <Stack.Screen name="analytics" options={{ headerShown: false }} />
+          <Stack.Screen name="app-usage-analytics" options={{ headerShown: false }} />
           <Stack.Screen name="add-workout" options={{ headerShown: false }} />
           <Stack.Screen name="schedule-session" options={{ headerShown: false }} />
           <Stack.Screen name="upload-fitness" options={{ headerShown: false }} />

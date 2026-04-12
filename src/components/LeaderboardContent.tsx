@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -9,6 +9,7 @@ import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { ALL_ACHIEVEMENTS, getDisplayName, getEffectiveAchievementIds, type Flight, useAuthStore, useMemberStore, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
+import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { ATTENDANCE_CHECK_IN_POINTS, getMemberMonthSummary, getMonthKey, WORKOUT_POINTS_PER_MILE, WORKOUT_POINTS_PER_MINUTE } from '@/lib/monthlyStats';
 
 const WORKOUT_TYPE_COLORS: Record<WorkoutType, string> = {
@@ -267,6 +268,12 @@ export function LeaderboardContent({
 
   const userName = user ? getDisplayName(user) : 'Airman';
   const userSquadron = user?.squadron ?? 'Hawks';
+
+  useEffect(() => {
+    trackAnalyticsEvent('open_leaderboard', {
+      squadron: userSquadron,
+    });
+  }, [userSquadron]);
 
   const squadronMembers = useMemo(() => {
     return members.filter(m => m.squadron === userSquadron);

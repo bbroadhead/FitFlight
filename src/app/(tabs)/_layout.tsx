@@ -378,6 +378,9 @@ function TabsInner() {
               squadron: matchingMember.squadron,
               accountType: matchingMember.accountType,
               profilePicture: matchingMember.profilePicture,
+              showWorkoutHistoryOnProfile: matchingMember.showWorkoutHistoryOnProfile,
+              showWorkoutUploadsOnProfile: matchingMember.showWorkoutUploadsOnProfile,
+              showPFRARecordsOnProfile: matchingMember.showPFRARecordsOnProfile,
             });
           }
         }

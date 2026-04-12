@@ -134,6 +134,9 @@ export interface Member {
   accountType: AccountType;
   email: string;
   profilePicture?: string; // URI to profile picture
+  showWorkoutHistoryOnProfile?: boolean;
+  showWorkoutUploadsOnProfile?: boolean;
+  showPFRARecordsOnProfile?: boolean;
   exerciseMinutes: number;
   distanceRun: number;
   connectedApps: string[];
@@ -171,6 +174,9 @@ export interface User {
   accountType: AccountType;
   email: string;
   profilePicture?: string; // URI to profile picture
+  showWorkoutHistoryOnProfile?: boolean;
+  showWorkoutUploadsOnProfile?: boolean;
+  showPFRARecordsOnProfile?: boolean;
   isVerified: boolean;
   ptlPendingApproval: boolean;
   fitnessAssessmentsPrivate: boolean;
@@ -560,6 +566,9 @@ const mergeMember = (base: Member, existing?: Member): Member => {
     email: existing.email || base.email,
     accountType: existing.accountType !== 'standard' ? existing.accountType : base.accountType,
     profilePicture: existing.profilePicture ?? base.profilePicture,
+    showWorkoutHistoryOnProfile: base.showWorkoutHistoryOnProfile ?? existing.showWorkoutHistoryOnProfile ?? true,
+    showWorkoutUploadsOnProfile: base.showWorkoutUploadsOnProfile ?? existing.showWorkoutUploadsOnProfile ?? true,
+    showPFRARecordsOnProfile: base.showPFRARecordsOnProfile ?? existing.showPFRARecordsOnProfile ?? true,
     exerciseMinutes: existing.exerciseMinutes,
     distanceRun: existing.distanceRun,
     connectedApps: existing.connectedApps,

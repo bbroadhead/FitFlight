@@ -19,6 +19,9 @@ type RosterColumnName =
   | 'FLT-DET'
   | 'AUTH_USER_ID'
   | 'PROFILE_PICTURE'
+  | 'SHOW_WORKOUT_HISTORY_ON_PROFILE'
+  | 'SHOW_WORKOUT_UPLOADS_ON_PROFILE'
+  | 'SHOW_PFRA_RECORDS_ON_PROFILE'
   | 'MUST_CHANGE_PASSWORD'
   | 'HAS_LOGGED_INTO_APP';
 type MemberRoleRow = {
@@ -934,6 +937,9 @@ function getRosterPayload(
     'FLT-DET': getRosterFlight(member),
     AUTH_USER_ID: authUserId,
     PROFILE_PICTURE: serializeImageReference(member.profilePicture),
+    SHOW_WORKOUT_HISTORY_ON_PROFILE: member.showWorkoutHistoryOnProfile ?? true,
+    SHOW_WORKOUT_UPLOADS_ON_PROFILE: member.showWorkoutUploadsOnProfile ?? true,
+    SHOW_PFRA_RECORDS_ON_PROFILE: member.showPFRARecordsOnProfile ?? true,
     MUST_CHANGE_PASSWORD: member.mustChangePassword ?? false,
     HAS_LOGGED_INTO_APP: member.hasLoggedIntoApp ?? false,
   };
@@ -989,6 +995,18 @@ function normalizeRosterRow(row: SupabaseRow): Member | null {
   const mustChangePassword = getBooleanValue(row, ['must_change_password', 'MUST_CHANGE_PASSWORD']) ?? false;
   const hasLoggedIntoApp = getBooleanValue(row, ['has_logged_into_app', 'HAS_LOGGED_INTO_APP', 'has_logged_in', 'HAS_LOGGED_IN']) ?? false;
   const profilePicture = getDisplayImageUri(getStringValue(row, ['profile_picture', 'PROFILE_PICTURE'])) || undefined;
+  const showWorkoutHistoryOnProfile = getBooleanValue(row, [
+    'show_workout_history_on_profile',
+    'SHOW_WORKOUT_HISTORY_ON_PROFILE',
+  ]) ?? true;
+  const showWorkoutUploadsOnProfile = getBooleanValue(row, [
+    'show_workout_uploads_on_profile',
+    'SHOW_WORKOUT_UPLOADS_ON_PROFILE',
+  ]) ?? true;
+  const showPFRARecordsOnProfile = getBooleanValue(row, [
+    'show_pfra_records_on_profile',
+    'SHOW_PFRA_RECORDS_ON_PROFILE',
+  ]) ?? true;
 
   return {
     id: stableId,
@@ -1015,6 +1033,9 @@ function normalizeRosterRow(row: SupabaseRow): Member | null {
     mustChangePassword,
     hasLoggedIntoApp,
     profilePicture,
+    showWorkoutHistoryOnProfile,
+    showWorkoutUploadsOnProfile,
+    showPFRARecordsOnProfile,
   };
 }
 
@@ -2694,4 +2715,53 @@ export async function fetchApprovedManualWorkouts(accessToken?: string, squadron
     memberEmail: entry.memberEmail,
     workouts: entry.workouts,
   }));
+}
+
+export type GoogleAnalyticsUsageSummary = {
+  activeUsers: number;
+  newUsers: number;
+  sessions: number;
+  screenPageViews: number;
+  engagedSessions: number;
+  averageSessionDuration: number;
+};
+
+export type GoogleAnalyticsUsageEvent = {
+  eventName: string;
+  eventCount: number;
+  totalUsers: number;
+};
+
+export type GoogleAnalyticsUsageDay = {
+  date: string;
+  activeUsers: number;
+  sessions: number;
+};
+
+export type GoogleAnalyticsUsageReport = {
+  propertyId: string;
+  rangeLabel: string;
+  measurementId?: string;
+  generatedAt: string;
+  summary: GoogleAnalyticsUsageSummary;
+  events: GoogleAnalyticsUsageEvent[];
+  daily: GoogleAnalyticsUsageDay[];
+};
+
+export async function fetchGoogleAnalyticsUsage(accessToken?: string) {
+  const response = await fetch(`${SUPABASE_URL}/functions/v1/google-analytics-report`, {
+    method: 'GET',
+    headers: await getHeaders(accessToken),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message =
+      typeof (payload as { error?: unknown }).error === 'string'
+        ? (payload as { error: string }).error
+        : 'Unable to load app usage analytics.';
+    throw new Error(message);
+  }
+
+  return payload as GoogleAnalyticsUsageReport;
 }

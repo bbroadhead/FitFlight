@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, View, Text, Pressable, ScrollView, TextInput, Modal, Image, Platform } from 'react-native';
+import { Alert, View, Text, Pressable, ScrollView, TextInput, Modal, Image, Platform, Switch } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -13,6 +13,7 @@ import { useRouter } from 'expo-router';
 import SmartSlider from '@/components/SmartSlider';
 import { useAuthStore, useMemberStore, type Flight, type Member, type AccountType, type Squadron, type IntegrationService, type WorkoutType, getDisplayName, canEditAttendance, canManagePTL, canManagePTPrograms, isAdmin, SQUADRONS, ALL_ACHIEVEMENTS } from '@/lib/store';
 import { cn } from '@/lib/cn';
+import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { AchievementCelebration } from '@/components/AchievementCelebration';
 import { TrophyCase, CompactTrophyBadges } from '@/components/TrophyCase';
 import { TutorialTarget, useTutorialTour } from '@/contexts/TutorialTourContext';
@@ -242,6 +243,7 @@ export default function ProfileScreen() {
   const [expandedUpcomingSessionIds, setExpandedUpcomingSessionIds] = useState<string[]>([]);
   const [demoTrophyEarnedPreview, setDemoTrophyEarnedPreview] = useState(false);
   const [showDemoTrophyCelebration, setShowDemoTrophyCelebration] = useState(false);
+  const [isUpdatingProfileSettings, setIsUpdatingProfileSettings] = useState(false);
 
   const isAuthenticated = useAuthStore(s => s.isAuthenticated);
   const updateUser = useAuthStore(s => s.updateUser);
@@ -271,6 +273,11 @@ export default function ProfileScreen() {
     );
   };
   const currentMember = resolveMemberForUser(user);
+  const profileVisibilitySettings = {
+    workoutHistory: currentMember?.showWorkoutHistoryOnProfile ?? user?.showWorkoutHistoryOnProfile ?? true,
+    workoutUploads: currentMember?.showWorkoutUploadsOnProfile ?? user?.showWorkoutUploadsOnProfile ?? true,
+    pfraRecords: currentMember?.showPFRARecordsOnProfile ?? user?.showPFRARecordsOnProfile ?? true,
+  };
   const projectCoordinatorMember = members.find(
     (member) =>
       member.firstName.trim().toLowerCase() === 'jacob' &&
@@ -304,6 +311,11 @@ export default function ProfileScreen() {
   const userAccountType = user?.accountType ?? 'standard';
   const canManage = canManagePTL(userAccountType);
   const hasAdminAccess = isAdmin(userAccountType);
+  const canViewAppUsageAnalytics =
+    userAccountType === 'fitflight_creator' ||
+    userAccountType === 'ufpm' ||
+    userAccountType === 'demo' ||
+    userAccountType === 'squadron_leadership';
   const canManageMembers = canManagePTPrograms(userAccountType);
   const canReviewManualWorkouts = canManagePTPrograms(userAccountType);
   const canResetUserPasswords = userAccountType === 'fitflight_creator' || userAccountType === 'ufpm' || userAccountType === 'demo';
@@ -1124,22 +1136,28 @@ export default function ProfileScreen() {
   };
 
   const persistProfilePicture = async (profilePicture?: string) => {
-    if (!user || !currentMember) {
+    if (!user) {
       return;
     }
 
-    const previousProfilePicture = currentMember.profilePicture;
+    const resolvedMember = resolveMemberForUser(user);
+    if (!resolvedMember) {
+      updateUser({ profilePicture });
+      return;
+    }
+
+    const previousProfilePicture = resolvedMember.profilePicture;
 
     const updatedMember: Member = {
-      ...currentMember,
+      ...resolvedMember,
       profilePicture,
     };
 
     if (accessToken) {
-      await updateRosterMember(currentMember, updatedMember, accessToken);
+      await updateRosterMember(resolvedMember, updatedMember, accessToken);
     }
 
-      updateMember(currentMember.id, { profilePicture });
+      updateMember(resolvedMember.id, { profilePicture });
       updateUser({ profilePicture });
 
       const nextStorageValue = profilePicture?.trim();
@@ -1151,6 +1169,37 @@ export default function ProfileScreen() {
         }).catch(() => undefined);
       }
     };
+
+  const persistProfileVisibilitySettings = async (
+    updates: Pick<Member, 'showWorkoutHistoryOnProfile' | 'showWorkoutUploadsOnProfile' | 'showPFRARecordsOnProfile'>
+  ) => {
+    if (!user) {
+      return;
+    }
+
+    const resolvedMember = resolveMemberForUser(user);
+    if (!resolvedMember) {
+      updateUser(updates);
+      return;
+    }
+
+    const updatedMember: Member = {
+      ...resolvedMember,
+      ...updates,
+    };
+
+    try {
+      setIsUpdatingProfileSettings(true);
+      if (accessToken) {
+        await updateRosterMember(resolvedMember, updatedMember, accessToken);
+      }
+
+      updateMember(resolvedMember.id, updates);
+      updateUser(updates);
+    } finally {
+      setIsUpdatingProfileSettings(false);
+    }
+  };
 
   const beginProfileImageCrop = (asset: ImagePicker.ImagePickerAsset) => {
     if (!asset.uri || !asset.width || !asset.height) {
@@ -1206,6 +1255,11 @@ export default function ProfileScreen() {
         )
       ));
       const normalizedCropSize = Math.max(1, Math.round(cropSize));
+      const prefersTransparentOutput = ['image/png', 'image/webp', 'image/gif'].includes(
+        pendingProfileImageCrop.mimeType?.toLowerCase() ?? ''
+      );
+      const outputFormat = prefersTransparentOutput ? SaveFormat.PNG : SaveFormat.JPEG;
+      const outputMimeType = prefersTransparentOutput ? 'image/png' : 'image/jpeg';
 
       const croppedImage = await manipulateAsync(
         pendingProfileImageCrop.uri,
@@ -1221,21 +1275,24 @@ export default function ProfileScreen() {
           { resize: { width: 512, height: 512 } },
         ],
         {
-          compress: 0.82,
-          format: SaveFormat.JPEG,
+          compress: prefersTransparentOutput ? 1 : 0.82,
+          format: outputFormat,
         }
       );
 
       const imageUri = await uploadProfileImage({
         memberId: user.id,
         localUri: croppedImage.uri,
-        mimeType: 'image/jpeg',
+        mimeType: outputMimeType,
         accessToken: accessToken ?? undefined,
       });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       await persistProfilePicture(imageUri);
 
       setPendingProfileImageCrop(null);
+      setProfileCropZoom(1);
+      setProfileCropOffsetX(0);
+      setProfileCropOffsetY(0);
       setShowProfilePictureModal(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to update profile picture.';
@@ -1391,6 +1448,9 @@ export default function ProfileScreen() {
       }
 
       setIntegrationConnection('strava', true, result.connection ?? undefined);
+      trackAnalyticsEvent('sync_strava', {
+        imported_workouts: result.workouts.length,
+      });
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setStravaMessage(
@@ -2502,6 +2562,22 @@ export default function ProfileScreen() {
                     </View>
                   </Pressable>
                 </TutorialTarget>
+              )}
+
+              {canViewAppUsageAnalytics && (
+                <Pressable
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    router.push('/app-usage-analytics');
+                  }}
+                  className="flex-row items-center bg-sky-500/20 border border-sky-400/50 rounded-xl p-4 mb-3"
+                >
+                  <Activity size={24} color="#7DD3FC" />
+                  <View className="ml-3 flex-1">
+                    <Text className="text-white font-semibold">App Usage Analytics</Text>
+                    <Text className="text-af-silver text-xs">View Google Analytics traffic and event usage</Text>
+                  </View>
+                </Pressable>
               )}
 
               {userAccountType === 'fitflight_creator' && (
@@ -3744,38 +3820,102 @@ export default function ProfileScreen() {
               </Pressable>
             </View>
 
-            <Pressable
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                setShowSettingsModal(false);
-                setSelectedSquadron(user?.squadron ?? 'Hawks');
-                setShowChangeSquadronModal(true);
-              }}
-              className="flex-row items-center rounded-xl border border-white/20 bg-white/10 p-4"
-            >
-              <Building2 size={20} color="#C0C0C0" />
-              <View className="ml-3 flex-1">
-                <Text className="text-white font-semibold">Change My Squadron</Text>
-                <Text className="text-af-silver text-xs mt-1">Update the squadron tied to this account.</Text>
-              </View>
-            </Pressable>
-
-            {isWeb ? (
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 4 }}>
               <Pressable
                 onPress={() => {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   setShowSettingsModal(false);
-                  handleOpenInstallHelp();
+                  setSelectedSquadron(user?.squadron ?? 'Hawks');
+                  setShowChangeSquadronModal(true);
                 }}
-                className="flex-row items-center rounded-xl border border-white/20 bg-white/10 p-4 mt-3"
+                className="flex-row items-center rounded-xl border border-white/20 bg-white/10 p-4"
               >
-                <LogIn size={20} color="#4A90D9" />
+                <Building2 size={20} color="#C0C0C0" />
                 <View className="ml-3 flex-1">
-                  <Text className="text-white font-semibold">Add to Home Screen</Text>
-                  <Text className="text-af-silver text-xs mt-1">Install FitFlight on your phone or computer.</Text>
+                  <Text className="text-white font-semibold">Change My Squadron</Text>
+                  <Text className="text-af-silver text-xs mt-1">Update the squadron tied to this account.</Text>
                 </View>
               </Pressable>
-            ) : null}
+
+              {isWeb ? (
+                <Pressable
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setShowSettingsModal(false);
+                    handleOpenInstallHelp();
+                  }}
+                  className="flex-row items-center rounded-xl border border-white/20 bg-white/10 p-4 mt-3"
+                >
+                  <LogIn size={20} color="#4A90D9" />
+                  <View className="ml-3 flex-1">
+                    <Text className="text-white font-semibold">Add to Home Screen</Text>
+                    <Text className="text-af-silver text-xs mt-1">Install FitFlight on your phone or computer.</Text>
+                  </View>
+                </Pressable>
+              ) : null}
+
+              <View className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
+                <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">Profile Visibility</Text>
+
+                <View className="flex-row items-center justify-between py-2">
+                  <View className="flex-1 pr-4">
+                    <Text className="text-white font-semibold">Show Workout History on Profile</Text>
+                    <Text className="text-af-silver text-xs mt-1">Let other users open your Workout History when viewing your Profile.</Text>
+                  </View>
+                  <Switch
+                    value={profileVisibilitySettings.workoutHistory}
+                    disabled={isUpdatingProfileSettings}
+                    onValueChange={(value) => {
+                      Haptics.selectionAsync();
+                      void persistProfileVisibilitySettings({ showWorkoutHistoryOnProfile: value });
+                    }}
+                    trackColor={{ false: '#334155', true: '#4A90D9' }}
+                    thumbColor="#FFFFFF"
+                    ios_backgroundColor="#334155"
+                  />
+                </View>
+
+                <View className="h-px bg-white/10 my-2" />
+
+                <View className="flex-row items-center justify-between py-2">
+                  <View className="flex-1 pr-4">
+                    <Text className="text-white font-semibold">Show Workout Uploads on Profile</Text>
+                    <Text className="text-af-silver text-xs mt-1">Let other users view your uploaded workout section on your Profile.</Text>
+                  </View>
+                  <Switch
+                    value={profileVisibilitySettings.workoutUploads}
+                    disabled={isUpdatingProfileSettings}
+                    onValueChange={(value) => {
+                      Haptics.selectionAsync();
+                      void persistProfileVisibilitySettings({ showWorkoutUploadsOnProfile: value });
+                    }}
+                    trackColor={{ false: '#334155', true: '#4A90D9' }}
+                    thumbColor="#FFFFFF"
+                    ios_backgroundColor="#334155"
+                  />
+                </View>
+
+                <View className="h-px bg-white/10 my-2" />
+
+                <View className="flex-row items-center justify-between py-2">
+                  <View className="flex-1 pr-4">
+                    <Text className="text-white font-semibold">Show PFRA Records on Profile</Text>
+                    <Text className="text-af-silver text-xs mt-1">Let other users view your PFRA section and PFRA History on your Profile.</Text>
+                  </View>
+                  <Switch
+                    value={profileVisibilitySettings.pfraRecords}
+                    disabled={isUpdatingProfileSettings}
+                    onValueChange={(value) => {
+                      Haptics.selectionAsync();
+                      void persistProfileVisibilitySettings({ showPFRARecordsOnProfile: value });
+                    }}
+                    trackColor={{ false: '#334155', true: '#4A90D9' }}
+                    thumbColor="#FFFFFF"
+                    ios_backgroundColor="#334155"
+                  />
+                </View>
+              </View>
+            </ScrollView>
           </View>
         </View>
       </Modal>
