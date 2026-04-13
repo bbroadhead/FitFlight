@@ -4,8 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>FitFlight Demo</title>
-    <link rel="icon" type="image/png" sizes="192x192" href="/FitFlight/logo192.png" />
-    <link rel="apple-touch-icon" href="/FitFlight/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/logo192.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="theme-color" content="#001F5C" />
     <style>
       :root {
@@ -107,13 +107,13 @@
   <body>
     <div class="shell">
       <div class="icon-wrap">
-        <img src="/FitFlight/apple-touch-icon.png" alt="FitFlight icon" />
+        <img src="/apple-touch-icon.png" alt="FitFlight icon" />
       </div>
       <h1>FitFlight Demo Access</h1>
       <p id="status">Signing you into FitFlight...</p>
       <div class="spinner" id="spinner" aria-hidden="true"></div>
       <div id="error" class="error" hidden></div>
-      <a id="fallback-link" class="button" href="/FitFlight/login.html" hidden>Go to Login</a>
+      <a id="fallback-link" class="button" href="/login" hidden>Go to Login</a>
     </div>
 
     <script>
@@ -170,7 +170,7 @@
               hash += '&refresh_token=' + encodeURIComponent(refreshToken);
             }
 
-            window.location.replace('/FitFlight/login.html' + hash);
+            window.location.replace('/login' + hash);
           })
           .catch(function (error) {
             showError(error && error.message ? error.message : 'Unable to use the demo login link.');

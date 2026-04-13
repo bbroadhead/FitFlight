@@ -171,7 +171,7 @@ type ManualWorkoutSubmissionRow = {
   duration_seconds?: number | null;
   distance: number | null;
   is_private: boolean;
-  proof_image_data: string;
+  proof_image_data?: string | null;
   status: ManualWorkoutSubmissionStatus;
   reviewer_member_id: string | null;
   reviewer_name: string | null;
@@ -283,6 +283,14 @@ function isMissingSupportRecipientColumnError(message: string) {
   const normalized = message.toLowerCase();
   return normalized.includes('support_threads.recipient_email') || (
     normalized.includes('recipient_email') && normalized.includes('support_threads')
+  );
+}
+
+function isMissingTrophyCelebrationShownColumnError(message: string) {
+  const normalized = message.toLowerCase();
+  return normalized.includes('celebration_shown_at') && (
+    normalized.includes('schema cache') ||
+    normalized.includes('member_trophies')
   );
 }
 
@@ -658,13 +666,13 @@ function normalizeManualWorkoutSubmissionRow(row: ManualWorkoutSubmissionRow): M
     durationSeconds: typeof row.duration_seconds === 'number' ? row.duration_seconds : 0,
     distance: typeof row.distance === 'number' ? row.distance : undefined,
     isPrivate: row.is_private,
-    proofImageData: getDisplayImageUri(row.proof_image_data) ?? row.proof_image_data,
-      status: row.status,
-      reviewerMemberId: row.reviewer_member_id,
-      reviewerName: row.reviewer_name,
-      reviewerNote: row.reviewer_note,
-      attendanceMarkedBySubmission: row.attendance_marked_by_submission,
-      requesterRead: row.requester_read,
+    proofImageData: getDisplayImageUri(row.proof_image_data ?? undefined) ?? row.proof_image_data ?? '',
+    status: row.status,
+    reviewerMemberId: row.reviewer_member_id,
+    reviewerName: row.reviewer_name,
+    reviewerNote: row.reviewer_note,
+    attendanceMarkedBySubmission: row.attendance_marked_by_submission,
+    requesterRead: row.requester_read,
     reviewerRead: row.reviewer_read,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -1043,7 +1051,21 @@ function normalizeRosterRow(row: SupabaseRow): Member | null {
 }
 
 export async function fetchRosterMembers(accessToken?: string, squadron: Squadron = 'Hawks') {
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/${getRosterTableName(squadron)}?select=*`, {
+  const rosterColumns = [
+    'FULL_NAME',
+    'RANK',
+    'EMAIL',
+    'FLT-DET',
+    'AUTH_USER_ID',
+    'PROFILE_PICTURE',
+    'SHOW_WORKOUT_HISTORY_ON_PROFILE',
+    'SHOW_WORKOUT_UPLOADS_ON_PROFILE',
+    'SHOW_PFRA_RECORDS_ON_PROFILE',
+    'MUST_CHANGE_PASSWORD',
+    'HAS_LOGGED_INTO_APP',
+  ].join(',');
+
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/${getRosterTableName(squadron)}?select=${rosterColumns}`, {
     method: 'GET',
     headers: await getHeaders(accessToken),
   });
@@ -1063,32 +1085,61 @@ export async function fetchRosterMembers(accessToken?: string, squadron: Squadro
     .filter((member): member is Member => Boolean(member));
 }
 
-export async function fetchMemberTrophies(accessToken?: string, squadron?: Squadron, includeInactive = false) {
-  const query = new URLSearchParams();
-  query.set(
-    'select',
-    'id,member_id,member_email,squadron,trophy_id,earned_at,awarded_by_member_id,is_active,celebration_shown_at,revoked_at,created_at,updated_at'
-  );
-  query.set('order', 'earned_at.asc');
-  if (squadron) {
-    query.set('squadron', `eq.${squadron}`);
-  }
-  if (!includeInactive) {
-    query.set('is_active', 'eq.true');
-  }
+export async function fetchMemberTrophies(
+  accessToken?: string,
+  squadron?: Squadron,
+  includeInactive = false,
+  options?: { updatedAfter?: string }
+) {
+  const buildQuery = (includeCelebrationShownAt: boolean) => {
+    const query = new URLSearchParams();
+    query.set(
+      'select',
+      includeCelebrationShownAt
+        ? 'id,member_id,member_email,squadron,trophy_id,earned_at,awarded_by_member_id,is_active,celebration_shown_at,revoked_at,created_at,updated_at'
+        : 'id,member_id,member_email,squadron,trophy_id,earned_at,awarded_by_member_id,is_active,revoked_at,created_at,updated_at'
+    );
+    query.set('order', 'earned_at.asc');
+    if (squadron) {
+      query.set('squadron', `eq.${squadron}`);
+    }
+    if (!includeInactive) {
+      query.set('is_active', 'eq.true');
+    }
+    if (options?.updatedAfter) {
+      query.set('updated_at', `gt.${options.updatedAfter}`);
+    }
+    return query;
+  };
 
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/member_trophies?${query.toString()}`, {
-    method: 'GET',
-    headers: await getHeaders(accessToken),
-  });
+  const requestTrophies = async (includeCelebrationShownAt: boolean) => {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/member_trophies?${buildQuery(includeCelebrationShownAt).toString()}`, {
+      method: 'GET',
+      headers: await getHeaders(accessToken),
+    });
 
-  const payload = await response.json().catch(() => []);
+    const payload = await response.json().catch(() => []);
+    return { response, payload };
+  };
+
+  let { response, payload } = await requestTrophies(true);
   if (!response.ok) {
     const message =
       typeof (payload as { message?: unknown }).message === 'string'
         ? (payload as { message: string }).message
         : 'Unable to load member trophies from Supabase.';
-    throw new Error(message);
+
+    if (isMissingTrophyCelebrationShownColumnError(message)) {
+      ({ response, payload } = await requestTrophies(false));
+    }
+
+    if (!response.ok) {
+      const fallbackMessage =
+        typeof (payload as { message?: unknown }).message === 'string'
+          ? (payload as { message: string }).message
+          : message;
+      throw new Error(fallbackMessage);
+    }
   }
 
   return (payload as MemberTrophyRow[]).map(normalizeMemberTrophyRow);
@@ -1104,39 +1155,57 @@ export async function awardMemberTrophy(params: {
   accessToken?: string;
 }) {
   const now = params.earnedAt ?? new Date().toISOString();
-  const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/member_trophies?on_conflict=member_email,trophy_id`,
-    {
-      method: 'POST',
-      headers: {
-        ...(await getHeaders(params.accessToken)),
-        'Content-Type': 'application/json',
-        Prefer: 'resolution=ignore-duplicates,return=representation',
-      },
-      body: JSON.stringify({
-        id: createSupportId('member-trophy'),
-        member_id: params.memberId ?? null,
-        member_email: params.memberEmail.trim().toLowerCase(),
-        squadron: params.squadron,
-        trophy_id: params.trophyId,
-        earned_at: now,
-        awarded_by_member_id: params.awardedByMemberId ?? null,
-        is_active: true,
-        celebration_shown_at: null,
-        revoked_at: null,
-        created_at: now,
-        updated_at: now,
-      }),
-    }
-  );
+  const buildPayload = (includeCelebrationShownAt: boolean) => ({
+    id: createSupportId('member-trophy'),
+    member_id: params.memberId ?? null,
+    member_email: params.memberEmail.trim().toLowerCase(),
+    squadron: params.squadron,
+    trophy_id: params.trophyId,
+    earned_at: now,
+    awarded_by_member_id: params.awardedByMemberId ?? null,
+    is_active: true,
+    ...(includeCelebrationShownAt ? { celebration_shown_at: null } : {}),
+    revoked_at: null,
+    created_at: now,
+    updated_at: now,
+  });
 
-  const payload = await response.json().catch(() => []);
+  const requestAward = async (includeCelebrationShownAt: boolean) => {
+    const response = await fetch(
+      `${SUPABASE_URL}/rest/v1/member_trophies?on_conflict=member_email,trophy_id`,
+      {
+        method: 'POST',
+        headers: {
+          ...(await getHeaders(params.accessToken)),
+          'Content-Type': 'application/json',
+          Prefer: 'resolution=ignore-duplicates,return=representation',
+        },
+        body: JSON.stringify(buildPayload(includeCelebrationShownAt)),
+      }
+    );
+
+    const payload = await response.json().catch(() => []);
+    return { response, payload };
+  };
+
+  let { response, payload } = await requestAward(true);
   if (!response.ok) {
     const message =
       typeof (payload as { message?: unknown }).message === 'string'
         ? (payload as { message: string }).message
         : 'Unable to award trophy in Supabase.';
-    throw new Error(message);
+
+    if (isMissingTrophyCelebrationShownColumnError(message)) {
+      ({ response, payload } = await requestAward(false));
+    }
+
+    if (!response.ok) {
+      const fallbackMessage =
+        typeof (payload as { message?: unknown }).message === 'string'
+          ? (payload as { message: string }).message
+          : message;
+      throw new Error(fallbackMessage);
+    }
   }
 
   const awardedRow = Array.isArray(payload) ? (payload as MemberTrophyRow[])[0] : null;
@@ -1164,6 +1233,9 @@ export async function markMemberTrophyCelebrationShown(id: string, accessToken?:
       typeof (payload as { message?: unknown }).message === 'string'
         ? (payload as { message: string }).message
         : 'Unable to mark trophy celebration as shown.';
+    if (isMissingTrophyCelebrationShownColumnError(message)) {
+      return;
+    }
     throw new Error(message);
   }
 }
@@ -1221,12 +1293,19 @@ export async function fetchAttendanceSessions(accessToken?: string) {
     })).filter((session) => session.attendees.length > 0) as PTSession[];
 }
 
-export async function fetchScheduledPTSessions(accessToken?: string, squadron?: Squadron) {
+export async function fetchScheduledPTSessions(
+  accessToken?: string,
+  squadron?: Squadron,
+  options?: { updatedAfter?: string }
+) {
   const query = new URLSearchParams();
-  query.set('select', 'id,session_date,session_time,description,squadron,flights,created_by,session_scope,session_kind');
+  query.set('select', 'id,session_date,session_time,description,squadron,flights,created_by,session_scope,session_kind,created_at,updated_at');
   query.set('order', 'session_date.asc,session_time.asc');
   if (squadron) {
     query.set('squadron', `eq.${squadron}`);
+  }
+  if (options?.updatedAfter) {
+    query.set('updated_at', `gt.${options.updatedAfter}`);
   }
 
   const response = await fetch(`${SUPABASE_URL}/rest/v1/scheduled_pt_sessions?${query.toString()}`, {
@@ -1334,7 +1413,10 @@ export async function deleteScheduledPTSession(id: string, accessToken?: string)
 
 export async function fetchPFRARecords(accessToken?: string, squadron?: Squadron) {
   const query = new URLSearchParams();
-  query.set('select', '*');
+  query.set(
+    'select',
+    'id,member_id,member_email,squadron,assessment_date,overall_score,is_private,cardio_score,cardio_time,cardio_laps,cardio_test,cardio_exempt,strength_score,strength_reps,strength_test,strength_exempt,core_score,core_reps,core_time,core_test,core_exempt,waist_score,waist_inches,waist_exempt,created_at'
+  );
   query.set('order', 'assessment_date.desc,created_at.desc');
   if (squadron) {
     query.set('squadron', `eq.${squadron}`);
@@ -1433,7 +1515,10 @@ export async function fetchAppNotifications(params: {
   accessToken?: string;
 }) {
   const query = new URLSearchParams();
-  query.set('select', '*');
+  query.set(
+    'select',
+    'id,sender_member_id,sender_email,sender_name,recipient_member_id,recipient_email,squadron,type,title,message,action_type,action_target_id,action_payload,read_at,created_at'
+  );
   query.set('recipient_email', `eq.${params.recipientEmail.toLowerCase()}`);
   query.set('order', 'created_at.desc');
 
@@ -1528,12 +1613,19 @@ export async function markAppNotificationRead(id: string, accessToken?: string) 
   }
 }
 
-export async function fetchSharedWorkouts(accessToken?: string, squadron?: Squadron) {
+export async function fetchSharedWorkouts(
+  accessToken?: string,
+  squadron?: Squadron,
+  options?: { updatedAfter?: string }
+) {
   const query = new URLSearchParams();
   query.set('select', 'id,name,type,duration,intensity,description,is_multi_step,steps,created_by,created_at,edited_by,edited_at,squadron,thumbs_up,thumbs_down,favorited_by');
   query.set('order', 'created_at.desc');
   if (squadron) {
     query.set('squadron', `eq.${squadron}`);
+  }
+  if (options?.updatedAfter) {
+    query.set('or', `(created_at.gt.${options.updatedAfter},edited_at.gt.${options.updatedAfter})`);
   }
 
   let response = await fetch(`${SUPABASE_URL}/rest/v1/shared_workouts?${query.toString()}`, {
@@ -2098,7 +2190,10 @@ export async function fetchSupportThreads(params: {
   accessToken?: string;
 }) {
   const query = new URLSearchParams();
-  query.set('select', '*');
+  query.set(
+    'select',
+    'id,requester_member_id,requester_email,requester_name,requester_squadron,recipient_member_id,recipient_email,recipient_name,subject,created_at,updated_at'
+  );
   query.set('order', 'updated_at.desc');
 
   if (!params.isStaff) {
@@ -2124,7 +2219,10 @@ export async function fetchSupportThreads(params: {
 
   const threadIds = threads.map((thread) => thread.id);
   const messagesQuery = new URLSearchParams();
-  messagesQuery.set('select', '*');
+  messagesQuery.set(
+    'select',
+    'id,thread_id,sender_member_id,sender_email,sender_name,subject,body,is_from_owner,created_at,read_by_owner,read_by_requester'
+  );
   messagesQuery.set('order', 'created_at.asc');
   messagesQuery.set('thread_id', `in.(${threadIds.map((id) => `"${id}"`).join(',')})`);
 
@@ -2151,7 +2249,10 @@ export async function fetchSupportThreads(params: {
 
 export async function fetchSupportMessages(threadId: string, accessToken?: string) {
   const query = new URLSearchParams();
-  query.set('select', '*');
+  query.set(
+    'select',
+    'id,thread_id,sender_member_id,sender_email,sender_name,subject,body,is_from_owner,created_at,read_by_owner,read_by_requester'
+  );
   query.set('thread_id', `eq.${threadId}`);
   query.set('order', 'created_at.asc');
 
@@ -2376,7 +2477,10 @@ export async function fetchManualWorkoutSubmissions(params: {
   accessToken?: string;
 }) {
   const mineQuery = new URLSearchParams();
-  mineQuery.set('select', '*');
+  mineQuery.set(
+    'select',
+    'id,member_id,member_email,member_name,member_rank,member_flight,squadron,workout_date,workout_type,duration,duration_seconds,distance,is_private,proof_image_data,status,reviewer_member_id,reviewer_name,reviewer_note,attendance_marked_by_submission,requester_read,reviewer_read,created_at,updated_at'
+  );
   mineQuery.set('order', 'updated_at.desc');
   if (params.memberEmail?.trim()) {
     mineQuery.set(
@@ -2400,7 +2504,7 @@ export async function fetchManualWorkoutSubmissions(params: {
   if (params.canReview) {
     requests.push(
       fetch(
-        `${SUPABASE_URL}/rest/v1/manual_workout_submissions?select=*&squadron=eq.${encodeURIComponent(params.squadron)}&status=eq.pending&order=created_at.asc`,
+        `${SUPABASE_URL}/rest/v1/manual_workout_submissions?select=id,member_id,member_email,member_name,member_rank,member_flight,squadron,workout_date,workout_type,duration,duration_seconds,distance,is_private,proof_image_data,status,reviewer_member_id,reviewer_name,reviewer_note,attendance_marked_by_submission,requester_read,reviewer_read,created_at,updated_at&squadron=eq.${encodeURIComponent(params.squadron)}&status=eq.pending&order=created_at.asc`,
         {
           method: 'GET',
           headers: await getHeaders(params.accessToken),
@@ -2679,13 +2783,25 @@ export async function markManualWorkoutSubmissionRead(params: {
   }
 }
 
-export async function fetchApprovedManualWorkouts(accessToken?: string, squadron?: Squadron) {
+export async function fetchApprovedManualWorkouts(
+  accessToken?: string,
+  squadron?: Squadron,
+  options?: { includeProofImage?: boolean; updatedAfter?: string }
+) {
   const query = new URLSearchParams();
-  query.set('select', '*');
+  query.set(
+    'select',
+    options?.includeProofImage === false
+      ? 'id,member_id,member_email,member_name,member_rank,member_flight,squadron,workout_date,workout_type,duration,duration_seconds,distance,is_private,status,reviewer_member_id,reviewer_name,reviewer_note,attendance_marked_by_submission,requester_read,reviewer_read,created_at,updated_at'
+      : 'id,member_id,member_email,member_name,member_rank,member_flight,squadron,workout_date,workout_type,duration,duration_seconds,distance,is_private,proof_image_data,status,reviewer_member_id,reviewer_name,reviewer_note,attendance_marked_by_submission,requester_read,reviewer_read,created_at,updated_at'
+  );
   query.set('status', 'eq.approved');
   query.set('order', 'workout_date.desc');
   if (squadron) {
     query.set('squadron', `eq.${squadron}`);
+  }
+  if (options?.updatedAfter) {
+    query.set('updated_at', `gt.${options.updatedAfter}`);
   }
 
   const response = await fetch(`${SUPABASE_URL}/rest/v1/manual_workout_submissions?${query.toString()}`, {
@@ -2715,7 +2831,7 @@ export async function fetchApprovedManualWorkouts(accessToken?: string, squadron
       durationSeconds: submission.durationSeconds,
       distance: submission.distance,
       source: 'manual' as const,
-      screenshotUri: submission.proofImageData,
+      screenshotUri: submission.proofImageData || undefined,
       title:
         submission.workoutType === 'Running'
           ? 'Run'
@@ -2744,6 +2860,45 @@ export async function fetchApprovedManualWorkouts(accessToken?: string, squadron
     memberEmail: entry.memberEmail,
     workouts: entry.workouts,
   }));
+}
+
+export async function fetchManualWorkoutProofImageMap(
+  submissionIds: string[],
+  accessToken?: string
+) {
+  const uniqueIds = Array.from(new Set(submissionIds.map((id) => id.trim()).filter(Boolean)));
+  if (uniqueIds.length === 0) {
+    return {} as Record<string, string>;
+  }
+
+  const query = new URLSearchParams();
+  query.set('select', 'id,proof_image_data');
+  query.set('id', `in.(${uniqueIds.map((id) => `"${id}"`).join(',')})`);
+
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/manual_workout_submissions?${query.toString()}`, {
+    method: 'GET',
+    headers: await getHeaders(accessToken),
+  });
+
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to load workout proof images.';
+    throw new Error(message);
+  }
+
+  return (payload as Array<Pick<ManualWorkoutSubmissionRow, 'id' | 'proof_image_data'>>).reduce<Record<string, string>>(
+    (accumulator, row) => {
+      const uri = getDisplayImageUri(row.proof_image_data ?? undefined) ?? row.proof_image_data ?? '';
+      if (uri) {
+        accumulator[row.id] = uri;
+      }
+      return accumulator;
+    },
+    {}
+  );
 }
 
 export type GoogleAnalyticsUsageSummary = {
@@ -2778,9 +2933,20 @@ export type GoogleAnalyticsUsageReport = {
 };
 
 export async function fetchGoogleAnalyticsUsage(accessToken?: string) {
+  const resolvedAccessToken = await getValidAccessToken(accessToken ?? null);
+
+  if (!resolvedAccessToken) {
+    throw new Error('Your admin session is missing. Please sign in again.');
+  }
+
   const response = await fetch(`${SUPABASE_URL}/functions/v1/google-analytics-report`, {
     method: 'GET',
-    headers: await getHeaders(accessToken),
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${resolvedAccessToken}`,
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+    },
   });
 
   const payload = await response.json().catch(() => ({}));
@@ -2789,16 +2955,23 @@ export async function fetchGoogleAnalyticsUsage(accessToken?: string) {
       typeof (payload as { error?: unknown }).error === 'string'
         ? (payload as { error: string }).error
         : 'Unable to load app usage analytics.';
+
     const normalized = rawMessage.toLowerCase();
-    const message = normalized.includes('missing environment variable')
-      ? 'App Usage Analytics is missing a Google Analytics secret in Supabase.'
-      : normalized.includes('permission')
-        ? 'Your account does not have permission to view App Usage Analytics.'
-        : normalized.includes('unable to authorize google analytics access')
-          ? 'Google Analytics authentication failed. Recheck the GA service-account secrets in Supabase.'
-          : normalized.includes('property')
-            ? 'Google Analytics could not access the configured property. Recheck the Property ID and service-account access.'
-            : rawMessage;
+
+    const message = normalized.includes('missing authorization')
+      ? 'Your admin session is missing. Please sign in again.'
+      : normalized.includes('verify the requesting user')
+        ? 'Your session could not be verified. Please sign in again.'
+        : normalized.includes('permission')
+          ? 'Your account does not have permission to view App Usage Analytics.'
+          : normalized.includes('missing environment variable')
+            ? 'App Usage Analytics is missing a Google Analytics secret in Supabase.'
+            : normalized.includes('authorize google analytics access')
+              ? 'Google Analytics authentication failed. Recheck the GA service-account secrets in Supabase.'
+              : normalized.includes('property')
+                ? 'Google Analytics could not access the configured property. Recheck the Property ID and service-account access.'
+                : rawMessage;
+
     throw new Error(message);
   }
 

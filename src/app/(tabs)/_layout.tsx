@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from "react";
 import { Redirect, withLayoutContext } from "expo-router";
 import { createMaterialTopTabNavigator } from "@react-navigation/material-top-tabs";
 import { Ionicons } from "@expo/vector-icons";
-import { ActivityIndicator, Image, Platform, View } from "react-native";
+import { ActivityIndicator, AppState, Image, Platform, View } from "react-native";
 import { TabSwipeProvider, useTabSwipe } from "@/contexts/TabSwipeContext";
 import { ALL_ACHIEVEMENTS, getAutomaticAchievementIds, useAuthStore, useMemberStore } from "@/lib/store";
 import {
@@ -30,8 +30,42 @@ const slugify = (value: string) =>
 const buildLegacyRosterId = (member: { rank: string; firstName: string; lastName: string; flight: string }) =>
   `roster-${slugify(`${member.rank}-${member.lastName}-${member.firstName}-${member.flight}`)}`;
 
+const LIVE_SYNC_INTERVAL_MS = 2 * 60_000;
+const FULL_SYNC_INTERVAL_MS = 10 * 60_000;
+
+const mergeById = <T extends { id: string }>(existing: T[], incoming: T[]) => {
+  if (incoming.length === 0) {
+    return existing;
+  }
+
+  const merged = new Map(existing.map((item) => [item.id, item] as const));
+  incoming.forEach((item) => merged.set(item.id, item));
+  return Array.from(merged.values());
+};
+
+const mergeApprovedManualWorkoutEntries = <
+  T extends { memberId?: string; memberEmail?: string }
+>(
+  existing: T[],
+  incoming: T[]
+) => {
+  if (incoming.length === 0) {
+    return existing;
+  }
+
+  const getKey = (entry: T) => entry.memberId || entry.memberEmail?.toLowerCase() || '';
+  const incomingKeys = new Set(incoming.map(getKey).filter(Boolean));
+  const preservedExisting = existing.filter((entry) => !incomingKeys.has(getKey(entry)));
+  return [...preservedExisting, ...incoming];
+};
+
 function TabsInner() {
   const { swipeEnabled } = useTabSwipe();
+  const isStandaloneWeb =
+    Platform.OS === 'web' &&
+    typeof window !== 'undefined' &&
+    (window.matchMedia?.('(display-mode: standalone)')?.matches ||
+      ((window.navigator as Navigator & { standalone?: boolean }).standalone ?? false));
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const hasCheckedAuth = useAuthStore((state) => state.hasCheckedAuth);
   const user = useAuthStore((state) => state.user);
@@ -53,6 +87,9 @@ function TabsInner() {
   const lastSharedWorkoutsSyncKeyRef = useRef<string | null>(null);
   const lastManualWorkoutSyncKeyRef = useRef<string | null>(null);
   const lastPfraSyncKeyRef = useRef<string | null>(null);
+  const lastSharedWorkoutsFetchAtRef = useRef<string | null>(null);
+  const lastManualWorkoutsFetchAtRef = useRef<string | null>(null);
+  const lastScheduledFetchAtRef = useRef<string | null>(null);
 
   const buildMemberIdMap = (rosterMembers: ReturnType<typeof useMemberStore.getState>['members']) => {
     const currentMembers = useMemberStore.getState().members;
@@ -133,18 +170,67 @@ function TabsInner() {
     }
 
     let isCancelled = false;
+    let appState = AppState.currentState;
+    let lastFullSyncAt = 0;
+    let isSyncing = false;
 
-    const syncRoster = async () => {
+    const shouldSyncNow = () => {
+      if (Platform.OS === 'web' && typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+        return false;
+      }
+
+      return appState === 'active';
+    };
+
+    const syncRoster = async (includeStaticData: boolean) => {
+      if (isSyncing) {
+        return;
+      }
+
+      isSyncing = true;
       try {
         pruneOldWorkoutMedia(getMonthKey());
         const squadron = user?.squadron ?? 'Hawks';
-        const [rosterMembers, attendanceSessions, sharedWorkouts, approvedManualWorkouts, pfraRecords, scheduledSessions, trophyRows] = await Promise.all([
-          fetchRosterMembers(accessToken ?? undefined, squadron),
+        const staticRequests = includeStaticData
+          ? [
+              fetchRosterMembers(accessToken ?? undefined, squadron),
+              fetchApprovedManualWorkouts(accessToken ?? undefined, squadron, { includeProofImage: false }).catch(() => []),
+              fetchPFRARecords(accessToken ?? undefined, squadron).catch(() => []),
+            ] as const
+          : [Promise.resolve(null), Promise.resolve([]), Promise.resolve([])] as const;
+
+        const dynamicSharedWorkoutsRequest = includeStaticData
+          ? fetchSharedWorkouts(accessToken ?? undefined, squadron).catch(() => [])
+          : fetchSharedWorkouts(accessToken ?? undefined, squadron, {
+              updatedAfter: lastSharedWorkoutsFetchAtRef.current ?? undefined,
+            }).catch(() => []);
+        const dynamicApprovedManualWorkoutsRequest = includeStaticData
+          ? Promise.resolve([] as Awaited<ReturnType<typeof fetchApprovedManualWorkouts>>)
+          : fetchApprovedManualWorkouts(accessToken ?? undefined, squadron, {
+              includeProofImage: false,
+              updatedAfter: lastManualWorkoutsFetchAtRef.current ?? undefined,
+            }).catch(() => []);
+        const dynamicScheduledSessionsRequest = includeStaticData
+          ? fetchScheduledPTSessions(accessToken ?? undefined, squadron).catch(() => [])
+          : fetchScheduledPTSessions(accessToken ?? undefined, squadron, {
+              updatedAfter: lastScheduledFetchAtRef.current ?? undefined,
+            }).catch(() => []);
+
+        const [
+          rosterMembers,
+          staticApprovedManualWorkouts,
+          pfraRecords,
+          attendanceSessions,
+          sharedWorkouts,
+          incrementalApprovedManualWorkouts,
+          scheduledSessions,
+          trophyRows,
+        ] = await Promise.all([
+          ...staticRequests,
           fetchAttendanceSessions(accessToken ?? undefined).catch(() => []),
-          fetchSharedWorkouts(accessToken ?? undefined, squadron).catch(() => []),
-          fetchApprovedManualWorkouts(accessToken ?? undefined, squadron).catch(() => []),
-          fetchPFRARecords(accessToken ?? undefined, squadron).catch(() => []),
-          fetchScheduledPTSessions(accessToken ?? undefined, squadron).catch(() => []),
+          dynamicSharedWorkoutsRequest,
+          dynamicApprovedManualWorkoutsRequest,
+          dynamicScheduledSessionsRequest,
           fetchMemberTrophies(accessToken ?? undefined, squadron, true).catch(() => []),
         ]);
         if (isCancelled) {
@@ -194,8 +280,27 @@ function TabsInner() {
           }
         });
 
+        const currentStoreState = useMemberStore.getState();
+        const currentMembers = currentStoreState.members;
+        const sourceRosterMembers = rosterMembers ?? currentMembers;
+        const sourceSharedWorkouts = includeStaticData
+          ? sharedWorkouts
+          : mergeById(currentStoreState.sharedWorkouts, sharedWorkouts);
+        const sourceApprovedManualWorkouts = includeStaticData
+          ? staticApprovedManualWorkouts
+          : mergeApprovedManualWorkoutEntries(
+              currentStoreState.members.map((member) => ({
+                memberId: member.id,
+                memberEmail: member.email,
+                workouts: member.workouts.filter((workout) => workout.source === 'manual' && Boolean(workout.externalId)),
+              })),
+              incrementalApprovedManualWorkouts
+            );
+        const sourceScheduledSessions = includeStaticData
+          ? scheduledSessions
+          : mergeById(currentStoreState.scheduledSessions, scheduledSessions);
         const normalizedRosterMembers = user
-          ? rosterMembers.map((member) => {
+          ? sourceRosterMembers.map((member) => {
               const isMatchByEmail =
                 !!member.email &&
                 !!user.email &&
@@ -225,7 +330,7 @@ function TabsInner() {
                 ),
               };
             })
-          : rosterMembers.map((member) => ({
+          : sourceRosterMembers.map((member) => ({
               ...member,
               achievements: Array.from(
                 activeTrophiesByMember.get(member.email.toLowerCase()) ??
@@ -240,18 +345,18 @@ function TabsInner() {
           createdBy: mapMemberId(session.createdBy),
           attendees: [...new Set(session.attendees.map(mapMemberId).filter((memberId) => hasMemberId(memberId)))],
         }));
-        const remappedScheduledSessions = scheduledSessions.map((session) => ({
+        const remappedScheduledSessions = sourceScheduledSessions.map((session) => ({
           ...session,
           createdBy: mapMemberId(session.createdBy),
         }));
-        const remappedSharedWorkouts = sharedWorkouts.map((workout) => ({
+        const remappedSharedWorkouts = sourceSharedWorkouts.map((workout) => ({
           ...workout,
           createdBy: mapMemberId(workout.createdBy),
           thumbsUp: [...new Set(workout.thumbsUp.map(mapMemberId).filter((memberId) => hasMemberId(memberId)))],
           thumbsDown: [...new Set(workout.thumbsDown.map(mapMemberId).filter((memberId) => hasMemberId(memberId)))],
           favoritedBy: [...new Set(workout.favoritedBy.map(mapMemberId).filter((memberId) => hasMemberId(memberId)))],
         }));
-        const remappedApprovedManualWorkouts = approvedManualWorkouts.map((entry) => ({
+        const remappedApprovedManualWorkouts = sourceApprovedManualWorkouts.map((entry) => ({
           ...entry,
           memberId: entry.memberId ? mapMemberId(entry.memberId) : entry.memberId,
         }));
@@ -307,8 +412,8 @@ function TabsInner() {
           syncLeaderboardHistory();
         }
 
-        const currentStoreState = useMemberStore.getState();
-        const trophySyncEntries = currentStoreState.members.map((member) => {
+        const postSyncStoreState = useMemberStore.getState();
+        const trophySyncEntries = postSyncStoreState.members.map((member) => {
           const emailKey = member.email.trim().toLowerCase();
           const activeAchievements = new Set([
             ...(activeTrophiesByMember.get(emailKey) ?? []),
@@ -319,7 +424,7 @@ function TabsInner() {
             ...(knownTrophiesByMember.get(member.id) ?? []),
           ]);
           const automaticAchievements = new Set(
-            getAutomaticAchievementIds(member, currentStoreState.ptSessions, currentStoreState.sharedWorkouts)
+            getAutomaticAchievementIds(member, postSyncStoreState.ptSessions, postSyncStoreState.sharedWorkouts)
           );
           const missingAchievements = Array.from(automaticAchievements).filter(
             (achievementId) => !knownAchievements.has(achievementId)
@@ -429,20 +534,50 @@ function TabsInner() {
             });
           }
         }
+
+        const nowIso = new Date().toISOString();
+        lastSharedWorkoutsFetchAtRef.current = nowIso;
+        lastManualWorkoutsFetchAtRef.current = nowIso;
+        lastScheduledFetchAtRef.current = nowIso;
       } catch (error) {
         console.error('Unable to sync roster from Supabase.', error);
+      } finally {
+        isSyncing = false;
       }
     };
 
-    void syncRoster();
+    void syncRoster(true);
 
-    const interval = setInterval(() => {
-      void syncRoster();
-    }, 30000);
+    const appStateSubscription = AppState.addEventListener('change', (nextState) => {
+      appState = nextState;
+      if (nextState === 'active' && Date.now() - lastFullSyncAt >= LIVE_SYNC_INTERVAL_MS) {
+        void syncRoster(true);
+        lastFullSyncAt = Date.now();
+      }
+    });
+
+    const liveInterval = setInterval(() => {
+      if (!shouldSyncNow()) {
+        return;
+      }
+
+      void syncRoster(false);
+    }, LIVE_SYNC_INTERVAL_MS);
+
+    const fullInterval = setInterval(() => {
+      if (!shouldSyncNow()) {
+        return;
+      }
+
+      lastFullSyncAt = Date.now();
+      void syncRoster(true);
+    }, FULL_SYNC_INTERVAL_MS);
 
     return () => {
       isCancelled = true;
-      clearInterval(interval);
+      appStateSubscription.remove();
+      clearInterval(liveInterval);
+      clearInterval(fullInterval);
     };
   }, [accessToken, hasCheckedAuth, isAuthenticated, pruneOldWorkoutMedia, syncApprovedManualWorkouts, syncFitnessAssessments, syncLeaderboardHistory, syncMemberAchievements, syncMembersFromRoster, syncPTSessions, syncScheduledSessions, syncSharedWorkouts, updateUser, user]);
 
@@ -493,9 +628,9 @@ function TabsInner() {
           backgroundColor: "#071226",
           borderTopWidth: 1,
           borderTopColor: "rgba(255,255,255,0.08)",
-          height: Platform.OS === 'web' ? 60 : 66,
-          paddingBottom: 0,
-          paddingTop: 0,
+          height: isStandaloneWeb ? 82 : Platform.OS === 'web' ? 60 : 66,
+          paddingBottom: isStandaloneWeb ? 18 : 0,
+          paddingTop: isStandaloneWeb ? 4 : 0,
           position: "absolute",
           left: 0,
           right: 0,

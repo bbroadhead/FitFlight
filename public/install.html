@@ -4,12 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>FitFlight</title>
-    <link rel="manifest" href="/FitFlight/manifest.json" />
-    <link rel="shortcut icon" href="/FitFlight/favicon.png" />
-    <link rel="apple-touch-icon" sizes="180x180" type="image/png" href="/FitFlight/apple-touch-icon.png" />
-    <link rel="apple-touch-icon-precomposed" href="/FitFlight/apple-touch-icon.png" />
-    <link rel="icon" type="image/png" sizes="192x192" href="/FitFlight/logo192.png" />
-    <link rel="icon" type="image/png" sizes="512x512" href="/FitFlight/logo512.png" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="shortcut icon" href="/favicon.png" />
+    <link rel="apple-touch-icon" sizes="180x180" type="image/png" href="/apple-touch-icon.png" />
+    <link rel="apple-touch-icon-precomposed" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/logo192.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/logo512.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="FitFlight" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -178,7 +178,7 @@
     <div class="shell">
       <div class="hero">
         <div class="icon-wrap">
-          <img src="/FitFlight/apple-touch-icon.png" alt="FitFlight icon" />
+          <img src="/apple-touch-icon.png" alt="FitFlight icon" />
         </div>
         <div>
           <h1>FitFlight</h1>
@@ -202,8 +202,8 @@
       </div>
 
       <div class="actions">
-        <a class="button" href="/FitFlight/login">Open FitFlight</a>
-        <a class="button secondary" href="/FitFlight/profile">Back to Account</a>
+        <a class="button" href="/login">Open FitFlight</a>
+        <a class="button secondary" href="/profile">Back to Account</a>
       </div>
       <p id="launching-message" class="launching hidden">Launching FitFlight...</p>
       <div class="spinner" aria-hidden="true"></div>
@@ -222,7 +222,7 @@
           }
 
           var redirectToApp = function () {
-            window.location.replace('/FitFlight/login');
+            window.location.replace('/login');
           };
 
           if (document.readyState === 'complete') {

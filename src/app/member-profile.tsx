@@ -11,6 +11,7 @@ import { cn } from '@/lib/cn';
 import { TrophyCase, CompactTrophyBadges } from '@/components/TrophyCase';
 import { buildTrophyStats, getRarestEarnedTrophies } from '@/lib/trophies';
 import { formatMonthLabel, getAvailableMonthKeys, getMemberEffectiveWorkouts, getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
+import { fetchManualWorkoutProofImageMap } from '@/lib/supabaseData';
 
 function getWorkoutDisplayTitle(type: WorkoutType) {
   switch (type) {
@@ -97,6 +98,7 @@ export default function MemberProfileScreen() {
   const members = useMemberStore(s => s.members);
   const ptSessions = useMemberStore(s => s.ptSessions);
   const currentUser = useAuthStore(s => s.user);
+  const accessToken = useAuthStore(s => s.accessToken);
   const currentUserSquadron = currentUser?.squadron ?? 'Hawks';
 
   const [showTrophyCase, setShowTrophyCase] = useState(false);
@@ -105,6 +107,7 @@ export default function MemberProfileScreen() {
   const [showPFRAHistoryModal, setShowPFRAHistoryModal] = useState(false);
   const [showLeaderboardHistoryModal, setShowLeaderboardHistoryModal] = useState(false);
   const [expandedWorkoutImageUri, setExpandedWorkoutImageUri] = useState<string | null>(null);
+  const [manualWorkoutProofMap, setManualWorkoutProofMap] = useState<Record<string, string>>({});
 
   const member = useMemo(() => {
     const rawId = Array.isArray(id) ? id[0] : id;
@@ -138,10 +141,51 @@ export default function MemberProfileScreen() {
     }
     return allEffectiveWorkouts.filter((workout) => !workout.isPrivate);
   }, [allEffectiveWorkouts, canViewAllWorkouts, member]);
-  const uploadedVisibleWorkouts = useMemo(
-    () => visibleWorkouts.filter((workout) => ['manual', 'screenshot', 'strava'].includes(workout.source)),
-    [visibleWorkouts]
+  const visibleWorkoutsWithProof = useMemo(
+    () =>
+      visibleWorkouts.map((workout) => ({
+        ...workout,
+        screenshotUri:
+          workout.source === 'manual' && workout.externalId
+            ? manualWorkoutProofMap[workout.externalId] ?? workout.screenshotUri
+            : workout.screenshotUri,
+      })),
+    [manualWorkoutProofMap, visibleWorkouts]
   );
+  const uploadedVisibleWorkouts = useMemo(
+    () => visibleWorkoutsWithProof.filter((workout) => ['manual', 'screenshot', 'strava'].includes(workout.source)),
+    [visibleWorkoutsWithProof]
+  );
+
+  useEffect(() => {
+    if (!showWorkoutHistoryModal || !accessToken) {
+      return;
+    }
+
+    const manualSubmissionIds = visibleWorkouts
+      .filter((workout) => workout.source === 'manual' && workout.externalId && !workout.screenshotUri)
+      .map((workout) => workout.externalId as string);
+
+    if (manualSubmissionIds.length === 0) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    void fetchManualWorkoutProofImageMap(manualSubmissionIds, accessToken)
+      .then((proofMap) => {
+        if (isCancelled || Object.keys(proofMap).length === 0) {
+          return;
+        }
+
+        setManualWorkoutProofMap((current) => ({ ...current, ...proofMap }));
+      })
+      .catch(() => undefined);
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [accessToken, showWorkoutHistoryModal, visibleWorkouts]);
 
   // Calculate leaderboard position
   const sortedMembers = useMemo(() => {
@@ -752,10 +796,10 @@ export default function MemberProfileScreen() {
                 </Pressable>
               </View>
               <ScrollView showsVerticalScrollIndicator={false}>
-                {visibleWorkouts.length === 0 ? (
+                {visibleWorkoutsWithProof.length === 0 ? (
                   <Text className="text-white/40 text-center py-8">No workouts recorded yet.</Text>
                 ) : (
-                  [...visibleWorkouts]
+                  [...visibleWorkoutsWithProof]
                     .sort((a, b) => b.date.localeCompare(a.date))
                     .map((workout) => (
                       <View key={workout.id} className="rounded-2xl border border-white/10 bg-white/5 p-4 mb-4">

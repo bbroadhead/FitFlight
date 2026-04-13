@@ -25,6 +25,7 @@ import {
   fetchAppNotifications,
   fetchApprovedManualWorkouts,
   fetchAttendanceSessions,
+  fetchManualWorkoutProofImageMap,
   fetchManualWorkoutSubmissions,
   markAppNotificationRead,
   assignUFPMRole,
@@ -197,6 +198,7 @@ export default function ProfileScreen() {
   const [showPFRAHistoryModal, setShowPFRAHistoryModal] = useState(false);
   const [showUpcomingPTSessionsModal, setShowUpcomingPTSessionsModal] = useState(false);
   const [expandedWorkoutImageUri, setExpandedWorkoutImageUri] = useState<string | null>(null);
+  const [manualWorkoutProofMap, setManualWorkoutProofMap] = useState<Record<string, string>>({});
   const [selectedSummaryMonth, setSelectedSummaryMonth] = useState(getMonthKey());
   const [integrationToDisconnect, setIntegrationToDisconnect] = useState<IntegrationService | null>(null);
   const [stravaBusyAction, setStravaBusyAction] = useState<'connect' | 'sync' | 'disconnect' | null>(null);
@@ -657,14 +659,18 @@ export default function ProfileScreen() {
       return;
     }
 
+    if (!isFocused) {
+      return;
+    }
+
     void loadSupportThreads();
 
     const pollId = setInterval(() => {
       void loadSupportThreads();
-    }, 30000);
+    }, 90000);
 
     return () => clearInterval(pollId);
-  }, [accessToken, activeSupportContact?.email, canViewSupportInbox, user?.email]);
+  }, [accessToken, activeSupportContact?.email, canViewSupportInbox, isFocused, user?.email]);
 
   useEffect(() => {
     if (!user?.id || !accessToken) {
@@ -673,14 +679,18 @@ export default function ProfileScreen() {
       return;
     }
 
+    if (!isFocused) {
+      return;
+    }
+
     void loadManualWorkoutSubmissions();
 
     const pollId = setInterval(() => {
       void loadManualWorkoutSubmissions();
-    }, 15000);
+    }, 60000);
 
     return () => clearInterval(pollId);
-  }, [accessToken, canReviewManualWorkouts, memberSquadron, user?.id]);
+  }, [accessToken, canReviewManualWorkouts, isFocused, memberSquadron, user?.id]);
 
   useEffect(() => {
     if (!user?.email || !accessToken) {
@@ -688,14 +698,18 @@ export default function ProfileScreen() {
       return;
     }
 
+    if (!isFocused) {
+      return;
+    }
+
     void loadAppNotifications();
 
     const pollId = setInterval(() => {
       void loadAppNotifications();
-    }, 15000);
+    }, 60000);
 
     return () => clearInterval(pollId);
-  }, [accessToken, user?.email]);
+  }, [accessToken, isFocused, user?.email]);
 
   useEffect(() => {
     if (!activeSupportThreadId || !showDeveloperMessageModal && !showSupportInboxModal) {
@@ -1902,6 +1916,17 @@ export default function ProfileScreen() {
     },
     [ptSessions, userStats]
   );
+  const workoutHistoryWithProof = useMemo(
+    () =>
+      workoutHistory.map((workout) => ({
+        ...workout,
+        screenshotUri:
+          workout.source === 'manual' && workout.externalId
+            ? manualWorkoutProofMap[workout.externalId] ?? workout.screenshotUri
+            : workout.screenshotUri,
+      })),
+    [manualWorkoutProofMap, workoutHistory]
+  );
   const pfraHistory = useMemo(
     () => (userStats && 'fitnessAssessments' in userStats ? [...(userStats as Member).fitnessAssessments].sort((a, b) => b.date.localeCompare(a.date)) : []),
     [userStats]
@@ -1948,7 +1973,7 @@ export default function ProfileScreen() {
 
     if (Platform.OS === 'web' && typeof window !== 'undefined' && isIos && !isStandalonePwa) {
       window.sessionStorage.setItem('fitflight_show_install_help', '1');
-      window.location.assign('/FitFlight/');
+      window.location.assign('/');
       return;
     }
 
@@ -2065,6 +2090,36 @@ export default function ProfileScreen() {
   useEffect(() => {
     setSelectedRank(user?.rank ?? 'SSgt');
   }, [user?.rank]);
+
+  useEffect(() => {
+    if (!showWorkoutHistoryModal || !accessToken) {
+      return;
+    }
+
+    const manualSubmissionIds = workoutHistory
+      .filter((workout) => workout.source === 'manual' && workout.externalId && !workout.screenshotUri)
+      .map((workout) => workout.externalId as string);
+
+    if (manualSubmissionIds.length === 0) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    void fetchManualWorkoutProofImageMap(manualSubmissionIds, accessToken)
+      .then((proofMap) => {
+        if (isCancelled || Object.keys(proofMap).length === 0) {
+          return;
+        }
+
+        setManualWorkoutProofMap((current) => ({ ...current, ...proofMap }));
+      })
+      .catch(() => undefined);
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [accessToken, showWorkoutHistoryModal, workoutHistory]);
 
   return (
     <View className="flex-1">
@@ -4533,10 +4588,10 @@ export default function ProfileScreen() {
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false}>
-              {workoutHistory.length === 0 ? (
+              {workoutHistoryWithProof.length === 0 ? (
                 <Text className="text-white/40 text-center py-8">No workouts recorded yet.</Text>
               ) : (
-                workoutHistory.map((workout) => (
+                workoutHistoryWithProof.map((workout) => (
                   <View key={workout.id} className="rounded-2xl border border-white/10 bg-white/5 p-4 mb-4">
                     <View className="flex-row items-start justify-between">
                       <View className="flex-1">

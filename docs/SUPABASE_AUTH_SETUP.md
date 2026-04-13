@@ -15,7 +15,7 @@ Make sure these are set for the web app:
 
 For GitHub Pages, this app URL is correct:
 
-- `https://bbroadhead.github.io/FitFlight/`
+- `https://www.fitflight.com/`
 
 The code trims the trailing slash automatically.
 
@@ -25,10 +25,10 @@ In Supabase:
 
 1. Enable `Email` under Authentication providers.
 2. Set the Site URL to:
-   - `https://bbroadhead.github.io/FitFlight/`
+- `https://www.fitflight.com/`
 3. Add these redirect URLs:
-   - `https://bbroadhead.github.io/FitFlight/`
-   - `https://bbroadhead.github.io/FitFlight/integrations/strava-callback`
+- `https://www.fitflight.com/`
+- `https://www.fitflight.com/integrations/strava-callback`
    - your local dev URL too, for example `http://localhost:19008`
 4. Decide whether `Confirm email` should be required.
 

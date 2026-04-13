@@ -42,12 +42,35 @@ function getEnv(name: string) {
   if (!value) {
     throw new Error(`Missing environment variable: ${name}`);
   }
-
   return value;
 }
 
 function getSupabaseAdmin() {
   return createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'));
+}
+
+function getServiceAccountCredentials() {
+  const jsonSecret =
+    Deno.env.get('GA_SERVICE_ACCOUNT_JSON') ??
+    Deno.env.get('GOOGLE_SERVICE_ACCOUNT_JSON') ??
+    '';
+
+  if (jsonSecret.trim()) {
+    const parsed = JSON.parse(jsonSecret);
+    if (!parsed.client_email || !parsed.private_key) {
+      throw new Error('GA service-account JSON is missing client_email or private_key.');
+    }
+
+    return {
+      clientEmail: String(parsed.client_email),
+      privateKey: String(parsed.private_key),
+    };
+  }
+
+  return {
+    clientEmail: getEnv('GA_CLIENT_EMAIL'),
+    privateKey: getEnv('GA_PRIVATE_KEY'),
+  };
 }
 
 function base64UrlEncode(input: ArrayBuffer | string) {
@@ -74,8 +97,9 @@ function decodePkcs8PrivateKey(pem: string) {
 }
 
 async function createServiceAccountAccessToken() {
-  const clientEmail = getEnv('GA_CLIENT_EMAIL');
-  const privateKey = decodePkcs8PrivateKey(getEnv('GA_PRIVATE_KEY'));
+  const credentials = getServiceAccountCredentials();
+  const clientEmail = credentials.clientEmail;
+  const privateKey = decodePkcs8PrivateKey(credentials.privateKey);
   const now = Math.floor(Date.now() / 1000);
 
   const header = base64UrlEncode(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
@@ -121,7 +145,7 @@ async function createServiceAccountAccessToken() {
   if (!response.ok || typeof payload.access_token !== 'string') {
     throw new Error(
       typeof payload.error_description === 'string'
-        ? payload.error_description
+        ? `Google OAuth failed: ${payload.error_description}`
         : 'Unable to authorize Google Analytics access.'
     );
   }
@@ -141,10 +165,18 @@ async function runReport(propertyId: string, accessToken: string, body: Record<s
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(
+    const message =
       payload?.error?.message ||
-        payload?.message ||
-        'Unable to load Google Analytics data.'
+      payload?.message ||
+      'Unable to load Google Analytics data.';
+    if (typeof message === 'string' && message.toLowerCase().includes('permission denied')) {
+      throw new Error('Google Analytics property access is denied. Add the GA service-account email to the property with Viewer or Analyst access.');
+    }
+    if (typeof message === 'string' && message.toLowerCase().includes('property')) {
+      throw new Error(`Google Analytics property issue: ${message}`);
+    }
+    throw new Error(
+      message
     );
   }
 
@@ -164,13 +196,14 @@ Deno.serve(async (request) => {
     return new Response('ok', { headers: corsHeaders });
   }
 
-  if (request.method !== 'GET') {
+  if (request.method !== 'GET' && request.method !== 'POST') {
     return json({ error: 'Method not allowed.' }, { status: 405 });
   }
 
   try {
     const authorization = request.headers.get('Authorization') ?? '';
     const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+
     if (!token) {
       return json({ error: 'Missing authorization token.' }, { status: 401 });
     }
@@ -185,19 +218,23 @@ Deno.serve(async (request) => {
       return json({ error: 'Unable to verify the requesting user.' }, { status: 401 });
     }
 
+    const requesterEmail = user.email.toLowerCase();
+
     const { data: roleRows, error: roleError } = await supabase
       .from('member_roles')
       .select('app_role')
-      .eq('email', user.email.toLowerCase())
+      .eq('email', requesterEmail)
       .limit(1);
 
     if (roleError) {
+      console.error('role lookup error', roleError);
       return json({ error: 'Unable to verify requester permissions.' }, { status: 500 });
     }
 
     const requesterRole = roleRows?.[0]?.app_role;
-    const requesterEmail = user.email.toLowerCase();
-    const isImplicitlyAllowedUser = requesterEmail === OWNER_EMAIL || requesterEmail === DEMO_EMAIL;
+    const isImplicitlyAllowedUser =
+      requesterEmail === OWNER_EMAIL || requesterEmail === DEMO_EMAIL;
+
     if (!isImplicitlyAllowedUser && !ALLOWED_ROLES.has(requesterRole)) {
       return json({ error: 'You do not have permission to view app usage analytics.' }, { status: 403 });
     }
@@ -270,6 +307,7 @@ Deno.serve(async (request) => {
       daily,
     });
   } catch (error) {
+    console.error('google-analytics-report error', error);
     return json(
       {
         error: error instanceof Error ? error.message : 'Unable to load Google Analytics data.',

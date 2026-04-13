@@ -5,7 +5,7 @@ import { ScrollViewStyleReset } from 'expo-router/html';
 // The contents of this function only run in Node.js environments and
 // do not have access to the DOM or browser APIs.
 export default function Root({ children }: { children: React.ReactNode }) {
-  const basePath = '/FitFlight';
+  const basePath = '';
   const measurementId = process.env.EXPO_PUBLIC_GA_MEASUREMENT_ID?.trim() || 'G-9BC4BSPGG2';
   return (
     <html lang="en">
@@ -78,6 +78,7 @@ body {
   min-height: 100dvh;
   min-height: -webkit-fill-available;
   padding: 0;
+  overflow: hidden;
 }
 
 input,
@@ -87,19 +88,22 @@ select {
 }
 
 body > div:first-child,
-#root {
+#root,
+[data-expo-root] {
   height: 100%;
   min-height: 100vh;
   min-height: 100dvh;
   min-height: -webkit-fill-available;
   background-color: #0A1628;
+  overflow: hidden;
 }
 
 @media (prefers-color-scheme: dark) {
   html,
   body,
   body > div:first-child,
-  #root {
+  #root,
+  [data-expo-root] {
     background-color: #0A1628;
   }
 }`;

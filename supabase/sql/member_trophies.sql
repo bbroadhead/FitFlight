@@ -13,6 +13,9 @@ create table if not exists public.member_trophies (
   updated_at timestamptz not null default now()
 );
 
+alter table public.member_trophies
+add column if not exists celebration_shown_at timestamptz null;
+
 create unique index if not exists member_trophies_member_email_trophy_id_idx
   on public.member_trophies (member_email, trophy_id);
 

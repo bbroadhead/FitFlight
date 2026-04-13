@@ -27,10 +27,12 @@ export default function AppUsageAnalyticsScreen() {
   const router = useRouter();
   const accessToken = useAuthStore((state) => state.accessToken);
   const user = useAuthStore((state) => state.user);
+
   const [report, setReport] = useState<GoogleAnalyticsUsageReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
 
   const canView = !!user && (
     user.accountType === 'fitflight_creator' ||
@@ -43,14 +45,26 @@ export default function AppUsageAnalyticsScreen() {
     try {
       if (isRefresh) {
         setRefreshing(true);
+        setWarning(null);
       } else {
         setLoading(true);
+        setError(null);
+        setWarning(null);
       }
-      setError(null);
+
       const nextReport = await fetchGoogleAnalyticsUsage(accessToken ?? undefined);
       setReport(nextReport);
+      setError(null);
+      setWarning(null);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Unable to load app usage analytics.');
+      const message =
+        loadError instanceof Error ? loadError.message : 'Unable to load app usage analytics.';
+
+      if (report) {
+        setWarning(`${message} Showing last loaded data.`);
+      } else {
+        setError(message);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -72,7 +86,9 @@ export default function AppUsageAnalyticsScreen() {
     return (
       <View className="flex-1 bg-af-navy items-center justify-center px-6">
         <Text className="text-white text-xl font-bold text-center">Admin access required</Text>
-        <Text className="text-af-silver text-center mt-3">Only Owner, UFPM, Demo Role, and Squadron Leadership can view app usage analytics.</Text>
+        <Text className="text-af-silver text-center mt-3">
+          Only Owner, UFPM, Demo Role, and Squadron Leadership can view app usage analytics.
+        </Text>
       </View>
     );
   }
@@ -97,7 +113,9 @@ export default function AppUsageAnalyticsScreen() {
             </Pressable>
             <View className="flex-1">
               <Text className="text-white text-2xl font-bold">App Usage Analytics</Text>
-              <Text className="text-af-silver text-sm mt-1">{report?.rangeLabel ?? 'Google Analytics overview'}</Text>
+              <Text className="text-af-silver text-sm mt-1">
+                {report?.rangeLabel ?? 'Google Analytics overview'}
+              </Text>
             </View>
           </View>
 
@@ -113,23 +131,38 @@ export default function AppUsageAnalyticsScreen() {
           </Pressable>
         </View>
 
-        <ScrollView className="flex-1 px-6" contentContainerStyle={{ paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
-          {loading ? (
+        <ScrollView
+          className="flex-1 px-6"
+          contentContainerStyle={{ paddingBottom: 40 }}
+          showsVerticalScrollIndicator={false}
+        >
+          {loading && !report ? (
             <View className="mt-10 items-center justify-center">
               <ActivityIndicator color="#4A90D9" />
               <Text className="text-af-silver mt-3">Loading Google Analytics data...</Text>
             </View>
-          ) : error ? (
+          ) : null}
+
+          {error && !report ? (
             <View className="mt-6 rounded-2xl border border-red-400/30 bg-red-500/10 p-5">
               <Text className="text-red-200 font-semibold">Unable to load analytics</Text>
               <Text className="text-red-100/90 text-sm mt-2">{error}</Text>
             </View>
-          ) : report ? (
+          ) : null}
+
+          {warning ? (
+            <View className="mt-6 rounded-2xl border border-amber-400/30 bg-amber-500/10 p-5">
+              <Text className="text-amber-100 font-semibold">Refresh issue</Text>
+              <Text className="text-amber-50/90 text-sm mt-2">{warning}</Text>
+            </View>
+          ) : null}
+
+          {report ? (
             <>
               <View className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
                 <Text className="text-white font-semibold text-lg">Overview</Text>
                 <Text className="text-af-silver text-xs mt-1">
-                  Property {report.propertyId}{report.measurementId ? ` • ${report.measurementId}` : ''}
+                  Property {report.propertyId}{report.measurementId ? ` | ${report.measurementId}` : ''}
                 </Text>
 
                 <View className="flex-row flex-wrap mt-3">
@@ -182,7 +215,9 @@ export default function AppUsageAnalyticsScreen() {
 
               <View className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4">
                 <Text className="text-white font-semibold text-lg">Tracked Events</Text>
-                <Text className="text-af-silver text-xs mt-1">Counts for the custom FitFlight events tracked in GA4.</Text>
+                <Text className="text-af-silver text-xs mt-1">
+                  Counts for the custom FitFlight events tracked in GA4.
+                </Text>
                 {topEvents.length === 0 ? (
                   <Text className="text-white/50 text-sm mt-4">No tracked events have been recorded yet.</Text>
                 ) : (
@@ -192,7 +227,9 @@ export default function AppUsageAnalyticsScreen() {
                         <Text className="text-white font-semibold">{event.eventName}</Text>
                         <Text className="text-af-accent font-bold">{event.eventCount}</Text>
                       </View>
-                      <Text className="text-af-silver text-xs mt-1">{event.totalUsers} users triggered this event</Text>
+                      <Text className="text-af-silver text-xs mt-1">
+                        {event.totalUsers} users triggered this event
+                      </Text>
                     </View>
                   ))
                 )}
@@ -200,12 +237,17 @@ export default function AppUsageAnalyticsScreen() {
 
               <View className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4">
                 <Text className="text-white font-semibold text-lg">Daily Activity</Text>
-                <Text className="text-af-silver text-xs mt-1">Last 30 days of app traffic from Google Analytics.</Text>
+                <Text className="text-af-silver text-xs mt-1">
+                  Last 30 days of app traffic from Google Analytics.
+                </Text>
                 {dailyPoints.length === 0 ? (
                   <Text className="text-white/50 text-sm mt-4">No daily activity data available yet.</Text>
                 ) : (
                   dailyPoints.map((day) => (
-                    <View key={day.date} className="mt-3 flex-row items-center justify-between rounded-xl border border-white/10 bg-black/10 px-4 py-3">
+                    <View
+                      key={day.date}
+                      className="mt-3 flex-row items-center justify-between rounded-xl border border-white/10 bg-black/10 px-4 py-3"
+                    >
                       <Text className="text-white font-medium">{formatReportDate(day.date)}</Text>
                       <View className="items-end">
                         <Text className="text-af-accent text-sm font-semibold">{day.sessions} sessions</Text>
