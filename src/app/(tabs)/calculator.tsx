@@ -1066,7 +1066,8 @@ export default function CalculatorScreen() {
   `;
 
   const saveCalculatorPdfOnWeb = async (filename: string) => {
-    const { jsPDF } = await import('jspdf');
+    const jspdfModule = await import('jspdf/dist/jspdf.es.min.js');
+    const { jsPDF } = jspdfModule as unknown as typeof import('jspdf');
     const pdf = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
     pdf.setFillColor(10, 22, 40);
     pdf.rect(0, 0, 792, 612, 'F');

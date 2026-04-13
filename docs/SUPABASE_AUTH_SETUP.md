@@ -13,9 +13,9 @@ Make sure these are set for the web app:
 - `EXPO_PUBLIC_SUPABASE_ANON_KEY`
 - `EXPO_PUBLIC_APP_URL`
 
-For GitHub Pages, this app URL is correct:
+For the production web app, this app URL is correct:
 
-- `https://www.fitflight.com/`
+- `https://www.fitflightapp.com/`
 
 The code trims the trailing slash automatically.
 
@@ -25,10 +25,10 @@ In Supabase:
 
 1. Enable `Email` under Authentication providers.
 2. Set the Site URL to:
-- `https://www.fitflight.com/`
+- `https://www.fitflightapp.com/`
 3. Add these redirect URLs:
-- `https://www.fitflight.com/`
-- `https://www.fitflight.com/integrations/strava-callback`
+- `https://www.fitflightapp.com/`
+- `https://www.fitflightapp.com/integrations/strava-callback`
    - your local dev URL too, for example `http://localhost:19008`
 4. Decide whether `Confirm email` should be required.
 
