@@ -1051,21 +1051,7 @@ function normalizeRosterRow(row: SupabaseRow): Member | null {
 }
 
 export async function fetchRosterMembers(accessToken?: string, squadron: Squadron = 'Hawks') {
-  const rosterColumns = [
-    'FULL_NAME',
-    'RANK',
-    'EMAIL',
-    'FLT-DET',
-    'AUTH_USER_ID',
-    'PROFILE_PICTURE',
-    'SHOW_WORKOUT_HISTORY_ON_PROFILE',
-    'SHOW_WORKOUT_UPLOADS_ON_PROFILE',
-    'SHOW_PFRA_RECORDS_ON_PROFILE',
-    'MUST_CHANGE_PASSWORD',
-    'HAS_LOGGED_INTO_APP',
-  ].join(',');
-
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/${getRosterTableName(squadron)}?select=${rosterColumns}`, {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/${getRosterTableName(squadron)}?select=*`, {
     method: 'GET',
     headers: await getHeaders(accessToken),
   });

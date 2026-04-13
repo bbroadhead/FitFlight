@@ -33,31 +33,6 @@ const buildLegacyRosterId = (member: { rank: string; firstName: string; lastName
 const LIVE_SYNC_INTERVAL_MS = 2 * 60_000;
 const FULL_SYNC_INTERVAL_MS = 10 * 60_000;
 
-const mergeById = <T extends { id: string }>(existing: T[], incoming: T[]) => {
-  if (incoming.length === 0) {
-    return existing;
-  }
-
-  const merged = new Map(existing.map((item) => [item.id, item] as const));
-  incoming.forEach((item) => merged.set(item.id, item));
-  return Array.from(merged.values());
-};
-
-const mergeApprovedManualWorkoutEntries = <
-  T extends { memberId?: string; memberEmail?: string }
->(
-  existing: T[],
-  incoming: T[]
-) => {
-  if (incoming.length === 0) {
-    return existing;
-  }
-
-  const getKey = (entry: T) => entry.memberId || entry.memberEmail?.toLowerCase() || '';
-  const incomingKeys = new Set(incoming.map(getKey).filter(Boolean));
-  const preservedExisting = existing.filter((entry) => !incomingKeys.has(getKey(entry)));
-  return [...preservedExisting, ...incoming];
-};
 
 function TabsInner() {
   const { swipeEnabled } = useTabSwipe();
@@ -87,9 +62,6 @@ function TabsInner() {
   const lastSharedWorkoutsSyncKeyRef = useRef<string | null>(null);
   const lastManualWorkoutSyncKeyRef = useRef<string | null>(null);
   const lastPfraSyncKeyRef = useRef<string | null>(null);
-  const lastSharedWorkoutsFetchAtRef = useRef<string | null>(null);
-  const lastManualWorkoutsFetchAtRef = useRef<string | null>(null);
-  const lastScheduledFetchAtRef = useRef<string | null>(null);
 
   const buildMemberIdMap = (rosterMembers: ReturnType<typeof useMemberStore.getState>['members']) => {
     const currentMembers = useMemberStore.getState().members;
@@ -191,46 +163,39 @@ function TabsInner() {
       try {
         pruneOldWorkoutMedia(getMonthKey());
         const squadron = user?.squadron ?? 'Hawks';
-        const staticRequests = includeStaticData
-          ? [
-              fetchRosterMembers(accessToken ?? undefined, squadron),
-              fetchApprovedManualWorkouts(accessToken ?? undefined, squadron, { includeProofImage: false }).catch(() => []),
-              fetchPFRARecords(accessToken ?? undefined, squadron).catch(() => []),
-            ] as const
-          : [Promise.resolve(null), Promise.resolve([]), Promise.resolve([])] as const;
-
-        const dynamicSharedWorkoutsRequest = includeStaticData
-          ? fetchSharedWorkouts(accessToken ?? undefined, squadron).catch(() => [])
-          : fetchSharedWorkouts(accessToken ?? undefined, squadron, {
-              updatedAfter: lastSharedWorkoutsFetchAtRef.current ?? undefined,
-            }).catch(() => []);
-        const dynamicApprovedManualWorkoutsRequest = includeStaticData
-          ? Promise.resolve([] as Awaited<ReturnType<typeof fetchApprovedManualWorkouts>>)
-          : fetchApprovedManualWorkouts(accessToken ?? undefined, squadron, {
-              includeProofImage: false,
-              updatedAfter: lastManualWorkoutsFetchAtRef.current ?? undefined,
-            }).catch(() => []);
-        const dynamicScheduledSessionsRequest = includeStaticData
-          ? fetchScheduledPTSessions(accessToken ?? undefined, squadron).catch(() => [])
-          : fetchScheduledPTSessions(accessToken ?? undefined, squadron, {
-              updatedAfter: lastScheduledFetchAtRef.current ?? undefined,
-            }).catch(() => []);
-
         const [
           rosterMembers,
-          staticApprovedManualWorkouts,
+          approvedManualWorkouts,
           pfraRecords,
           attendanceSessions,
           sharedWorkouts,
-          incrementalApprovedManualWorkouts,
           scheduledSessions,
           trophyRows,
         ] = await Promise.all([
-          ...staticRequests,
+          includeStaticData
+            ? fetchRosterMembers(accessToken ?? undefined, squadron)
+            : Promise.resolve(useMemberStore.getState().members),
+          includeStaticData
+            ? fetchApprovedManualWorkouts(accessToken ?? undefined, squadron, { includeProofImage: false }).catch(() => [])
+            : Promise.resolve(
+                useMemberStore.getState().members.map((member) => ({
+                  memberId: member.id,
+                  memberEmail: member.email,
+                  workouts: member.workouts.filter((workout) => workout.source === 'manual' && Boolean(workout.externalId)),
+                }))
+              ),
+          includeStaticData
+            ? fetchPFRARecords(accessToken ?? undefined, squadron).catch(() => [])
+            : Promise.resolve(
+                useMemberStore.getState().members.map((member) => ({
+                  memberId: member.id,
+                  memberEmail: member.email,
+                  assessments: member.fitnessAssessments,
+                }))
+              ),
           fetchAttendanceSessions(accessToken ?? undefined).catch(() => []),
-          dynamicSharedWorkoutsRequest,
-          dynamicApprovedManualWorkoutsRequest,
-          dynamicScheduledSessionsRequest,
+          fetchSharedWorkouts(accessToken ?? undefined, squadron).catch(() => []),
+          fetchScheduledPTSessions(accessToken ?? undefined, squadron).catch(() => []),
           fetchMemberTrophies(accessToken ?? undefined, squadron, true).catch(() => []),
         ]);
         if (isCancelled) {
@@ -280,25 +245,7 @@ function TabsInner() {
           }
         });
 
-        const currentStoreState = useMemberStore.getState();
-        const currentMembers = currentStoreState.members;
-        const sourceRosterMembers = rosterMembers ?? currentMembers;
-        const sourceSharedWorkouts = includeStaticData
-          ? sharedWorkouts
-          : mergeById(currentStoreState.sharedWorkouts, sharedWorkouts);
-        const sourceApprovedManualWorkouts = includeStaticData
-          ? staticApprovedManualWorkouts
-          : mergeApprovedManualWorkoutEntries(
-              currentStoreState.members.map((member) => ({
-                memberId: member.id,
-                memberEmail: member.email,
-                workouts: member.workouts.filter((workout) => workout.source === 'manual' && Boolean(workout.externalId)),
-              })),
-              incrementalApprovedManualWorkouts
-            );
-        const sourceScheduledSessions = includeStaticData
-          ? scheduledSessions
-          : mergeById(currentStoreState.scheduledSessions, scheduledSessions);
+        const sourceRosterMembers = rosterMembers;
         const normalizedRosterMembers = user
           ? sourceRosterMembers.map((member) => {
               const isMatchByEmail =
@@ -345,18 +292,18 @@ function TabsInner() {
           createdBy: mapMemberId(session.createdBy),
           attendees: [...new Set(session.attendees.map(mapMemberId).filter((memberId) => hasMemberId(memberId)))],
         }));
-        const remappedScheduledSessions = sourceScheduledSessions.map((session) => ({
+        const remappedScheduledSessions = scheduledSessions.map((session) => ({
           ...session,
           createdBy: mapMemberId(session.createdBy),
         }));
-        const remappedSharedWorkouts = sourceSharedWorkouts.map((workout) => ({
+        const remappedSharedWorkouts = sharedWorkouts.map((workout) => ({
           ...workout,
           createdBy: mapMemberId(workout.createdBy),
           thumbsUp: [...new Set(workout.thumbsUp.map(mapMemberId).filter((memberId) => hasMemberId(memberId)))],
           thumbsDown: [...new Set(workout.thumbsDown.map(mapMemberId).filter((memberId) => hasMemberId(memberId)))],
           favoritedBy: [...new Set(workout.favoritedBy.map(mapMemberId).filter((memberId) => hasMemberId(memberId)))],
         }));
-        const remappedApprovedManualWorkouts = sourceApprovedManualWorkouts.map((entry) => ({
+        const remappedApprovedManualWorkouts = approvedManualWorkouts.map((entry) => ({
           ...entry,
           memberId: entry.memberId ? mapMemberId(entry.memberId) : entry.memberId,
         }));
@@ -534,11 +481,6 @@ function TabsInner() {
             });
           }
         }
-
-        const nowIso = new Date().toISOString();
-        lastSharedWorkoutsFetchAtRef.current = nowIso;
-        lastManualWorkoutsFetchAtRef.current = nowIso;
-        lastScheduledFetchAtRef.current = nowIso;
       } catch (error) {
         console.error('Unable to sync roster from Supabase.', error);
       } finally {
@@ -628,9 +570,9 @@ function TabsInner() {
           backgroundColor: "#071226",
           borderTopWidth: 1,
           borderTopColor: "rgba(255,255,255,0.08)",
-          height: isStandaloneWeb ? 82 : Platform.OS === 'web' ? 60 : 66,
-          paddingBottom: isStandaloneWeb ? 18 : 0,
-          paddingTop: isStandaloneWeb ? 4 : 0,
+          height: Platform.OS === 'web' ? 60 : 66,
+          paddingBottom: 0,
+          paddingTop: 0,
           position: "absolute",
           left: 0,
           right: 0,
