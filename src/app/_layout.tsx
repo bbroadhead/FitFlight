@@ -6,8 +6,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { useEffect } from 'react';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { Image, ScrollView, Text, View } from 'react-native';
-import { useMemberStore, ALL_ACHIEVEMENTS } from '@/lib/store';
+import { useAuthStore, useMemberStore, ALL_ACHIEVEMENTS } from '@/lib/store';
 import { AchievementCelebration } from '@/components/AchievementCelebration';
 import { TutorialTourProvider } from '@/contexts/TutorialTourContext';
 
@@ -35,10 +36,24 @@ const AirForceDarkTheme = {
 function RootLayoutNav() {
   const recentAchievementId = useMemberStore((state) => state.recentAchievementId);
   const dismissAchievementCelebration = useMemberStore((state) => state.dismissAchievementCelebration);
+  const keepAwakeEnabled = useAuthStore((state) => state.keepAwakeEnabled);
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
 
   useEffect(() => {
     SplashScreen.hideAsync();
   }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated || !keepAwakeEnabled) {
+      void deactivateKeepAwake('fitflight-app');
+      return;
+    }
+
+    void activateKeepAwakeAsync('fitflight-app');
+    return () => {
+      void deactivateKeepAwake('fitflight-app');
+    };
+  }, [isAuthenticated, keepAwakeEnabled]);
 
   const recentAchievement = recentAchievementId
     ? ALL_ACHIEVEMENTS.find((achievement) => achievement.id === recentAchievementId) ?? null
@@ -55,6 +70,7 @@ function RootLayoutNav() {
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="member-profile" options={{ headerShown: false }} />
           <Stack.Screen name="analytics" options={{ headerShown: false }} />
+          <Stack.Screen name="personal-analytics" options={{ headerShown: false }} />
           <Stack.Screen name="app-usage-analytics" options={{ headerShown: false }} />
           <Stack.Screen name="add-workout" options={{ headerShown: false }} />
           <Stack.Screen name="schedule-session" options={{ headerShown: false }} />

@@ -7,7 +7,7 @@ import { ChevronLeft, Check, X, TrendingDown, TrendingUp } from 'lucide-react-na
 import Animated, { FadeInDown, ZoomIn } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { cn } from '@/lib/cn';
-import { useAuthStore, useMemberStore, type FitnessAssessment } from '@/lib/store';
+import { useAuthStore, useMemberStore, getDisplayName, type FitnessAssessment } from '@/lib/store';
 import { type Gender } from '@/lib/pfraScoring2026';
 import { savePFRARecord } from '@/lib/supabaseData';
 
@@ -121,6 +121,8 @@ export default function UploadFitnessTrackerScreen() {
           memberEmail: user.email,
           squadron: user.squadron,
           assessment,
+          recordedByMemberId: user.id,
+          recordedByName: getDisplayName(user),
           accessToken,
         });
       }

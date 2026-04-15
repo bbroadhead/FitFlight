@@ -67,6 +67,8 @@ export interface FitnessAssessment {
     waist?: { score: number; inches: number; exempt?: boolean };
   };
   isPrivate: boolean;
+  loggedByMemberId?: string;
+  loggedByName?: string;
 }
 
 export interface Workout {
@@ -185,6 +187,7 @@ export interface User {
   integrationConnections?: Partial<Record<IntegrationService, IntegrationConnection>>;
   mustChangePassword?: boolean;
   hasLoggedIntoApp?: boolean;
+  keepAwakeEnabled?: boolean;
 }
 
 // Helper to get display name
@@ -399,10 +402,12 @@ interface AuthState {
   rememberSession: boolean;
   accessToken: string | null;
   refreshToken: string | null;
+  keepAwakeEnabled: boolean;
   login: (user: User, options?: { rememberSession?: boolean }) => void;
   setSessionTokens: (tokens: { accessToken: string | null; refreshToken: string | null }) => void;
   logout: () => void;
   updateUser: (updates: Partial<User>) => void;
+  setKeepAwakeEnabled: (enabled: boolean) => void;
   setHasCheckedAuth: (checked: boolean) => void;
 }
 
@@ -705,11 +710,13 @@ export const useAuthStore = create<AuthState>()(
       rememberSession: false,
       accessToken: null,
       refreshToken: null,
+      keepAwakeEnabled: true,
       login: (user, options) => set({
         user,
         isAuthenticated: true,
         hasCheckedAuth: true,
         rememberSession: options?.rememberSession ?? false,
+        keepAwakeEnabled: user.keepAwakeEnabled ?? true,
       }),
       setSessionTokens: (tokens) => set({
         accessToken: tokens.accessToken,
@@ -723,13 +730,19 @@ export const useAuthStore = create<AuthState>()(
         refreshToken: null,
       }),
       updateUser: (updates) => set((state) => ({
-        user: state.user ? { ...state.user, ...updates } : null
+        user: state.user ? { ...state.user, ...updates } : null,
+        keepAwakeEnabled:
+          typeof updates.keepAwakeEnabled === 'boolean' ? updates.keepAwakeEnabled : state.keepAwakeEnabled,
+      })),
+      setKeepAwakeEnabled: (enabled) => set((state) => ({
+        keepAwakeEnabled: enabled,
+        user: state.user ? { ...state.user, keepAwakeEnabled: enabled } : state.user,
       })),
       setHasCheckedAuth: (checked) => set({ hasCheckedAuth: checked }),
     }),
     {
       name: 'flighttrack-auth',
-      version: 2,
+      version: 3,
       storage: createJSONStorage(() => AsyncStorage),
       migrate: (persistedState: unknown, version) => {
         if (!persistedState || typeof persistedState !== 'object') {
@@ -745,6 +758,17 @@ export const useAuthStore = create<AuthState>()(
             rememberSession: false,
             accessToken: null,
             refreshToken: null,
+            keepAwakeEnabled: true,
+          } as AuthState;
+        }
+
+        if (version < 3) {
+          return {
+            ...state,
+            keepAwakeEnabled:
+              typeof state.user?.keepAwakeEnabled === 'boolean'
+                ? state.user.keepAwakeEnabled
+                : (state as Partial<AuthState>).keepAwakeEnabled ?? true,
           } as AuthState;
         }
 
@@ -757,6 +781,7 @@ export const useAuthStore = create<AuthState>()(
         rememberSession: state.rememberSession,
         accessToken: state.rememberSession ? state.accessToken : null,
         refreshToken: state.rememberSession ? state.refreshToken : null,
+        keepAwakeEnabled: state.keepAwakeEnabled,
       }),
       onRehydrateStorage: () => (state) => {
         if (state) {
@@ -846,9 +871,7 @@ export const useMemberStore = create<MemberState>()(
           ptSessions: nextPtSessions,
           scheduledSessions: nextScheduledSessions,
           sharedWorkouts: nextSharedWorkouts,
-          recentAchievementId:
-            findNewlyEarnedAchievementId(state.members, hydrateDerivedMemberState(nextMembers, nextPtSessions, nextSharedWorkouts)) ??
-            state.recentAchievementId,
+          recentAchievementId: state.recentAchievementId,
           ufpmId:
             state.ufpmId && validMemberIds.has(mapMemberId(state.ufpmId))
               ? mapMemberId(state.ufpmId)
@@ -894,13 +917,11 @@ export const useMemberStore = create<MemberState>()(
             attendeeSources: session.attendeeSources ?? {},
           }));
           const nextMembers = hydrateDerivedMemberState(state.members, nextSessions, state.sharedWorkouts);
-          const nextRecentAchievementId =
-            findNewlyEarnedAchievementId(state.members, nextMembers) ?? state.recentAchievementId;
 
         return {
           ptSessions: nextSessions,
           members: nextMembers,
-          recentAchievementId: nextRecentAchievementId,
+          recentAchievementId: state.recentAchievementId,
         };
       }),
 
@@ -1113,7 +1134,7 @@ export const useMemberStore = create<MemberState>()(
         const hydratedMembers = hydrateDerivedMemberState(nextMembers, state.ptSessions, state.sharedWorkouts);
         return {
           members: hydratedMembers,
-          recentAchievementId: findNewlyEarnedAchievementId(state.members, hydratedMembers) ?? state.recentAchievementId,
+          recentAchievementId: state.recentAchievementId,
         };
       }),
 
@@ -1137,7 +1158,7 @@ export const useMemberStore = create<MemberState>()(
         const hydratedMembers = hydrateDerivedMemberState(nextMembers, state.ptSessions, state.sharedWorkouts);
         return {
           members: hydratedMembers,
-          recentAchievementId: findNewlyEarnedAchievementId(state.members, hydratedMembers) ?? state.recentAchievementId,
+          recentAchievementId: state.recentAchievementId,
         };
       }),
 
@@ -1167,7 +1188,7 @@ export const useMemberStore = create<MemberState>()(
 
         return {
           members: nextMembers,
-          recentAchievementId: findNewlyEarnedAchievementId(state.members, nextMembers) ?? state.recentAchievementId,
+          recentAchievementId: state.recentAchievementId,
         };
       }),
 
@@ -1224,7 +1245,7 @@ export const useMemberStore = create<MemberState>()(
         return {
           sharedWorkouts: workouts,
           members: nextMembers,
-          recentAchievementId: findNewlyEarnedAchievementId(state.members, nextMembers) ?? state.recentAchievementId,
+          recentAchievementId: state.recentAchievementId,
         };
       }),
 

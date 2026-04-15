@@ -3,6 +3,8 @@ create table if not exists public.pfra_records (
   member_id text not null,
   member_email text not null,
   squadron text not null,
+  recorded_by_member_id text null,
+  recorded_by_name text null,
   assessment_date date not null,
   overall_score numeric not null,
   is_private boolean not null default false,
@@ -25,6 +27,12 @@ create table if not exists public.pfra_records (
   waist_exempt boolean not null default false,
   created_at timestamptz not null default now()
 );
+
+alter table public.pfra_records
+  add column if not exists recorded_by_member_id text null;
+
+alter table public.pfra_records
+  add column if not exists recorded_by_name text null;
 
 create index if not exists idx_pfra_records_member_id
   on public.pfra_records(member_id);

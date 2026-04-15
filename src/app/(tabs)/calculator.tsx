@@ -7,6 +7,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { Audio } from 'expo-av';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import Svg, { Circle } from 'react-native-svg';
@@ -225,9 +226,15 @@ function SliderMarkers({ markers, min, max, theme }: { markers: SliderMarker[]; 
     <>
       <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, top: 6, height: 20, justifyContent: 'center' }}>
         {markers.map((marker) => {
-          const left = `${clamp(((marker.value - min) / range) * 100, 0, 100)}%` as const;
+          const leftPct = clamp(((marker.value - min) / range) * 100, 0, 100);
+          const edgeAlignedStyle =
+            leftPct <= 0
+              ? { left: 0, marginLeft: 0 }
+              : leftPct >= 100
+                ? { right: 0, marginLeft: 0 }
+                : { left: `${leftPct}%` as const, marginLeft: -1 };
           return (
-            <View key={`${marker.label}-${marker.value}`} style={{ position: 'absolute', left, top: 1, bottom: 1, marginLeft: -1, width: 2 }}>
+            <View key={`${marker.label}-${marker.value}`} style={{ position: 'absolute', top: 1, bottom: 1, width: 2, ...edgeAlignedStyle }}>
               <View style={{ flex: 1, backgroundColor: marker.color ?? theme.color, borderRadius: 999, opacity: 0.98 }} />
             </View>
           );
@@ -736,9 +743,22 @@ export default function CalculatorScreen() {
   const awardAchievement = useMemberStore((s) => s.awardAchievement);
   const user = useAuthStore((s) => s.user);
   const accessToken = useAuthStore((s) => s.accessToken);
+  const keepAwakeEnabled = useAuthStore((s) => s.keepAwakeEnabled);
   const currentMember = user ? members.find((member) => member.id === user.id) : null;
   const [savePfRADate, setSavePfRADate] = useState(new Date());
   const [showSavePfRADatePicker, setShowSavePfRADatePicker] = useState(false);
+
+  useEffect(() => {
+    if (!keepAwakeEnabled) {
+      void deactivateKeepAwake();
+      return;
+    }
+
+    void activateKeepAwakeAsync('fitflight-calculator');
+    return () => {
+      void deactivateKeepAwake('fitflight-calculator');
+    };
+  }, [keepAwakeEnabled]);
   const [ageYears, setAgeYears] = useState(34);
   const [gender, setGender] = useState<Gender>('male');
 

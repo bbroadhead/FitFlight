@@ -124,10 +124,15 @@ export default function MemberProfileScreen() {
 
   // All hooks must be called before early returns
   const isOwnProfile = currentUser?.id === member?.id;
+  const hasProfilePrivacyOverride =
+    currentUser?.accountType === 'fitflight_creator' ||
+    currentUser?.accountType === 'ufpm' ||
+    currentUser?.accountType === 'demo' ||
+    currentUser?.accountType === 'squadron_leadership';
   const canViewAllWorkouts = isOwnProfile || canManagePTPrograms(currentUser?.accountType ?? 'standard');
-  const canViewWorkoutHistorySection = isOwnProfile || (member?.showWorkoutHistoryOnProfile ?? true);
-  const canViewWorkoutUploadsSection = isOwnProfile || (member?.showWorkoutUploadsOnProfile ?? true);
-  const canViewPFRASection = isOwnProfile || (member?.showPFRARecordsOnProfile ?? true);
+  const canViewWorkoutHistorySection = isOwnProfile || hasProfilePrivacyOverride || (member?.showWorkoutHistoryOnProfile ?? true);
+  const canViewWorkoutUploadsSection = isOwnProfile || hasProfilePrivacyOverride || (member?.showWorkoutUploadsOnProfile ?? true);
+  const canViewPFRASection = isOwnProfile || hasProfilePrivacyOverride || (member?.showPFRARecordsOnProfile ?? true);
 
   const allEffectiveWorkouts = useMemo(() => {
     if (!member) return [];
@@ -259,10 +264,7 @@ export default function MemberProfileScreen() {
   // Get fitness assessments (check privacy)
   const canViewFitnessAssessments = isOwnProfile ||
     !member.fitnessAssessments.some(fa => fa.isPrivate) ||
-    currentUser?.accountType === 'fitflight_creator' ||
-    currentUser?.accountType === 'ufpm' ||
-    currentUser?.accountType === 'demo' ||
-    currentUser?.accountType === 'squadron_leadership';
+    hasProfilePrivacyOverride;
   const pfraHistory = useMemo(
     () => [...member.fitnessAssessments].sort((a, b) => b.date.localeCompare(a.date)),
     [member]

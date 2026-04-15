@@ -14,21 +14,24 @@ export default function CrossSquadronScreen() {
   const router = useRouter();
   const user = useAuthStore(s => s.user);
   const members = useMemberStore(s => s.members);
+  const ptSessions = useMemberStore(s => s.ptSessions);
   const [selectedSquadron, setSelectedSquadron] = useState<Squadron | null>(null);
+  const currentMonthKey = new Date().toISOString().slice(0, 7);
 
   // Get stats for each squadron - must be before conditional return
   const squadronStats = useMemo(() => {
     return SQUADRONS.map(squadron => {
       const squadronMembers = members.filter(m => m.squadron === squadron);
-      const totalMinutes = squadronMembers.reduce((acc, m) => acc + getMemberMonthSummary(m, new Date().toISOString().slice(0, 7)).minutes, 0);
-      const totalDistance = squadronMembers.reduce((acc, m) => acc + getMemberMonthSummary(m, new Date().toISOString().slice(0, 7)).miles, 0);
-      const totalWorkouts = squadronMembers.reduce((acc, m) => acc + getMemberMonthSummary(m, new Date().toISOString().slice(0, 7)).workoutCount, 0);
+      const squadronSessions = ptSessions.filter(session => session.squadron === squadron);
+      const totalMinutes = squadronMembers.reduce((acc, m) => acc + getMemberMonthSummary(m, currentMonthKey, squadronSessions).minutes, 0);
+      const totalDistance = squadronMembers.reduce((acc, m) => acc + getMemberMonthSummary(m, currentMonthKey, squadronSessions).miles, 0);
+      const totalWorkouts = squadronMembers.reduce((acc, m) => acc + getMemberMonthSummary(m, currentMonthKey, squadronSessions).workoutCount, 0);
 
       // Get top 3 performers
       const topPerformers = [...squadronMembers]
         .map(m => ({
           ...m,
-          totalScore: getMemberMonthSummary(m, new Date().toISOString().slice(0, 7)).score,
+          totalScore: getMemberMonthSummary(m, currentMonthKey, squadronSessions).score,
         }))
         .sort((a, b) => b.totalScore - a.totalScore)
         .slice(0, 3);
@@ -42,7 +45,7 @@ export default function CrossSquadronScreen() {
         topPerformers,
       };
     });
-  }, [members]);
+  }, [currentMonthKey, members, ptSessions]);
 
   const selectedStats = selectedSquadron
     ? squadronStats.find(s => s.squadron === selectedSquadron)

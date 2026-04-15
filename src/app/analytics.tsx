@@ -272,6 +272,18 @@ export default function AnalyticsScreen() {
     });
 
     const maxPFRAAverage = Math.max(...pfraTimeline.map((entry) => entry.average), 100);
+    const recentPFRARecords = members
+      .flatMap((member) =>
+        member.fitnessAssessments.map((assessment) => ({
+          id: assessment.id,
+          memberName: getDisplayName(member),
+          score: assessment.overallScore,
+          date: assessment.date,
+          loggedByName: assessment.loggedByName ?? getDisplayName(member),
+        }))
+      )
+      .sort((left, right) => right.date.localeCompare(left.date))
+      .slice(0, 6);
 
     return {
       totalMembers,
@@ -288,6 +300,7 @@ export default function AnalyticsScreen() {
       longestWorkout,
       pfraTimeline,
       maxPFRAAverage,
+      recentPFRARecords,
       flightStats,
       avgPFRAScore: Math.round(avgPFRAScore * 10) / 10,
       membersWithFA: membersWithFA.length,
@@ -881,6 +894,30 @@ export default function AnalyticsScreen() {
               </Text>
             </View>
           </Animated.View>
+
+          {analytics.recentPFRARecords.length > 0 && (
+            <Animated.View
+              entering={FadeInDown.delay(262).springify()}
+              className="mt-4 p-4 bg-white/5 rounded-2xl border border-white/10"
+            >
+              <View className="flex-row items-center mb-4">
+                <TrendingUp size={20} color="#F59E0B" />
+                <Text className="text-white font-semibold text-lg ml-2">Recent PFRA Entries</Text>
+              </View>
+              {analytics.recentPFRARecords.map((record) => (
+                <View key={record.id} className="mb-3 rounded-xl border border-white/10 bg-black/10 p-3 last:mb-0">
+                  <View className="flex-row items-center justify-between">
+                    <Text className="text-white font-semibold flex-1 pr-3">{record.memberName}</Text>
+                    <Text className="text-af-gold font-bold">{record.score.toFixed(1)}</Text>
+                  </View>
+                  <View className="mt-2 flex-row items-center justify-between">
+                    <Text className="text-af-silver text-xs">{record.date}</Text>
+                    <Text className="text-af-silver text-xs">Logged by {record.loggedByName}</Text>
+                  </View>
+                </View>
+              ))}
+            </Animated.View>
+          )}
 
           {/* Workout Type Breakdown */}
           {analytics.workoutTypeBreakdown.length > 0 && (

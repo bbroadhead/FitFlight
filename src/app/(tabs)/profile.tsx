@@ -156,6 +156,8 @@ export default function ProfileScreen() {
   const user = useAuthStore(s => s.user);
   const logout = useAuthStore(s => s.logout);
   const accessToken = useAuthStore(s => s.accessToken);
+  const keepAwakeEnabled = useAuthStore(s => s.keepAwakeEnabled);
+  const setKeepAwakeEnabled = useAuthStore(s => s.setKeepAwakeEnabled);
   const members = useMemberStore(s => s.members);
   const addMember = useMemberStore(s => s.addMember);
   const removeMember = useMemberStore(s => s.removeMember);
@@ -1337,6 +1339,13 @@ export default function ProfileScreen() {
 
       const imageUri = await uploadProfileImage({
         memberId: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        useFirstInitial:
+          members.filter(
+            (member) =>
+              member.lastName.trim().toLowerCase() === user.lastName.trim().toLowerCase()
+          ).length > 1,
         localUri: croppedImage.uri,
         mimeType: outputMimeType,
         accessToken: accessToken ?? undefined,
@@ -1892,11 +1901,31 @@ export default function ProfileScreen() {
     : availableSummaryMonths[0] ?? getMonthKey();
   const monthlyUserSummary = userStats && 'workouts' in userStats
     ? getMemberMonthSummary(userStats as Member, summaryMonth, ptSessions)
-    : { workoutCount: 0, minutes: 0, miles: 0, score: 0 };
+    : { workouts: [], workoutCount: 0, minutes: 0, miles: 0, score: 0 };
   const monthlyPFRAEntries = userStats && 'fitnessAssessments' in userStats
     ? (userStats as Member).fitnessAssessments.filter((assessment) => assessment.date.startsWith(summaryMonth))
     : [];
   const latestMonthlyPFRA = monthlyPFRAEntries[monthlyPFRAEntries.length - 1] ?? null;
+  const personalAnalyticsSummary = useMemo(() => {
+    const typeCounts = new Map<string, number>();
+    const dayKeys = new Set<string>();
+
+    monthlyUserSummary.workouts.forEach((workout) => {
+      const label = workout.source === 'attendance' ? 'Attendance' : workout.type;
+      typeCounts.set(label, (typeCounts.get(label) ?? 0) + 1);
+      dayKeys.add(workout.date);
+    });
+
+    const topTypeEntry = Array.from(typeCounts.entries()).sort((left, right) => right[1] - left[1])[0];
+    return {
+      topType: topTypeEntry?.[0] ?? 'No workouts yet',
+      topTypeCount: topTypeEntry?.[1] ?? 0,
+      activeDays: dayKeys.size,
+      averageMinutes: monthlyUserSummary.workoutCount > 0
+        ? monthlyUserSummary.minutes / monthlyUserSummary.workoutCount
+        : 0,
+    };
+  }, [monthlyUserSummary]);
   const trophyStats = useMemo(
     () => buildTrophyStats(
       ALL_ACHIEVEMENTS,
@@ -2347,6 +2376,43 @@ export default function ProfileScreen() {
                 <Text className="text-white font-semibold mt-1">{latestMonthlyPFRA?.overallScore ?? 'N/A'}</Text>
               </View>
             </View>
+          </Animated.View>
+
+          <Animated.View
+            entering={FadeInDown.delay(205).springify()}
+            className="mx-6 mt-4"
+          >
+            <Pressable
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                router.push('/personal-analytics');
+              }}
+              className="rounded-2xl border border-white/10 bg-white/5 p-4"
+            >
+              <View className="flex-row items-center justify-between mb-3">
+                <Text className="text-white/60 text-xs uppercase tracking-wider">Personal Analytics</Text>
+                <Text className="text-af-silver text-xs">Open</Text>
+              </View>
+              <View className="flex-row justify-between">
+                <View className="items-center flex-1">
+                  <Activity size={20} color="#A855F7" />
+                  <Text className="text-white font-bold text-lg mt-1">{personalAnalyticsSummary.topTypeCount}</Text>
+                  <Text className="text-af-silver text-xs text-center">{personalAnalyticsSummary.topType}</Text>
+                </View>
+                <View className="w-px bg-white/10" />
+                <View className="items-center flex-1">
+                  <Calendar size={20} color="#4A90D9" />
+                  <Text className="text-white font-bold text-lg mt-1">{personalAnalyticsSummary.activeDays}</Text>
+                  <Text className="text-af-silver text-xs">Active Days</Text>
+                </View>
+                <View className="w-px bg-white/10" />
+                <View className="items-center flex-1">
+                  <Dumbbell size={20} color="#22C55E" />
+                  <Text className="text-white font-bold text-lg mt-1">{personalAnalyticsSummary.averageMinutes.toFixed(1)}</Text>
+                  <Text className="text-af-silver text-xs">Avg Min</Text>
+                </View>
+              </View>
+            </Pressable>
           </Animated.View>
 
           <TutorialTarget
@@ -3980,6 +4046,26 @@ export default function ProfileScreen() {
                   </View>
                 </Pressable>
               ) : null}
+
+              <View className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
+                <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">App Behavior</Text>
+                <View className="flex-row items-center justify-between py-2">
+                  <View className="flex-1 pr-4">
+                    <Text className="text-white font-semibold">Keep Screen Awake While Using FitFlight</Text>
+                    <Text className="text-af-silver text-xs mt-1">Prevents the app from sleeping while it is open, especially useful for the calculator.</Text>
+                  </View>
+                  <Switch
+                    value={keepAwakeEnabled}
+                    onValueChange={(value) => {
+                      Haptics.selectionAsync();
+                      setKeepAwakeEnabled(value);
+                    }}
+                    trackColor={{ false: '#334155', true: '#4A90D9' }}
+                    thumbColor="#FFFFFF"
+                    ios_backgroundColor="#334155"
+                  />
+                </View>
+              </View>
 
               <View className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
                 <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">Profile Visibility</Text>

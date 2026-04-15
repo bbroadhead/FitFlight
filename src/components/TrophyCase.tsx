@@ -19,33 +19,69 @@ interface CompactTrophyBadgesProps {
 }
 
 export function CompactTrophyBadges({ trophies, overflowCount = 0 }: CompactTrophyBadgesProps) {
+  const [selectedTrophy, setSelectedTrophy] = useState<TrophyWithStats | null>(null);
+
   if (trophies.length === 0 && overflowCount <= 0) {
     return null;
   }
 
   return (
-    <View className="flex-row items-center flex-wrap mt-1">
-      {trophies.map((trophy) => {
-        const Icon = trophy.Icon;
-        return (
-          <View
-            key={trophy.id}
-            className="w-6 h-6 rounded-full items-center justify-center mr-1.5 mb-1 border"
-            style={{
-              backgroundColor: trophy.iconBg,
-              borderColor: trophy.isHard ? '#FFD700' : trophy.borderColor,
-            }}
-          >
-            <Icon size={11} color={trophy.iconColor} />
+    <>
+      <View className="flex-row items-center flex-wrap mt-1">
+        {trophies.map((trophy) => {
+          const Icon = trophy.Icon;
+          return (
+            <Pressable
+              key={trophy.id}
+              onPress={() => setSelectedTrophy(trophy)}
+              className="w-6 h-6 rounded-full items-center justify-center mr-1.5 mb-1 border"
+              style={{
+                backgroundColor: trophy.iconBg,
+                borderColor: trophy.isHard ? '#FFD700' : trophy.borderColor,
+              }}
+            >
+              <Icon size={11} color={trophy.iconColor} />
+            </Pressable>
+          );
+        })}
+        {overflowCount > 0 ? (
+          <View className="px-2 h-6 rounded-full items-center justify-center border border-white/15 bg-white/5 mb-1">
+            <Text className="text-af-silver text-xs font-semibold">+{overflowCount}</Text>
           </View>
-        );
-      })}
-      {overflowCount > 0 ? (
-        <View className="px-2 h-6 rounded-full items-center justify-center border border-white/15 bg-white/5 mb-1">
-          <Text className="text-af-silver text-xs font-semibold">+{overflowCount}</Text>
-        </View>
-      ) : null}
-    </View>
+        ) : null}
+      </View>
+
+      <Modal visible={!!selectedTrophy} transparent animationType="fade">
+        <Pressable className="flex-1 bg-black/35" onPress={() => setSelectedTrophy(null)}>
+          <View className="flex-1 items-center justify-start px-6 pt-36">
+            {selectedTrophy ? (
+              <Pressable
+                onPress={() => undefined}
+                className="w-full max-w-xs rounded-3xl border border-white/15 bg-af-navy/95 px-4 py-4"
+              >
+                <View
+                  style={{
+                    position: 'absolute',
+                    top: -10,
+                    left: '50%',
+                    marginLeft: -10,
+                    width: 20,
+                    height: 20,
+                    backgroundColor: 'rgba(10,22,40,0.95)',
+                    borderLeftWidth: 1,
+                    borderTopWidth: 1,
+                    borderColor: 'rgba(255,255,255,0.15)',
+                    transform: [{ rotate: '45deg' }],
+                  }}
+                />
+                <Text className="text-white font-semibold text-base">{selectedTrophy.name}</Text>
+                <Text className="text-af-silver text-sm mt-2 leading-5">{selectedTrophy.description}</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        </Pressable>
+      </Modal>
+    </>
   );
 }
 

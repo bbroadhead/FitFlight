@@ -4,7 +4,7 @@ import Checkbox from 'expo-checkbox';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, Redirect } from 'expo-router';
-import { Shield, User, Mail, Lock, ChevronRight, Users, AlertCircle, Building2 } from 'lucide-react-native';
+import { Shield, User, Mail, Lock, ChevronRight, Users, AlertCircle, Building2, Eye, EyeOff } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { useAuthStore, useMemberStore, type AccountType, type Flight, type Member, type Squadron, type User as UserType, getDisplayName, SQUADRONS } from '@/lib/store';
@@ -201,6 +201,7 @@ export default function LoginScreen() {
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [selectedFlight, setSelectedFlight] = useState<Flight>('Apex');
   const [selectedSquadron, setSelectedSquadron] = useState<Squadron>('Hawks');
   const [selectedRank, setSelectedRank] = useState('A1C');
@@ -1037,9 +1038,19 @@ export default function LoginScreen() {
                     placeholderTextColor="#ffffff40"
                     value={password}
                     onChangeText={setPassword}
-                    secureTextEntry
+                    secureTextEntry={!showPassword}
                     className="flex-1 ml-3 text-white text-base"
                   />
+                  <Pressable
+                    onPress={() => {
+                      Haptics.selectionAsync();
+                      setShowPassword((current) => !current);
+                    }}
+                    hitSlop={10}
+                    className="ml-2 h-8 w-8 items-center justify-center rounded-full bg-white/5"
+                  >
+                    {showPassword ? <EyeOff size={18} color="#C0C0C0" /> : <Eye size={18} color="#C0C0C0" />}
+                  </Pressable>
                 </View>
               </View>
 

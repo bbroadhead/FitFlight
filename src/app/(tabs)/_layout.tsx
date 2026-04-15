@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Redirect, withLayoutContext } from "expo-router";
 import { createMaterialTopTabNavigator } from "@react-navigation/material-top-tabs";
 import { Ionicons } from "@expo/vector-icons";
@@ -55,13 +55,17 @@ function TabsInner() {
   const syncLeaderboardHistory = useMemberStore((state) => state.syncLeaderboardHistory);
   const syncMemberAchievements = useMemberStore((state) => state.syncMemberAchievements);
   const previewAchievementCelebration = useMemberStore((state) => state.previewAchievementCelebration);
+  const recentAchievementId = useMemberStore((state) => state.recentAchievementId);
   const pruneOldWorkoutMedia = useMemberStore((state) => state.pruneOldWorkoutMedia);
+  const [isInitialSyncing, setIsInitialSyncing] = useState(true);
   const lastRosterSyncKeyRef = useRef<string | null>(null);
   const lastAttendanceSyncKeyRef = useRef<string | null>(null);
   const lastScheduledSyncKeyRef = useRef<string | null>(null);
   const lastSharedWorkoutsSyncKeyRef = useRef<string | null>(null);
   const lastManualWorkoutSyncKeyRef = useRef<string | null>(null);
   const lastPfraSyncKeyRef = useRef<string | null>(null);
+  const handledCelebrationTrophyIdsRef = useRef<Set<string>>(new Set());
+  const markingCelebrationTrophyIdsRef = useRef<Set<string>>(new Set());
 
   const buildMemberIdMap = (rosterMembers: ReturnType<typeof useMemberStore.getState>['members']) => {
     const currentMembers = useMemberStore.getState().members;
@@ -137,14 +141,25 @@ function TabsInner() {
     );
 
   useEffect(() => {
+    if (recentAchievementId) {
+      handledCelebrationTrophyIdsRef.current.add(recentAchievementId);
+    }
+  }, [recentAchievementId]);
+
+  useEffect(() => {
     if (!isAuthenticated || !hasCheckedAuth) {
       return;
     }
+
+    setIsInitialSyncing(true);
 
     let isCancelled = false;
     let appState = AppState.currentState;
     let lastFullSyncAt = 0;
     let isSyncing = false;
+
+    handledCelebrationTrophyIdsRef.current.clear();
+    markingCelebrationTrophyIdsRef.current.clear();
 
     const shouldSyncNow = () => {
       if (Platform.OS === 'web' && typeof document !== 'undefined' && document.visibilityState !== 'visible') {
@@ -443,14 +458,22 @@ function TabsInner() {
           ).sort((left, right) => left.earnedAt.localeCompare(right.earnedAt));
 
           const nextCelebration = pendingCelebrationRows.find((row) =>
-            ALL_ACHIEVEMENTS.some((achievement) => achievement.id === row.trophyId)
+            ALL_ACHIEVEMENTS.some((achievement) => achievement.id === row.trophyId) &&
+            !handledCelebrationTrophyIdsRef.current.has(row.trophyId) &&
+            !markingCelebrationTrophyIdsRef.current.has(row.trophyId)
           );
 
           if (nextCelebration) {
+            handledCelebrationTrophyIdsRef.current.add(nextCelebration.trophyId);
+            markingCelebrationTrophyIdsRef.current.add(nextCelebration.trophyId);
             previewAchievementCelebration(nextCelebration.trophyId);
-            void markMemberTrophyCelebrationShown(nextCelebration.id, accessToken ?? undefined).catch((error) => {
-              console.error(`Unable to mark trophy celebration ${nextCelebration.trophyId} as shown.`, error);
-            });
+            void markMemberTrophyCelebrationShown(nextCelebration.id, accessToken ?? undefined)
+              .catch((error) => {
+                console.error(`Unable to mark trophy celebration ${nextCelebration.trophyId} as shown.`, error);
+              })
+              .finally(() => {
+                markingCelebrationTrophyIdsRef.current.delete(nextCelebration.trophyId);
+              });
           }
         }
 
@@ -484,6 +507,9 @@ function TabsInner() {
       } catch (error) {
         console.error('Unable to sync roster from Supabase.', error);
       } finally {
+        if (includeStaticData && !isCancelled) {
+          setIsInitialSyncing(false);
+        }
         isSyncing = false;
       }
     };
@@ -553,6 +579,34 @@ function TabsInner() {
 
   if (hasCheckedAuth && !isAuthenticated) {
     return <Redirect href="/login" />;
+  }
+
+  if (isInitialSyncing) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#0A1628', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+        <View
+          style={{
+            width: 84,
+            height: 84,
+            borderRadius: 24,
+            backgroundColor: 'rgba(255,255,255,0.08)',
+            borderWidth: 1,
+            borderColor: 'rgba(255,255,255,0.14)',
+            alignItems: 'center',
+            justifyContent: 'center',
+            overflow: 'hidden',
+            marginBottom: 22,
+          }}
+        >
+          <Image
+            source={require('../../../assets/images/TotalFlight_Icon_Resized.png')}
+            style={{ width: '72%', height: '72%' }}
+            resizeMode="contain"
+          />
+        </View>
+        <ActivityIndicator size="large" color="#4A90D9" />
+      </View>
+    );
   }
 
   return (

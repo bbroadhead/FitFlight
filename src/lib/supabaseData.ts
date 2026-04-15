@@ -56,6 +56,8 @@ type PFRARecordRow = {
   member_id: string;
   member_email: string;
   squadron: Squadron;
+  recorded_by_member_id: string | null;
+  recorded_by_name: string | null;
   assessment_date: string;
   overall_score: number;
   is_private: boolean;
@@ -563,12 +565,24 @@ async function uploadImageToStorage(params: {
 
 export async function uploadProfileImage(params: {
   memberId: string;
+  firstName?: string;
+  lastName?: string;
+  useFirstInitial?: boolean;
   localUri: string;
   mimeType?: string;
   accessToken?: string;
 }) {
   const extension = inferExtensionFromMimeType(params.mimeType);
-  const storagePath = `avatars/${slugify(params.memberId)}-${Date.now()}.${extension}`;
+  const normalizedLastName = params.lastName?.trim();
+  const normalizedFirstName = params.firstName?.trim();
+  const avatarStem = normalizedLastName
+    ? slugify(
+        params.useFirstInitial && normalizedFirstName
+          ? `${normalizedLastName}-${normalizedFirstName.charAt(0)}`
+          : normalizedLastName
+      )
+    : slugify(params.memberId);
+  const storagePath = `avatars/${avatarStem}-${Date.now()}.${extension}`;
   return uploadImageToStorage({
     localUri: params.localUri,
     storagePath,
@@ -699,6 +713,8 @@ function normalizePFRARecordRow(row: PFRARecordRow): FitnessAssessment {
     date: row.assessment_date,
     overallScore: row.overall_score,
     isPrivate: row.is_private,
+    loggedByMemberId: row.recorded_by_member_id ?? undefined,
+    loggedByName: row.recorded_by_name ?? undefined,
     components: {
       cardio: row.cardio_laps !== null
         ? {
@@ -1401,7 +1417,7 @@ export async function fetchPFRARecords(accessToken?: string, squadron?: Squadron
   const query = new URLSearchParams();
   query.set(
     'select',
-    'id,member_id,member_email,squadron,assessment_date,overall_score,is_private,cardio_score,cardio_time,cardio_laps,cardio_test,cardio_exempt,strength_score,strength_reps,strength_test,strength_exempt,core_score,core_reps,core_time,core_test,core_exempt,waist_score,waist_inches,waist_exempt,created_at'
+    'id,member_id,member_email,squadron,recorded_by_member_id,recorded_by_name,assessment_date,overall_score,is_private,cardio_score,cardio_time,cardio_laps,cardio_test,cardio_exempt,strength_score,strength_reps,strength_test,strength_exempt,core_score,core_reps,core_time,core_test,core_exempt,waist_score,waist_inches,waist_exempt,created_at'
   );
   query.set('order', 'assessment_date.desc,created_at.desc');
   if (squadron) {
@@ -1446,6 +1462,8 @@ export async function savePFRARecord(params: {
   memberEmail: string;
   squadron: Squadron;
   assessment: FitnessAssessment;
+  recordedByMemberId?: string;
+  recordedByName?: string;
   accessToken?: string;
 }) {
   const waist = params.assessment.components.waist;
@@ -1461,6 +1479,8 @@ export async function savePFRARecord(params: {
       member_id: params.memberId,
       member_email: params.memberEmail.toLowerCase(),
       squadron: params.squadron,
+      recorded_by_member_id: params.recordedByMemberId ?? params.assessment.loggedByMemberId ?? null,
+      recorded_by_name: params.recordedByName ?? params.assessment.loggedByName ?? null,
       assessment_date: params.assessment.date,
       overall_score: params.assessment.overallScore,
       is_private: params.assessment.isPrivate,
