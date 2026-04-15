@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, Pressable, KeyboardAvoidingView, Platform, ScrollView, Modal, Image } from 'react-native';
+import { View, Text, TextInput, Pressable, KeyboardAvoidingView, Platform, ScrollView, Modal, Image, ActivityIndicator } from 'react-native';
 import Checkbox from 'expo-checkbox';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -766,7 +766,7 @@ export default function LoginScreen() {
   if (!hasCheckedAuth) {
     return (
       <View className="flex-1 bg-af-navy items-center justify-center">
-        <Shield size={48} color="#4A90D9" />
+        <ActivityIndicator size="large" color="#4A90D9" />
       </View>
     );
   }

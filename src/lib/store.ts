@@ -54,6 +54,13 @@ export interface SharedWorkout {
   thumbsUp: string[]; // member ids who liked
   thumbsDown: string[]; // member ids who disliked
   favoritedBy: string[]; // member ids who favorited
+  source?: 'user' | 'playbook';
+  sourceLabel?: string;
+  detailSections?: Array<{
+    title: string;
+    items: string[];
+  }>;
+  searchTerms?: string[];
 }
 
 export interface FitnessAssessment {
@@ -403,12 +410,14 @@ interface AuthState {
   accessToken: string | null;
   refreshToken: string | null;
   keepAwakeEnabled: boolean;
+  seenAchievementCelebrations: Record<string, string[]>;
   login: (user: User, options?: { rememberSession?: boolean }) => void;
   setSessionTokens: (tokens: { accessToken: string | null; refreshToken: string | null }) => void;
   logout: () => void;
   updateUser: (updates: Partial<User>) => void;
   setKeepAwakeEnabled: (enabled: boolean) => void;
   setHasCheckedAuth: (checked: boolean) => void;
+  markAchievementCelebrationSeen: (userEmail: string, achievementId: string) => void;
 }
 
 interface MemberState {
@@ -711,6 +720,7 @@ export const useAuthStore = create<AuthState>()(
       accessToken: null,
       refreshToken: null,
       keepAwakeEnabled: true,
+      seenAchievementCelebrations: {},
       login: (user, options) => set({
         user,
         isAuthenticated: true,
@@ -739,10 +749,25 @@ export const useAuthStore = create<AuthState>()(
         user: state.user ? { ...state.user, keepAwakeEnabled: enabled } : state.user,
       })),
       setHasCheckedAuth: (checked) => set({ hasCheckedAuth: checked }),
+      markAchievementCelebrationSeen: (userEmail, achievementId) =>
+        set((state) => {
+          const normalizedEmail = userEmail.trim().toLowerCase();
+          const existing = state.seenAchievementCelebrations[normalizedEmail] ?? [];
+          if (existing.includes(achievementId)) {
+            return state;
+          }
+
+          return {
+            seenAchievementCelebrations: {
+              ...state.seenAchievementCelebrations,
+              [normalizedEmail]: [...existing, achievementId],
+            },
+          };
+        }),
     }),
     {
       name: 'flighttrack-auth',
-      version: 3,
+      version: 4,
       storage: createJSONStorage(() => AsyncStorage),
       migrate: (persistedState: unknown, version) => {
         if (!persistedState || typeof persistedState !== 'object') {
@@ -769,6 +794,14 @@ export const useAuthStore = create<AuthState>()(
               typeof state.user?.keepAwakeEnabled === 'boolean'
                 ? state.user.keepAwakeEnabled
                 : (state as Partial<AuthState>).keepAwakeEnabled ?? true,
+            seenAchievementCelebrations: (state as Partial<AuthState>).seenAchievementCelebrations ?? {},
+          } as AuthState;
+        }
+
+        if (version < 4) {
+          return {
+            ...state,
+            seenAchievementCelebrations: (state as Partial<AuthState>).seenAchievementCelebrations ?? {},
           } as AuthState;
         }
 
@@ -782,6 +815,7 @@ export const useAuthStore = create<AuthState>()(
         accessToken: state.rememberSession ? state.accessToken : null,
         refreshToken: state.rememberSession ? state.refreshToken : null,
         keepAwakeEnabled: state.keepAwakeEnabled,
+        seenAchievementCelebrations: state.seenAchievementCelebrations,
       }),
       onRehydrateStorage: () => (state) => {
         if (state) {

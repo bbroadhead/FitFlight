@@ -12,6 +12,18 @@ import { formatMonthLabel, getAvailableMonthKeys, getMemberMonthSummary, getMont
 
 const CHART_COLORS = ['#4A90D9', '#22C55E', '#A855F7', '#F59E0B', '#EF4444', '#14B8A6', '#EC4899', '#C084FC'];
 
+function formatWeeklyRangeLabel(weekKey: string) {
+  const [yearValue, monthValue, weekValue] = weekKey.split('-').map(Number);
+  const year = Number.isFinite(yearValue) ? yearValue : new Date().getFullYear();
+  const month = Number.isFinite(monthValue) ? monthValue : new Date().getMonth() + 1;
+  const week = Number.isFinite(weekValue) ? weekValue : 1;
+  const startDay = ((week - 1) * 7) + 1;
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const endDay = Math.min(startDay + 6, daysInMonth);
+  const monthLabel = new Date(year, month - 1, 1).toLocaleString('en-US', { month: 'short' });
+  return `${monthLabel} ${startDay}-${endDay}, ${year}`;
+}
+
 function polarToCartesian(cx: number, cy: number, radius: number, angleDegrees: number) {
   const angleRadians = ((angleDegrees - 90) * Math.PI) / 180.0;
   return {
@@ -93,7 +105,7 @@ export default function PersonalAnalyticsScreen() {
     });
 
     const weeklyMinutesSeries = Array.from(weeklyMinutes.entries()).map(([weekKey, minutes]) => ({
-      label: `W${weekKey.split('-')[2]}`,
+      label: formatWeeklyRangeLabel(weekKey),
       minutes,
     }));
 
@@ -222,7 +234,7 @@ export default function PersonalAnalyticsScreen() {
                 ))}
               </Svg>
             </View>
-            <View className="mt-2">
+            <View className="mt-0">
               {analytics.workoutTypeBreakdown.map((item) => (
                 <View key={item.type} className="flex-row items-center justify-between py-1.5">
                   <View className="flex-row items-center flex-1 pr-3">

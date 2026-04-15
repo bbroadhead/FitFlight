@@ -10,6 +10,7 @@ import { useMemberStore, useAuthStore, getDisplayName, type WorkoutType, type Sh
 import { cn } from '@/lib/cn';
 import { createSharedWorkout, deleteSharedWorkoutFromSupabase, fetchSharedWorkouts, updateSharedWorkout } from '@/lib/supabaseData';
 import { TutorialTarget } from '@/contexts/TutorialTourContext';
+import { PLAYBOOK_WORKOUT_CREATOR_ID, PLAYBOOK_WORKOUT_SOURCE_LABEL, PLAYBOOK_WORKOUTS } from '@/lib/playbookWorkouts';
 
 type FilterType = 'all' | 'favorites' | 'mine';
 type SortType = 'newest' | 'popular' | 'duration';
@@ -33,6 +34,7 @@ function WorkoutCard({
   canDelete,
   creatorName,
   editorName,
+  allowFeedback = true,
 }: {
   workout: SharedWorkout;
   currentUserId: string;
@@ -44,6 +46,7 @@ function WorkoutCard({
   canDelete: boolean;
   creatorName: string;
   editorName?: string | null;
+  allowFeedback?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -56,16 +59,25 @@ function WorkoutCard({
   const isFavorited = workout.favoritedBy.includes(currentUserId);
 
   const handleThumbsUp = () => {
+    if (!allowFeedback) {
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     onRate(userRating === 'up' ? 'none' : 'up');
   };
 
   const handleThumbsDown = () => {
+    if (!allowFeedback) {
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     onRate(userRating === 'down' ? 'none' : 'down');
   };
 
   const handleFavorite = () => {
+    if (!allowFeedback) {
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     onToggleFavorite();
   };
@@ -102,16 +114,18 @@ function WorkoutCard({
               ) : null}
             </View>
           <View className="flex-row items-center">
-            <Pressable
-              onPress={handleFavorite}
-              className="w-9 h-9 items-center justify-center"
-            >
-              <Star
-                size={20}
-                color={isFavorited ? '#FFD700' : '#6B7280'}
-                fill={isFavorited ? '#FFD700' : 'transparent'}
-              />
-            </Pressable>
+            {allowFeedback ? (
+              <Pressable
+                onPress={handleFavorite}
+                className="w-9 h-9 items-center justify-center"
+              >
+                <Star
+                  size={20}
+                  color={isFavorited ? '#FFD700' : '#6B7280'}
+                  fill={isFavorited ? '#FFD700' : 'transparent'}
+                />
+              </Pressable>
+            ) : null}
             {canEdit && (
               <Pressable
                 onPress={() => {
@@ -158,50 +172,59 @@ function WorkoutCard({
               <Text className="text-purple-400 text-xs ml-1">{workout.steps.length} steps</Text>
             </View>
           )}
+          {workout.source === 'playbook' ? (
+            <View className="bg-af-gold/20 px-2 py-1 rounded-full border border-af-gold/30">
+              <Text className="text-af-gold text-xs">Playbook</Text>
+            </View>
+          ) : null}
         </View>
 
         {/* Rating Section */}
         <View className="flex-row items-center justify-between mt-3 pt-3 border-t border-white/10">
-          <View className="flex-row items-center">
-            <Pressable
-              onPress={handleThumbsUp}
-              className={cn(
-                "flex-row items-center px-3 py-1.5 rounded-full mr-2",
-                userRating === 'up' ? "bg-af-success/30" : "bg-white/10"
-              )}
-            >
-              <ThumbsUp
-                size={16}
-                color={userRating === 'up' ? '#22C55E' : '#6B7280'}
-                fill={userRating === 'up' ? '#22C55E' : 'transparent'}
-              />
-              <Text className={cn(
-                "text-sm ml-1 font-medium",
-                userRating === 'up' ? "text-af-success" : "text-af-silver"
-              )}>
-                {workout.thumbsUp.length}
-              </Text>
-            </Pressable>
-            <Pressable
-              onPress={handleThumbsDown}
-              className={cn(
-                "flex-row items-center px-3 py-1.5 rounded-full",
-                userRating === 'down' ? "bg-af-danger/30" : "bg-white/10"
-              )}
-            >
-              <ThumbsDown
-                size={16}
-                color={userRating === 'down' ? '#EF4444' : '#6B7280'}
-                fill={userRating === 'down' ? '#EF4444' : 'transparent'}
-              />
-              <Text className={cn(
-                "text-sm ml-1 font-medium",
-                userRating === 'down' ? "text-af-danger" : "text-af-silver"
-              )}>
-                {workout.thumbsDown.length}
-              </Text>
-            </Pressable>
-          </View>
+          {allowFeedback ? (
+            <View className="flex-row items-center">
+              <Pressable
+                onPress={handleThumbsUp}
+                className={cn(
+                  "flex-row items-center px-3 py-1.5 rounded-full mr-2",
+                  userRating === 'up' ? "bg-af-success/30" : "bg-white/10"
+                )}
+              >
+                <ThumbsUp
+                  size={16}
+                  color={userRating === 'up' ? '#22C55E' : '#6B7280'}
+                  fill={userRating === 'up' ? '#22C55E' : 'transparent'}
+                />
+                <Text className={cn(
+                  "text-sm ml-1 font-medium",
+                  userRating === 'up' ? "text-af-success" : "text-af-silver"
+                )}>
+                  {workout.thumbsUp.length}
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={handleThumbsDown}
+                className={cn(
+                  "flex-row items-center px-3 py-1.5 rounded-full",
+                  userRating === 'down' ? "bg-af-danger/30" : "bg-white/10"
+                )}
+              >
+                <ThumbsDown
+                  size={16}
+                  color={userRating === 'down' ? '#EF4444' : '#6B7280'}
+                  fill={userRating === 'down' ? '#EF4444' : 'transparent'}
+                />
+                <Text className={cn(
+                  "text-sm ml-1 font-medium",
+                  userRating === 'down' ? "text-af-danger" : "text-af-silver"
+                )}>
+                  {workout.thumbsDown.length}
+                </Text>
+              </Pressable>
+            </View>
+          ) : (
+            <Text className="text-af-silver text-sm">Reference workout</Text>
+          )}
           {expanded ? (
             <ChevronUp size={20} color="#C0C0C0" />
           ) : (
@@ -233,6 +256,22 @@ function WorkoutCard({
               ))}
             </View>
           )}
+
+          {workout.detailSections?.length ? (
+            <View className="mt-3">
+              {workout.detailSections.map((section) => (
+                <View key={section.title} className="mb-3">
+                  <Text className="text-white/60 text-xs uppercase mb-2">{section.title}</Text>
+                  {section.items.map((item, index) => (
+                    <View key={`${section.title}-${index}`} className="flex-row mb-2">
+                      <View className="w-1.5 h-1.5 rounded-full bg-af-accent mt-2 mr-2" />
+                      <Text className="text-white flex-1 leading-5">{item}</Text>
+                    </View>
+                  ))}
+                </View>
+              ))}
+            </View>
+          ) : null}
         </View>
       )}
     </Animated.View>
@@ -307,14 +346,17 @@ export default function WorkoutsScreen() {
     };
   }, [accessToken, syncSharedWorkouts, userSquadron]);
 
-  const getMemberName = (memberId: string) => {
+  const getMemberName = (memberId: string, workout?: SharedWorkout) => {
+    if (memberId === PLAYBOOK_WORKOUT_CREATOR_ID || workout?.source === 'playbook') {
+      return PLAYBOOK_WORKOUT_SOURCE_LABEL;
+    }
     const member = members.find(m => m.id === memberId);
     return member ? getDisplayName(member) : 'Unknown';
   };
 
   // Filter and sort workouts
   const filteredWorkouts = useMemo(() => {
-    let filtered = sharedWorkouts.filter(w => w.squadron === userSquadron);
+    let filtered = [...PLAYBOOK_WORKOUTS, ...sharedWorkouts.filter(w => w.squadron === userSquadron)];
 
     // Search filter
     if (searchQuery.trim()) {
@@ -322,7 +364,12 @@ export default function WorkoutsScreen() {
       filtered = filtered.filter(w =>
         w.name.toLowerCase().includes(query) ||
         w.description.toLowerCase().includes(query) ||
-        w.type.toLowerCase().includes(query)
+        w.type.toLowerCase().includes(query) ||
+        w.detailSections?.some((section) =>
+          section.title.toLowerCase().includes(query) ||
+          section.items.some((item) => item.toLowerCase().includes(query))
+        ) ||
+        w.searchTerms?.some((term) => term.toLowerCase().includes(query))
       );
     }
 
@@ -335,7 +382,7 @@ export default function WorkoutsScreen() {
     if (filterType === 'favorites') {
       filtered = filtered.filter(w => w.favoritedBy.includes(currentUserId));
     } else if (filterType === 'mine') {
-      filtered = filtered.filter(w => w.createdBy === currentUserId);
+      filtered = filtered.filter(w => w.createdBy === currentUserId && w.source !== 'playbook');
     }
 
     // Sort
@@ -672,19 +719,25 @@ export default function WorkoutsScreen() {
             </View>
           ) : (
             filteredWorkouts.map((workout) => (
+              (() => {
+                const isPlaybookWorkout = workout.source === 'playbook';
+                return (
               <WorkoutCard
                 key={workout.id}
-                  workout={workout}
-                  currentUserId={currentUserId}
-                  creatorName={getMemberName(workout.createdBy)}
-                  editorName={workout.editedBy ? getMemberName(workout.editedBy) : null}
-                  onRate={(rating) => handleRateWorkout(workout, rating)}
+                workout={workout}
+                currentUserId={currentUserId}
+                creatorName={getMemberName(workout.createdBy, workout)}
+                editorName={workout.editedBy ? getMemberName(workout.editedBy) : null}
+                onRate={(rating) => handleRateWorkout(workout, rating)}
                 onToggleFavorite={() => handleToggleFavorite(workout)}
                 onEdit={() => openEditModal(workout)}
                 onDelete={() => handleDeleteWorkout(workout.id)}
-                canEdit={workout.createdBy === currentUserId || canManageSharedWorkouts}
-                canDelete={workout.createdBy === currentUserId || isAdmin(userAccountType)}
+                canEdit={!isPlaybookWorkout && (workout.createdBy === currentUserId || canManageSharedWorkouts)}
+                canDelete={!isPlaybookWorkout && (workout.createdBy === currentUserId || isAdmin(userAccountType))}
+                allowFeedback={!isPlaybookWorkout}
               />
+                );
+              })()
             ))
           )}
         </ScrollView>

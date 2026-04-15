@@ -6,7 +6,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { useEffect } from 'react';
-import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { Image, ScrollView, Text, View } from 'react-native';
 import { useAuthStore, useMemberStore, ALL_ACHIEVEMENTS } from '@/lib/store';
 import { AchievementCelebration } from '@/components/AchievementCelebration';
@@ -36,24 +35,21 @@ const AirForceDarkTheme = {
 function RootLayoutNav() {
   const recentAchievementId = useMemberStore((state) => state.recentAchievementId);
   const dismissAchievementCelebration = useMemberStore((state) => state.dismissAchievementCelebration);
-  const keepAwakeEnabled = useAuthStore((state) => state.keepAwakeEnabled);
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const user = useAuthStore((state) => state.user);
+  const markAchievementCelebrationSeen = useAuthStore((state) => state.markAchievementCelebrationSeen);
 
   useEffect(() => {
     SplashScreen.hideAsync();
   }, []);
 
   useEffect(() => {
-    if (!isAuthenticated || !keepAwakeEnabled) {
-      void deactivateKeepAwake('fitflight-app');
+    if (!recentAchievementId || !user?.email) {
       return;
     }
 
-    void activateKeepAwakeAsync('fitflight-app');
-    return () => {
-      void deactivateKeepAwake('fitflight-app');
-    };
-  }, [isAuthenticated, keepAwakeEnabled]);
+    markAchievementCelebrationSeen(user.email, recentAchievementId);
+  }, [markAchievementCelebrationSeen, recentAchievementId, user?.email]);
 
   const recentAchievement = recentAchievementId
     ? ALL_ACHIEVEMENTS.find((achievement) => achievement.id === recentAchievementId) ?? null
@@ -82,7 +78,7 @@ function RootLayoutNav() {
           <Stack.Screen name="integrations/strava-callback" options={{ headerShown: false }} />
           <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
         </Stack>
-        {recentAchievement ? (
+        {isAuthenticated && recentAchievement ? (
           <AchievementCelebration
             achievement={recentAchievement}
             onDismiss={dismissAchievementCelebration}

@@ -40,13 +40,14 @@ import {
     reviewManualWorkoutSubmission,
     resetUserPasswordAsAdmin,
     sendSupportMessage,
-    sendAppNotification,
-    setAttendanceStatus,
-    type AppNotification,
+  sendAppNotification,
+  setAttendanceStatus,
+  type AppNotification,
   type ManualWorkoutSubmission,
   type SupportMessage,
   type SupportThreadSummary,
   updateMemberRole,
+  updateRosterProfileVisibility,
   updateRosterMember,
   uploadProfileImage,
 } from '@/lib/supabaseData';
@@ -156,8 +157,6 @@ export default function ProfileScreen() {
   const user = useAuthStore(s => s.user);
   const logout = useAuthStore(s => s.logout);
   const accessToken = useAuthStore(s => s.accessToken);
-  const keepAwakeEnabled = useAuthStore(s => s.keepAwakeEnabled);
-  const setKeepAwakeEnabled = useAuthStore(s => s.setKeepAwakeEnabled);
   const members = useMemberStore(s => s.members);
   const addMember = useMemberStore(s => s.addMember);
   const removeMember = useMemberStore(s => s.removeMember);
@@ -1211,7 +1210,11 @@ export default function ProfileScreen() {
     try {
       setIsUpdatingProfileSettings(true);
       if (accessToken) {
-        await updateRosterMember(resolvedMember, updatedMember, accessToken);
+        await updateRosterProfileVisibility(resolvedMember, {
+          showWorkoutHistoryOnProfile: updatedMember.showWorkoutHistoryOnProfile,
+          showWorkoutUploadsOnProfile: updatedMember.showWorkoutUploadsOnProfile,
+          showPFRARecordsOnProfile: updatedMember.showPFRARecordsOnProfile,
+        }, accessToken);
       }
 
       updateMember(resolvedMember.id, updates);
@@ -3983,7 +3986,7 @@ export default function ProfileScreen() {
 
       <Modal visible={showSettingsModal} transparent animationType="fade">
         <View className="flex-1 bg-black/80 items-center justify-center p-6">
-          <View className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20">
+          <View className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20" style={{ maxHeight: '88%' }}>
             <View className="flex-row items-center justify-between mb-4">
               <View className="flex-1 pr-4">
                 <Text className="text-white text-xl font-bold">Settings</Text>
@@ -3997,7 +4000,11 @@ export default function ProfileScreen() {
               </Pressable>
             </View>
 
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 4 }}>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={{ paddingBottom: 16 }}
+              style={{ flexGrow: 0 }}
+            >
               <Pressable
                 onPress={() => {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -4046,26 +4053,6 @@ export default function ProfileScreen() {
                   </View>
                 </Pressable>
               ) : null}
-
-              <View className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
-                <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">App Behavior</Text>
-                <View className="flex-row items-center justify-between py-2">
-                  <View className="flex-1 pr-4">
-                    <Text className="text-white font-semibold">Keep Screen Awake While Using FitFlight</Text>
-                    <Text className="text-af-silver text-xs mt-1">Prevents the app from sleeping while it is open, especially useful for the calculator.</Text>
-                  </View>
-                  <Switch
-                    value={keepAwakeEnabled}
-                    onValueChange={(value) => {
-                      Haptics.selectionAsync();
-                      setKeepAwakeEnabled(value);
-                    }}
-                    trackColor={{ false: '#334155', true: '#4A90D9' }}
-                    thumbColor="#FFFFFF"
-                    ios_backgroundColor="#334155"
-                  />
-                </View>
-              </View>
 
               <View className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
                 <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">Profile Visibility</Text>

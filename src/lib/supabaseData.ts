@@ -1999,6 +1999,32 @@ export async function updateRosterMember(previousMember: Member, nextMember: Mem
   }
 }
 
+export async function updateRosterProfileVisibility(
+  member: Pick<Member, 'firstName' | 'lastName' | 'rank' | 'flight' | 'email' | 'squadron'>,
+  updates: Pick<Member, 'showWorkoutHistoryOnProfile' | 'showWorkoutUploadsOnProfile' | 'showPFRARecordsOnProfile'>,
+  accessToken?: string
+) {
+  const rosterTable = getRosterTableName(member.squadron);
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/${rosterTable}?${buildRosterFilter(member)}`, {
+    method: 'PATCH',
+    headers: await getRosterHeaders(accessToken),
+    body: JSON.stringify({
+      SHOW_WORKOUT_HISTORY_ON_PROFILE: updates.showWorkoutHistoryOnProfile ?? true,
+      SHOW_WORKOUT_UPLOADS_ON_PROFILE: updates.showWorkoutUploadsOnProfile ?? true,
+      SHOW_PFRA_RECORDS_ON_PROFILE: updates.showPFRARecordsOnProfile ?? true,
+    }),
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to update profile visibility in Supabase roster.';
+    throw new Error(message);
+  }
+}
+
 export async function deleteRosterMember(member: Member, accessToken?: string) {
   const response = await fetch(`${SUPABASE_URL}/rest/v1/${getRosterTableName(member.squadron)}?${buildRosterFilter(member)}`, {
     method: 'DELETE',

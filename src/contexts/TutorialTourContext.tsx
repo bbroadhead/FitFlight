@@ -68,14 +68,7 @@ function buildTutorialSteps(accountType: AccountType): TutorialStep[] {
       route: '/',
       targetId: 'home-leaderboard',
       title: 'Leaderboard Snapshot',
-      description: 'This card opens the live squadron leaderboard so you can quickly check rankings from Home.',
-    },
-    {
-      id: 'home-navigation',
-      route: '/',
-      targetId: 'home-navigation',
-      title: 'Main Navigation',
-      description: 'These cards are your fastest path into the main FitFlight tools from the Home screen.',
+      description: 'Open the live squadron leaderboard to check current rankings and points.',
     },
     {
       id: 'workouts-search',
@@ -85,39 +78,25 @@ function buildTutorialSteps(accountType: AccountType): TutorialStep[] {
       description: 'Search, filter, and browse shared workouts your squadron can use.',
     },
     {
-      id: 'workouts-new',
-      route: '/workouts',
-      targetId: 'workouts-new',
-      title: 'Submit Workout',
-      description: 'Use New to add a squadron workout that others can find and use in the Workouts tab.',
-    },
-    {
       id: 'attendance-grid',
       route: '/attendance',
       targetId: 'attendance-grid',
       title: 'Attendance Grid',
-      description: 'This weekly grid is where PT participation is tracked by member and day.',
+      description: 'Track PT participation by member and day across the current week.',
     },
     {
       id: 'calculator-actions',
       route: '/calculator',
       targetId: 'calculator-actions',
       title: 'PFRA Tools',
-      description: 'The calculator can export your results and save PFRA records directly into your account history.',
+      description: 'Calculate PFRA results, export them, and save PFRA records to account history.',
     },
     {
       id: 'account-summary',
       route: '/profile',
       targetId: 'account-summary',
       title: 'Account Summary',
-      description: 'Your Account page shows your current stats, trophies, and the summary of your recent fitness activity.',
-    },
-    {
-      id: 'account-history',
-      route: '/profile',
-      targetId: 'account-history',
-      title: 'Workout and PFRA History',
-      description: 'Use these history buttons to review previous workouts and PFRA records in detail.',
+      description: 'Review current stats, trophies, and recent fitness activity from one place.',
     },
   ];
 
@@ -127,7 +106,7 @@ function buildTutorialSteps(accountType: AccountType): TutorialStep[] {
       route: '/attendance',
       targetId: 'attendance-report',
       title: 'Attendance Reports',
-      description: 'Leaders can export the current attendance view as a PDF or Excel report from here.',
+      description: 'Leadership roles can export the current attendance view as PDF or Excel.',
     });
   }
 
@@ -138,22 +117,22 @@ function buildTutorialSteps(accountType: AccountType): TutorialStep[] {
       targetId: 'account-quick-actions',
       title: 'Quick Actions',
       description: canManagePTPrograms(accountType)
-        ? 'Quick Actions give you fast access to manual workout logging, manual PFRA entry, and PT scheduling for your squadron role.'
-        : 'Quick Actions give you fast access to manual workout logging and manual PFRA entry from your account page.',
+        ? 'Use Quick Actions for manual workout logging, manual PFRA entry, and PT scheduling.'
+        : 'Use Quick Actions for manual workout logging and manual PFRA entry.',
     },
     {
       id: 'account-connected-apps',
       route: '/profile',
       targetId: 'account-connected-apps',
       title: 'Connected Apps',
-      description: 'Connect supported fitness services here so workouts can flow into FitFlight more automatically.',
+      description: 'Connect supported fitness services so workouts can flow into FitFlight automatically.',
     },
     {
       id: 'account-help',
       route: '/profile',
       targetId: 'account-help',
       title: 'Help and Resources',
-      description: 'This section lets you reopen the tutorial, read official documents, and install FitFlight on your device.',
+      description: 'Reopen the tutorial, read official documents, and install FitFlight on your device.',
     }
   );
 
@@ -163,7 +142,7 @@ function buildTutorialSteps(accountType: AccountType): TutorialStep[] {
       route: '/profile',
       targetId: 'account-admin',
       title: 'Leadership Tools',
-      description: 'This area contains the member management and squadron administration tools your role is allowed to use.',
+      description: 'Access the member management and squadron administration tools available to your role.',
     });
   }
 
@@ -173,7 +152,7 @@ function buildTutorialSteps(accountType: AccountType): TutorialStep[] {
       route: '/profile',
       targetId: 'account-password-reset',
       title: 'Reset User Password',
-      description: 'Owner and UFPM can securely set a brand-new password for a member here when needed.',
+      description: 'Authorized roles can securely set a brand-new password for a member when needed.',
     });
   }
 
@@ -600,14 +579,6 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#4A90D9',
     backgroundColor: 'transparent',
-    shadowColor: '#4A90D9',
-    shadowOpacity: 0.18,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 0 },
-    ...(Platform.OS === 'web'
-      ? ({
-          boxShadow: '0 0 0 9999px rgba(4, 10, 22, 0.78), 0 0 0 2px #4A90D9',
-        } as any)
-      : null),
+    boxShadow: '0 0 0 9999px rgba(4, 10, 22, 0.78), 0 0 0 2px #4A90D9, 0 0 14px rgba(74, 144, 217, 0.18)',
   },
 });

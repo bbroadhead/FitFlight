@@ -7,7 +7,6 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { Audio } from 'expo-av';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system';
-import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import Svg, { Circle } from 'react-native-svg';
@@ -743,22 +742,9 @@ export default function CalculatorScreen() {
   const awardAchievement = useMemberStore((s) => s.awardAchievement);
   const user = useAuthStore((s) => s.user);
   const accessToken = useAuthStore((s) => s.accessToken);
-  const keepAwakeEnabled = useAuthStore((s) => s.keepAwakeEnabled);
   const currentMember = user ? members.find((member) => member.id === user.id) : null;
   const [savePfRADate, setSavePfRADate] = useState(new Date());
   const [showSavePfRADatePicker, setShowSavePfRADatePicker] = useState(false);
-
-  useEffect(() => {
-    if (!keepAwakeEnabled) {
-      void deactivateKeepAwake();
-      return;
-    }
-
-    void activateKeepAwakeAsync('fitflight-calculator');
-    return () => {
-      void deactivateKeepAwake('fitflight-calculator');
-    };
-  }, [keepAwakeEnabled]);
   const [ageYears, setAgeYears] = useState(34);
   const [gender, setGender] = useState<Gender>('male');
 

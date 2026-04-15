@@ -46,6 +46,8 @@ function TabsInner() {
   const user = useAuthStore((state) => state.user);
   const accessToken = useAuthStore((state) => state.accessToken);
   const updateUser = useAuthStore((state) => state.updateUser);
+  const seenAchievementCelebrations = useAuthStore((state) => state.seenAchievementCelebrations);
+  const markAchievementCelebrationSeen = useAuthStore((state) => state.markAchievementCelebrationSeen);
   const syncMembersFromRoster = useMemberStore((state) => state.syncMembersFromRoster);
   const syncPTSessions = useMemberStore((state) => state.syncPTSessions);
   const syncScheduledSessions = useMemberStore((state) => state.syncScheduledSessions);
@@ -65,7 +67,15 @@ function TabsInner() {
   const lastManualWorkoutSyncKeyRef = useRef<string | null>(null);
   const lastPfraSyncKeyRef = useRef<string | null>(null);
   const handledCelebrationTrophyIdsRef = useRef<Set<string>>(new Set());
+  const handledCelebrationRowIdsRef = useRef<Set<string>>(new Set());
   const markingCelebrationTrophyIdsRef = useRef<Set<string>>(new Set());
+  const pendingPostSyncCelebrationRef = useRef<{ id: string; trophyId: string } | null>(null);
+  const userId = user?.id ?? null;
+  const userEmail = user?.email?.trim().toLowerCase() ?? null;
+  const userSquadron = user?.squadron ?? 'Hawks';
+  const userFirstName = user?.firstName?.trim().toLowerCase() ?? '';
+  const userLastName = user?.lastName?.trim().toLowerCase() ?? '';
+  const hasUser = Boolean(user);
 
   const buildMemberIdMap = (rosterMembers: ReturnType<typeof useMemberStore.getState>['members']) => {
     const currentMembers = useMemberStore.getState().members;
@@ -147,6 +157,45 @@ function TabsInner() {
   }, [recentAchievementId]);
 
   useEffect(() => {
+    handledCelebrationTrophyIdsRef.current.clear();
+    handledCelebrationRowIdsRef.current.clear();
+    markingCelebrationTrophyIdsRef.current.clear();
+    pendingPostSyncCelebrationRef.current = null;
+  }, [userEmail, userId]);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      return;
+    }
+
+    handledCelebrationTrophyIdsRef.current.clear();
+    handledCelebrationRowIdsRef.current.clear();
+    markingCelebrationTrophyIdsRef.current.clear();
+    pendingPostSyncCelebrationRef.current = null;
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (isInitialSyncing || !pendingPostSyncCelebrationRef.current) {
+      return;
+    }
+
+    const pendingCelebration = pendingPostSyncCelebrationRef.current;
+    pendingPostSyncCelebrationRef.current = null;
+    if (userEmail) {
+      markAchievementCelebrationSeen(userEmail, pendingCelebration.trophyId);
+    }
+    previewAchievementCelebration(pendingCelebration.trophyId);
+    void markMemberTrophyCelebrationShown(pendingCelebration.id, accessToken ?? undefined)
+      .catch((error) => {
+        console.error(`Unable to mark trophy celebration ${pendingCelebration.trophyId} as shown.`, error);
+      })
+      .finally(() => {
+        handledCelebrationRowIdsRef.current.add(pendingCelebration.id);
+        markingCelebrationTrophyIdsRef.current.delete(pendingCelebration.trophyId);
+      });
+  }, [accessToken, isInitialSyncing, markAchievementCelebrationSeen, previewAchievementCelebration, userEmail]);
+
+  useEffect(() => {
     if (!isAuthenticated || !hasCheckedAuth) {
       return;
     }
@@ -157,9 +206,6 @@ function TabsInner() {
     let appState = AppState.currentState;
     let lastFullSyncAt = 0;
     let isSyncing = false;
-
-    handledCelebrationTrophyIdsRef.current.clear();
-    markingCelebrationTrophyIdsRef.current.clear();
 
     const shouldSyncNow = () => {
       if (Platform.OS === 'web' && typeof document !== 'undefined' && document.visibilityState !== 'visible') {
@@ -177,7 +223,7 @@ function TabsInner() {
       isSyncing = true;
       try {
         pruneOldWorkoutMedia(getMonthKey());
-        const squadron = user?.squadron ?? 'Hawks';
+        const squadron = userSquadron;
         const [
           rosterMembers,
           approvedManualWorkouts,
@@ -261,23 +307,23 @@ function TabsInner() {
         });
 
         const sourceRosterMembers = rosterMembers;
-        const normalizedRosterMembers = user
+        const normalizedRosterMembers = hasUser
           ? sourceRosterMembers.map((member) => {
               const isMatchByEmail =
                 !!member.email &&
-                !!user.email &&
-                member.email.toLowerCase() === user.email.toLowerCase();
+                !!userEmail &&
+                member.email.toLowerCase() === userEmail;
               const isMatchByName =
-                member.firstName.trim().toLowerCase() === user.firstName.trim().toLowerCase() &&
-                member.lastName.trim().toLowerCase() === user.lastName.trim().toLowerCase();
+                member.firstName.trim().toLowerCase() === userFirstName &&
+                member.lastName.trim().toLowerCase() === userLastName;
 
               if (isMatchByEmail || isMatchByName) {
                 return {
                   ...member,
-                  id: user.id,
+                  id: userId ?? member.id,
                   achievements: Array.from(
-                    activeTrophiesByMember.get(user.email?.toLowerCase() ?? '') ??
-                    activeTrophiesByMember.get(user.id) ??
+                    activeTrophiesByMember.get(userEmail ?? '') ??
+                    activeTrophiesByMember.get(userId ?? '') ??
                     []
                   ),
                 };
@@ -429,7 +475,7 @@ function TabsInner() {
                 memberEmail: entry.memberEmail,
                 squadron: entry.squadron,
                 trophyId,
-                awardedByMemberId: user?.id ?? null,
+                awardedByMemberId: userId ?? null,
                 accessToken: accessToken ?? undefined,
               }).catch((error) => {
                 console.error(`Unable to persist trophy ${trophyId} for ${entry.memberEmail}.`, error);
@@ -439,10 +485,13 @@ function TabsInner() {
           )
         );
 
-        if (user) {
+        if (hasUser) {
+          const locallySeenCelebrations = new Set(
+            userEmail ? (seenAchievementCelebrations[userEmail] ?? []) : []
+          );
           const currentUserKeys = new Set([
-            user.id,
-            user.email.trim().toLowerCase(),
+            userId ?? '',
+            userEmail ?? '',
           ]);
           const pendingCelebrationRows = Array.from(
             new Map(
@@ -450,8 +499,8 @@ function TabsInner() {
                 ...(Array.from(currentUserKeys).flatMap((key) => pendingCelebrationRowsByMember.get(key) ?? [])),
                 ...awardedRows.filter((row): row is NonNullable<typeof row> => Boolean(row)).filter(
                   (row) =>
-                    row.memberEmail.trim().toLowerCase() === user.email.trim().toLowerCase() ||
-                    row.memberId === user.id
+                    row.memberEmail.trim().toLowerCase() === userEmail ||
+                    row.memberId === userId
                 ),
               ].map((row) => [row.id, row] as const)
             ).values()
@@ -459,33 +508,32 @@ function TabsInner() {
 
           const nextCelebration = pendingCelebrationRows.find((row) =>
             ALL_ACHIEVEMENTS.some((achievement) => achievement.id === row.trophyId) &&
+            !handledCelebrationRowIdsRef.current.has(row.id) &&
             !handledCelebrationTrophyIdsRef.current.has(row.trophyId) &&
-            !markingCelebrationTrophyIdsRef.current.has(row.trophyId)
+            !markingCelebrationTrophyIdsRef.current.has(row.trophyId) &&
+            !locallySeenCelebrations.has(row.trophyId)
           );
 
           if (nextCelebration) {
+            handledCelebrationRowIdsRef.current.add(nextCelebration.id);
             handledCelebrationTrophyIdsRef.current.add(nextCelebration.trophyId);
             markingCelebrationTrophyIdsRef.current.add(nextCelebration.trophyId);
-            previewAchievementCelebration(nextCelebration.trophyId);
-            void markMemberTrophyCelebrationShown(nextCelebration.id, accessToken ?? undefined)
-              .catch((error) => {
-                console.error(`Unable to mark trophy celebration ${nextCelebration.trophyId} as shown.`, error);
-              })
-              .finally(() => {
-                markingCelebrationTrophyIdsRef.current.delete(nextCelebration.trophyId);
-              });
+            pendingPostSyncCelebrationRef.current = {
+              id: nextCelebration.id,
+              trophyId: nextCelebration.trophyId,
+            };
           }
         }
 
-        if (user) {
+        if (hasUser) {
           const matchingMember = normalizedRosterMembers.find((member) => {
-            if (member.email && user.email && member.email.toLowerCase() === user.email.toLowerCase()) {
+            if (member.email && userEmail && member.email.toLowerCase() === userEmail) {
               return true;
             }
 
             return (
-              member.firstName.trim().toLowerCase() === user.firstName.trim().toLowerCase() &&
-              member.lastName.trim().toLowerCase() === user.lastName.trim().toLowerCase()
+              member.firstName.trim().toLowerCase() === userFirstName &&
+              member.lastName.trim().toLowerCase() === userLastName
             );
           });
 
@@ -547,7 +595,7 @@ function TabsInner() {
       clearInterval(liveInterval);
       clearInterval(fullInterval);
     };
-  }, [accessToken, hasCheckedAuth, isAuthenticated, pruneOldWorkoutMedia, syncApprovedManualWorkouts, syncFitnessAssessments, syncLeaderboardHistory, syncMemberAchievements, syncMembersFromRoster, syncPTSessions, syncScheduledSessions, syncSharedWorkouts, updateUser, user]);
+  }, [accessToken, hasCheckedAuth, hasUser, isAuthenticated, markAchievementCelebrationSeen, pruneOldWorkoutMedia, seenAchievementCelebrations, syncApprovedManualWorkouts, syncFitnessAssessments, syncLeaderboardHistory, syncMemberAchievements, syncMembersFromRoster, syncPTSessions, syncScheduledSessions, syncSharedWorkouts, updateUser, userEmail, userFirstName, userId, userLastName, userSquadron]);
 
   if (!hasCheckedAuth) {
     return (
