@@ -1,4 +1,19 @@
-import type { AccountType, FitnessAssessment, Flight, Member, PTSession, ScheduledPTKind, ScheduledPTScope, ScheduledPTSession, SharedWorkout, Squadron, WorkoutType } from '@/lib/store';
+import type {
+  AccountType,
+  AttendanceSource,
+  FitnessAssessment,
+  Flight,
+  Member,
+  PFRAAccountabilityStatus,
+  PFRARecordType,
+  PTSession,
+  ScheduledPTKind,
+  ScheduledPTScope,
+  ScheduledPTSession,
+  SharedWorkout,
+  Squadron,
+  WorkoutType,
+} from '@/lib/store';
 import { getValidAccessToken } from '@/lib/supabaseAuth';
 import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
@@ -38,7 +53,7 @@ type AttendanceSessionRow = {
 type AttendanceAttendeeRow = {
   session_id: string;
   member_id: string;
-  attendance_source?: 'manual' | 'workout' | null;
+  attendance_source?: AttendanceSource | null;
 };
 type ScheduledPTSessionRow = {
   id: string;
@@ -58,6 +73,8 @@ type PFRARecordRow = {
   squadron: Squadron;
   recorded_by_member_id: string | null;
   recorded_by_name: string | null;
+  record_type?: PFRARecordType | null;
+  batch_id?: string | null;
   assessment_date: string;
   overall_score: number;
   is_private: boolean;
@@ -79,6 +96,34 @@ type PFRARecordRow = {
   waist_inches: number | null;
   waist_exempt: boolean;
   created_at: string;
+  updated_at?: string | null;
+};
+type PFRABatchRow = {
+  id: string;
+  squadron: Squadron;
+  record_type: Exclude<PFRARecordType, 'self'>;
+  assessment_date: string;
+  selected_flights: Flight[] | null;
+  created_by_member_id: string;
+  created_by_name: string;
+  created_at: string;
+  updated_at: string;
+};
+type PFRABatchMemberRow = {
+  id: number;
+  batch_id: string;
+  member_id: string;
+  member_email: string;
+  member_name: string;
+  flight: Flight;
+  accountability_status: PFRAAccountabilityStatus;
+  age_years?: number | null;
+  gender?: 'male' | 'female' | null;
+  height_inches?: number | null;
+  pfra_record_id: string | null;
+  overall_score: number | null;
+  created_at: string;
+  updated_at: string;
 };
 type AppNotificationRow = {
   id: string;
@@ -276,6 +321,39 @@ export type MemberTrophyRecord = {
   updatedAt: string;
 };
 
+export type PFRABatchSummary = {
+  id: string;
+  squadron: Squadron;
+  recordType: Exclude<PFRARecordType, 'self'>;
+  assessmentDate: string;
+  selectedFlights: Flight[];
+  createdByMemberId: string;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+  counts: Record<PFRAAccountabilityStatus, number>;
+  completedCount: number;
+  expectedCount: number;
+  completionRate: number;
+};
+
+export type PFRABatchMemberEntry = {
+  id: number;
+  batchId: string;
+  memberId: string;
+  memberEmail: string;
+  memberName: string;
+  flight: Flight;
+  accountabilityStatus: PFRAAccountabilityStatus;
+  ageYears: number | null;
+  gender: 'male' | 'female' | null;
+  heightInches: number | null;
+  pfraRecordId: string | null;
+  overallScore: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 function isMissingAttendanceMarkedBySubmissionError(message: string) {
   const normalized = message.toLowerCase();
   return normalized.includes('attendance_marked_by_submission') && normalized.includes('schema cache');
@@ -314,6 +392,14 @@ function getManualWorkoutWriteErrorMessage(payload: unknown, fallbackMessage: st
   return rawMessage.toLowerCase().includes('row-level security')
     ? 'Manual workout submission is blocked by Supabase security rules. Re-run supabase/sql/manual_workout_submissions.sql, then try again.'
     : rawMessage;
+}
+
+function normalizeAttendanceSource(source?: string | null): AttendanceSource {
+  if (source === 'workout' || source === 'strava' || source === 'pfra') {
+    return source;
+  }
+
+  return 'manual';
 }
 
 type RosterPasswordStatus = {
@@ -712,6 +798,9 @@ function normalizePFRARecordRow(row: PFRARecordRow): FitnessAssessment {
     id: row.id,
     date: row.assessment_date,
     overallScore: row.overall_score,
+    recordType: row.record_type ?? 'self',
+    batchId: row.batch_id ?? undefined,
+    accountabilityStatus: 'completed',
     isPrivate: row.is_private,
     loggedByMemberId: row.recorded_by_member_id ?? undefined,
     loggedByName: row.recorded_by_name ?? undefined,
@@ -750,6 +839,61 @@ function normalizePFRARecordRow(row: PFRARecordRow): FitnessAssessment {
           }
         : undefined,
     },
+  };
+}
+
+function normalizePFRABatchMemberRow(row: PFRABatchMemberRow): PFRABatchMemberEntry {
+  return {
+    id: row.id,
+    batchId: row.batch_id,
+    memberId: row.member_id,
+    memberEmail: row.member_email,
+    memberName: row.member_name,
+    flight: row.flight,
+    accountabilityStatus: row.accountability_status,
+    ageYears: row.age_years ?? null,
+    gender: row.gender ?? null,
+    heightInches: row.height_inches ?? null,
+    pfraRecordId: row.pfra_record_id,
+    overallScore: row.overall_score,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function normalizePFRABatchRow(
+  row: PFRABatchRow,
+  batchMembers: PFRABatchMemberEntry[] = []
+): PFRABatchSummary {
+  const counts: Record<PFRAAccountabilityStatus, number> = {
+    completed: 0,
+    pending: 0,
+    absent: 0,
+    excused: 0,
+    postponed: 0,
+  };
+
+  batchMembers.forEach((member) => {
+    counts[member.accountabilityStatus] += 1;
+  });
+
+  const expectedCount = batchMembers.length;
+  const completedCount = counts.completed;
+
+  return {
+    id: row.id,
+    squadron: row.squadron,
+    recordType: row.record_type,
+    assessmentDate: row.assessment_date,
+    selectedFlights: row.selected_flights ?? [],
+    createdByMemberId: row.created_by_member_id,
+    createdByName: row.created_by_name,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    counts,
+    completedCount,
+    expectedCount,
+    completionRate: expectedCount > 0 ? completedCount / expectedCount : 0,
   };
 }
 
@@ -1273,14 +1417,14 @@ export async function fetchAttendanceSessions(accessToken?: string) {
   }
 
     const attendeeMap = new Map<string, string[]>();
-    const attendeeSourceMap = new Map<string, Record<string, 'manual' | 'workout'>>();
+    const attendeeSourceMap = new Map<string, Record<string, AttendanceSource>>();
     (attendeesPayload as AttendanceAttendeeRow[]).forEach((attendee) => {
       const current = attendeeMap.get(attendee.session_id) ?? [];
       current.push(attendee.member_id);
       attendeeMap.set(attendee.session_id, current);
 
       const currentSources = attendeeSourceMap.get(attendee.session_id) ?? {};
-      currentSources[attendee.member_id] = attendee.attendance_source === 'workout' ? 'workout' : 'manual';
+      currentSources[attendee.member_id] = normalizeAttendanceSource(attendee.attendance_source);
       attendeeSourceMap.set(attendee.session_id, currentSources);
     });
 
@@ -1413,15 +1557,22 @@ export async function deleteScheduledPTSession(id: string, accessToken?: string)
   }
 }
 
-export async function fetchPFRARecords(accessToken?: string, squadron?: Squadron) {
+export async function fetchPFRARecords(
+  accessToken?: string,
+  squadron?: Squadron,
+  options?: { recordType?: PFRARecordType | 'all' }
+) {
   const query = new URLSearchParams();
   query.set(
     'select',
-    'id,member_id,member_email,squadron,recorded_by_member_id,recorded_by_name,assessment_date,overall_score,is_private,cardio_score,cardio_time,cardio_laps,cardio_test,cardio_exempt,strength_score,strength_reps,strength_test,strength_exempt,core_score,core_reps,core_time,core_test,core_exempt,waist_score,waist_inches,waist_exempt,created_at'
+    'id,member_id,member_email,squadron,recorded_by_member_id,recorded_by_name,record_type,batch_id,assessment_date,overall_score,is_private,cardio_score,cardio_time,cardio_laps,cardio_test,cardio_exempt,strength_score,strength_reps,strength_test,strength_exempt,core_score,core_reps,core_time,core_test,core_exempt,waist_score,waist_inches,waist_exempt,created_at,updated_at'
   );
   query.set('order', 'assessment_date.desc,created_at.desc');
   if (squadron) {
     query.set('squadron', `eq.${squadron}`);
+  }
+  if (options?.recordType && options.recordType !== 'all') {
+    query.set('record_type', `eq.${options.recordType}`);
   }
 
   const response = await fetch(`${SUPABASE_URL}/rest/v1/pfra_records?${query.toString()}`, {
@@ -1481,6 +1632,8 @@ export async function savePFRARecord(params: {
       squadron: params.squadron,
       recorded_by_member_id: params.recordedByMemberId ?? params.assessment.loggedByMemberId ?? null,
       recorded_by_name: params.recordedByName ?? params.assessment.loggedByName ?? null,
+      record_type: params.assessment.recordType ?? 'self',
+      batch_id: params.assessment.batchId ?? null,
       assessment_date: params.assessment.date,
       overall_score: params.assessment.overallScore,
       is_private: params.assessment.isPrivate,
@@ -1514,6 +1667,234 @@ export async function savePFRARecord(params: {
   }
 
   return normalizePFRARecordRow((payload as PFRARecordRow[])[0]);
+}
+
+export async function fetchPFRABatches(accessToken?: string, squadron?: Squadron) {
+  const [batchResponse, memberResponse] = await Promise.all([
+    fetch(`${SUPABASE_URL}/rest/v1/pfra_batches?select=id,squadron,record_type,assessment_date,selected_flights,created_by_member_id,created_by_name,created_at,updated_at${squadron ? `&squadron=eq.${encodeURIComponent(squadron)}` : ''}&order=assessment_date.desc,created_at.desc`, {
+      method: 'GET',
+      headers: await getHeaders(accessToken),
+    }),
+    fetch(`${SUPABASE_URL}/rest/v1/pfra_batch_members?select=id,batch_id,member_id,member_email,member_name,flight,accountability_status,age_years,gender,height_inches,pfra_record_id,overall_score,created_at,updated_at&order=created_at.asc`, {
+      method: 'GET',
+      headers: await getHeaders(accessToken),
+    }),
+  ]);
+
+  const [batchPayload, memberPayload] = await Promise.all([
+    batchResponse.json().catch(() => []),
+    memberResponse.json().catch(() => []),
+  ]);
+
+  if (!batchResponse.ok) {
+    const message =
+      typeof (batchPayload as { message?: unknown }).message === 'string'
+        ? (batchPayload as { message: string }).message
+        : 'Unable to load PFRA batches.';
+    throw new Error(message);
+  }
+
+  if (!memberResponse.ok) {
+    const message =
+      typeof (memberPayload as { message?: unknown }).message === 'string'
+        ? (memberPayload as { message: string }).message
+        : 'Unable to load PFRA accountability rows.';
+    throw new Error(message);
+  }
+
+  const membersByBatchId = new Map<string, PFRABatchMemberEntry[]>();
+  (memberPayload as PFRABatchMemberRow[]).forEach((row) => {
+    const current = membersByBatchId.get(row.batch_id) ?? [];
+    current.push(normalizePFRABatchMemberRow(row));
+    membersByBatchId.set(row.batch_id, current);
+  });
+
+  return (batchPayload as PFRABatchRow[]).map((row) =>
+    normalizePFRABatchRow(row, membersByBatchId.get(row.id) ?? [])
+  );
+}
+
+export async function fetchPFRAAccountabilitySummaries(accessToken?: string, squadron?: Squadron) {
+  return fetchPFRABatches(accessToken, squadron);
+}
+
+export async function fetchPFRABatchMembers(batchId: string, accessToken?: string) {
+  const query = new URLSearchParams();
+  query.set('select', 'id,batch_id,member_id,member_email,member_name,flight,accountability_status,age_years,gender,height_inches,pfra_record_id,overall_score,created_at,updated_at');
+  query.set('batch_id', `eq.${batchId}`);
+  query.set('order', 'member_name.asc');
+
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/pfra_batch_members?${query.toString()}`, {
+    method: 'GET',
+    headers: await getHeaders(accessToken),
+  });
+
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to load PFRA batch members.';
+    throw new Error(message);
+  }
+
+  return (payload as PFRABatchMemberRow[]).map(normalizePFRABatchMemberRow);
+}
+
+export async function fetchPFRABatchById(batchId: string, accessToken?: string) {
+  const [batchResponse, memberEntries] = await Promise.all([
+    fetch(`${SUPABASE_URL}/rest/v1/pfra_batches?select=id,squadron,record_type,assessment_date,selected_flights,created_by_member_id,created_by_name,created_at,updated_at&id=eq.${encodeURIComponent(batchId)}&limit=1`, {
+      method: 'GET',
+      headers: await getHeaders(accessToken),
+    }),
+    fetchPFRABatchMembers(batchId, accessToken),
+  ]);
+
+  const payload = await batchResponse.json().catch(() => []);
+  if (!batchResponse.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to load that PFRA batch.';
+    throw new Error(message);
+  }
+
+  const row = (payload as PFRABatchRow[])[0];
+  return row ? normalizePFRABatchRow(row, memberEntries) : null;
+}
+
+export async function createPFRABatch(params: {
+  batchId: string;
+  squadron: Squadron;
+  recordType: Exclude<PFRARecordType, 'self'>;
+  assessmentDate: string;
+  selectedFlights: Flight[];
+  createdByMemberId: string;
+  createdByName: string;
+  accessToken?: string;
+}) {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/pfra_batches`, {
+    method: 'POST',
+    headers: {
+      ...(await getHeaders(params.accessToken)),
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify({
+      id: params.batchId,
+      squadron: params.squadron,
+      record_type: params.recordType,
+      assessment_date: params.assessmentDate,
+      selected_flights: params.selectedFlights,
+      created_by_member_id: params.createdByMemberId,
+      created_by_name: params.createdByName,
+    }),
+  });
+
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to create PFRA batch.';
+    throw new Error(message);
+  }
+
+  const row = (payload as PFRABatchRow[])[0];
+  return row ? normalizePFRABatchRow(row) : null;
+}
+
+export async function bulkSavePFRAResults(params: {
+  batchId: string;
+  squadron: Squadron;
+  recordType: Exclude<PFRARecordType, 'self'>;
+  assessmentDate: string;
+  selectedFlights: Flight[];
+  createdByMemberId: string;
+  createdByName: string;
+  rows: Array<{
+    recordId: string;
+    memberId: string;
+    memberEmail: string;
+    memberName: string;
+    flight: Flight;
+    accountabilityStatus: PFRAAccountabilityStatus;
+    ageYears?: number;
+    gender?: 'male' | 'female';
+    heightInches?: number;
+    overallScore: number;
+    isPrivate?: boolean;
+    components: FitnessAssessment['components'];
+  }>;
+  accessToken?: string;
+}) {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/bulk_save_pfra_batch`, {
+    method: 'POST',
+    headers: {
+      ...(await getHeaders(params.accessToken)),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      p_batch_id: params.batchId,
+      p_squadron: params.squadron,
+      p_record_type: params.recordType,
+      p_assessment_date: params.assessmentDate,
+      p_selected_flights: params.selectedFlights,
+      p_created_by_member_id: params.createdByMemberId,
+      p_created_by_name: params.createdByName,
+      p_rows: params.rows.map((row) => ({
+        record_id: row.recordId,
+        member_id: row.memberId,
+        member_email: row.memberEmail.toLowerCase(),
+        member_name: row.memberName,
+        flight: row.flight,
+        accountability_status: row.accountabilityStatus,
+        age_years: row.ageYears ?? null,
+        gender: row.gender ?? null,
+        height_inches: row.heightInches ?? null,
+        overall_score: row.overallScore,
+        is_private: row.isPrivate ?? false,
+        cardio_score: row.components.cardio.score,
+        cardio_time: row.components.cardio.time ?? null,
+        cardio_laps: row.components.cardio.laps ?? null,
+        cardio_test: row.components.cardio.test ?? null,
+        cardio_exempt: row.components.cardio.exempt ?? false,
+        strength_score: row.components.pushups.score,
+        strength_reps: row.components.pushups.reps,
+        strength_test: row.components.pushups.test ?? null,
+        strength_exempt: row.components.pushups.exempt ?? false,
+        core_score: row.components.situps.score,
+        core_reps: row.components.situps.reps,
+        core_time: row.components.situps.time ?? null,
+        core_test: row.components.situps.test ?? null,
+        core_exempt: row.components.situps.exempt ?? false,
+        waist_score: row.components.waist?.score ?? null,
+        waist_inches: row.components.waist?.inches ?? null,
+        waist_exempt: row.components.waist?.exempt ?? false,
+      })),
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown; error?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : typeof (payload as { message?: unknown; error?: unknown }).error === 'string'
+          ? (payload as { error: string }).error
+          : 'Unable to bulk save PFRA results.';
+    throw new Error(message);
+  }
+
+  return payload as {
+    batch_id: string;
+    row_count: number;
+    completed_count: number;
+    absent_count: number;
+    excused_count: number;
+    pending_count: number;
+    postponed_count: number;
+  };
 }
 
 export async function fetchAppNotifications(params: {
@@ -1869,7 +2250,7 @@ export async function setAttendanceStatus(params: {
   memberId: string;
   createdBy: string;
   isAttending: boolean;
-  source?: 'manual' | 'workout';
+  source?: AttendanceSource;
   accessToken?: string;
 }) {
   const session = await ensureAttendanceSession(params);
@@ -1885,7 +2266,7 @@ export async function setAttendanceStatus(params: {
         body: JSON.stringify({
           session_id: session.id,
           member_id: params.memberId,
-          attendance_source: params.source === 'workout' ? 'workout' : 'manual',
+          attendance_source: normalizeAttendanceSource(params.source),
         }),
       });
 

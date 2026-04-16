@@ -11,7 +11,7 @@ import * as FileSystem from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { format, startOfWeek, addDays, subWeeks, addWeeks, isSameDay } from 'date-fns';
-import { useMemberStore, useAuthStore, type Flight, type ScheduledPTSession, canEditAttendance, canManagePTPrograms, formatRankDisplay } from '@/lib/store';
+import { useMemberStore, useAuthStore, type AttendanceSource, type Flight, type ScheduledPTSession, canEditAttendance, canManagePTPrograms, formatRankDisplay } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { useTabSwipe } from '@/contexts/TabSwipeContext';
@@ -35,6 +35,36 @@ const slugify = (value: string) =>
 const buildLegacyRosterId = (member: { rank: string; firstName: string; lastName: string; flight: Flight }) =>
   `roster-${slugify(`${member.rank}-${member.lastName}-${member.firstName}-${member.flight}`)}`;
 const isUpcomingScheduledSession = (date: string, time: string) => new Date(`${date}T${time}:00`).getTime() >= Date.now();
+const ATTENDANCE_SOURCE_STYLE: Record<AttendanceSource, { border: string; background: string; icon: string; label: string; description: string }> = {
+  manual: {
+    border: 'border-af-success',
+    background: 'bg-af-success/20',
+    icon: '#22C55E',
+    label: 'Green Checkmark',
+    description: 'Attendance was marked manually by a PFL, UFPM, Owner, or Squadron Leadership.',
+  },
+  workout: {
+    border: 'border-af-accent',
+    background: 'bg-af-accent/20',
+    icon: '#4A90D9',
+    label: 'Blue Checkmark',
+    description: 'Attendance was added automatically from an approved manual workout.',
+  },
+  strava: {
+    border: 'border-orange-400',
+    background: 'bg-orange-400/20',
+    icon: '#FB923C',
+    label: 'Orange Checkmark',
+    description: 'Attendance was added automatically from a Strava-imported workout.',
+  },
+  pfra: {
+    border: 'border-violet-400',
+    background: 'bg-violet-400/20',
+    icon: '#A78BFA',
+    label: 'Purple Checkmark',
+    description: 'Attendance was marked automatically from a completed mock PFRA entry.',
+  },
+};
 const scheduledSessionScopeLabel = (session: ScheduledPTSession) =>
   session.scope === 'personal' ? 'Personal PT' : session.scope === 'squadron' ? 'Squadron PT' : session.flights.join(', ');
 const scheduledSessionKindLabel = (session: ScheduledPTSession) =>
@@ -330,10 +360,12 @@ export default function AttendanceScreen() {
 
     const attendanceSource = getAttendanceSource(date, memberId, flight, squadron);
     const currentlyAttending = isAttending(date, memberId, flight, squadron);
-    if (currentlyAttending && attendanceSource === 'workout') {
+    if (currentlyAttending && attendanceSource && attendanceSource !== 'manual') {
       Alert.alert(
-        'Workout-backed attendance',
-        'This attendance came from an approved or imported workout and cannot be removed here. Remove or edit the workout instead.'
+        'Managed attendance',
+        attendanceSource === 'pfra'
+          ? 'This attendance came from a mock PFRA entry and cannot be removed here. Edit the PFRA batch instead.'
+          : 'This attendance came from an approved or imported workout and cannot be removed here. Remove or edit the workout instead.'
       );
       return;
     }
@@ -1060,7 +1092,7 @@ export default function AttendanceScreen() {
                           {weekDays.map((day) => {
                             const attending = isAttending(day, member.id, member.flight, member.squadron);
                             const attendanceSource = getAttendanceSource(day, member.id, member.flight, member.squadron);
-                            const isWorkoutDerivedAttendance = attendanceSource === 'workout';
+                            const sourceStyle = attendanceSource ? ATTENDANCE_SOURCE_STYLE[attendanceSource] : null;
                             return (
                               <Pressable
                               key={`${member.id}-${day.toISOString()}`}
@@ -1073,14 +1105,14 @@ export default function AttendanceScreen() {
                                   className={cn(
                                     'w-10 h-10 rounded-full items-center justify-center border shadow-sm',
                                     attending
-                                      ? isWorkoutDerivedAttendance
-                                        ? 'bg-af-accent/20 border-af-accent'
+                                      ? sourceStyle
+                                        ? `${sourceStyle.background} ${sourceStyle.border}`
                                         : 'bg-af-success/20 border-af-success'
                                       : 'bg-black/10 border-white/10'
                                   )}
                                 >
                                   {attending ? (
-                                    <Check size={20} color={isWorkoutDerivedAttendance ? '#4A90D9' : '#22C55E'} />
+                                    <Check size={20} color={sourceStyle?.icon ?? '#22C55E'} />
                                   ) : (
                                     <X size={20} color="#ffffff30" />
                                   )}
@@ -1390,29 +1422,22 @@ export default function AttendanceScreen() {
                   </Pressable>
                 </View>
 
-                <View className="rounded-2xl border border-white/10 bg-white/5 p-4 mb-3">
-                  <View className="flex-row items-center">
-                    <View className="w-10 h-10 rounded-full items-center justify-center border border-af-success bg-af-success/20">
-                      <Check size={20} color="#22C55E" />
+                {(['manual', 'workout', 'strava', 'pfra'] as AttendanceSource[]).map((source, index) => {
+                  const style = ATTENDANCE_SOURCE_STYLE[source];
+                  return (
+                    <View key={source} className={cn('rounded-2xl border border-white/10 bg-white/5 p-4', index < 3 ? 'mb-3' : '')}>
+                      <View className="flex-row items-center">
+                        <View className={cn('w-10 h-10 rounded-full items-center justify-center border', style.border, style.background)}>
+                          <Check size={20} color={style.icon} />
+                        </View>
+                        <View className="ml-3 flex-1">
+                          <Text className="text-white font-semibold">{style.label}</Text>
+                          <Text className="text-af-silver text-sm mt-1">{style.description}</Text>
+                        </View>
+                      </View>
                     </View>
-                    <View className="ml-3 flex-1">
-                      <Text className="text-white font-semibold">Green Checkmark</Text>
-                      <Text className="text-af-silver text-sm mt-1">Attendance was marked manually by a PFL, UFPM, Owner, or Squadron Leadership.</Text>
-                    </View>
-                  </View>
-                </View>
-
-                <View className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <View className="flex-row items-center">
-                    <View className="w-10 h-10 rounded-full items-center justify-center border border-af-accent bg-af-accent/20">
-                      <Check size={20} color="#4A90D9" />
-                    </View>
-                    <View className="ml-3 flex-1">
-                      <Text className="text-white font-semibold">Blue Checkmark</Text>
-                      <Text className="text-af-silver text-sm mt-1">Attendance was added automatically from an approved manual workout or a Strava-imported workout.</Text>
-                    </View>
-                  </View>
-                </View>
+                  );
+                })}
               </View>
             </View>
          </Modal>

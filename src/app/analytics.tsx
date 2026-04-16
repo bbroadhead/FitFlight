@@ -15,6 +15,7 @@ import { format, startOfWeek, addDays } from 'date-fns';
 import { useMemberStore, useAuthStore, getDisplayName, type Flight, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
+import { fetchPFRABatches, type PFRABatchSummary } from '@/lib/supabaseData';
 import ExcelJS from 'exceljs';
 import { formatMonthLabel, getAvailableMonthKeys, getMemberMonthSummary, getMonthKey, getMonthSessions } from '@/lib/monthlyStats';
 
@@ -102,9 +103,12 @@ export default function AnalyticsScreen() {
   const allMembers = useMemberStore(s => s.members);
   const allPtSessions = useMemberStore(s => s.ptSessions);
   const user = useAuthStore(s => s.user);
+  const accessToken = useAuthStore(s => s.accessToken);
   const [isExporting, setIsExporting] = useState(false);
   const [expandedOverviewCard, setExpandedOverviewCard] = useState<OverviewCardKey | null>(null);
   const [selectedMonthKey, setSelectedMonthKey] = useState(getMonthKey());
+  const [selectedPFRARecordType, setSelectedPFRARecordType] = useState<'all' | 'self' | 'mock' | 'diagnostic' | 'official'>('all');
+  const [pfraBatches, setPfraBatches] = useState<PFRABatchSummary[]>([]);
   const userSquadron = user?.squadron ?? 'Hawks';
   const members = useMemo(
     () => allMembers.filter((member) => member.squadron === userSquadron),
@@ -127,6 +131,25 @@ export default function AnalyticsScreen() {
       squadron: userSquadron,
     });
   }, [userSquadron]);
+
+  useEffect(() => {
+    if (!accessToken) {
+      return;
+    }
+
+    let isCancelled = false;
+    void fetchPFRABatches(accessToken, userSquadron)
+      .then((batches) => {
+        if (!isCancelled) {
+          setPfraBatches(batches);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [accessToken, userSquadron]);
 
   // Calculate analytics
   const analytics = useMemo(() => {
@@ -174,13 +197,23 @@ export default function AnalyticsScreen() {
       };
     });
 
-    // Fitness assessment stats
-    const membersWithFA = members.filter(m => m.fitnessAssessments.length > 0);
-    const avgPFRAScore = membersWithFA.length > 0
-      ? membersWithFA.reduce((acc, m) => {
-          const latest = m.fitnessAssessments[m.fitnessAssessments.length - 1];
-          return acc + (latest?.overallScore ?? 0);
-        }, 0) / membersWithFA.length
+    const pfraEntries = members.flatMap((member) =>
+      member.fitnessAssessments.map((assessment) => ({
+        id: assessment.id,
+        memberId: member.id,
+        memberName: getDisplayName(member),
+        flight: member.flight,
+        assessment,
+      }))
+    );
+    const filteredPFRAEntries = pfraEntries.filter((entry) =>
+      selectedPFRARecordType === 'all'
+        ? true
+        : (entry.assessment.recordType ?? 'self') === selectedPFRARecordType
+    );
+    const membersWithFA = new Set(filteredPFRAEntries.map((entry) => entry.memberId));
+    const avgPFRAScore = filteredPFRAEntries.length > 0
+      ? filteredPFRAEntries.reduce((sum, entry) => sum + entry.assessment.overallScore, 0) / filteredPFRAEntries.length
       : 0;
 
     // Workout type breakdown
@@ -251,14 +284,12 @@ export default function AnalyticsScreen() {
       const month = date.getMonth();
       const monthLabel = date.toLocaleString('en-US', { month: 'short' });
 
-      const monthScores = members.flatMap((member) =>
-        member.fitnessAssessments
-          .filter((assessment) => {
-            const assessmentDate = new Date(assessment.date);
-            return assessmentDate.getFullYear() === year && assessmentDate.getMonth() === month;
-          })
-          .map((assessment) => assessment.overallScore)
-      );
+      const monthScores = filteredPFRAEntries
+        .filter(({ assessment }) => {
+          const assessmentDate = new Date(assessment.date);
+          return assessmentDate.getFullYear() === year && assessmentDate.getMonth() === month;
+        })
+        .map(({ assessment }) => assessment.overallScore);
 
       const average = monthScores.length > 0
         ? monthScores.reduce((sum, score) => sum + score, 0) / monthScores.length
@@ -272,18 +303,30 @@ export default function AnalyticsScreen() {
     });
 
     const maxPFRAAverage = Math.max(...pfraTimeline.map((entry) => entry.average), 100);
-    const recentPFRARecords = members
-      .flatMap((member) =>
-        member.fitnessAssessments.map((assessment) => ({
-          id: assessment.id,
-          memberName: getDisplayName(member),
-          score: assessment.overallScore,
-          date: assessment.date,
-          loggedByName: assessment.loggedByName ?? getDisplayName(member),
-        }))
-      )
+    const recentPFRARecords = filteredPFRAEntries
+      .map(({ assessment, memberName }) => ({
+        id: assessment.id,
+        memberName,
+        score: assessment.overallScore,
+        date: assessment.date,
+        recordType: assessment.recordType ?? 'self',
+        loggedByName: assessment.loggedByName ?? memberName,
+      }))
       .sort((left, right) => right.date.localeCompare(left.date))
       .slice(0, 6);
+
+    const latestMockBatch = pfraBatches
+      .filter((batch) => batch.recordType === 'mock')
+      .sort((left, right) => right.assessmentDate.localeCompare(left.assessmentDate))[0] ?? null;
+
+    const componentAverages = filteredPFRAEntries.length > 0
+      ? {
+          waist: filteredPFRAEntries.reduce((sum, entry) => sum + (entry.assessment.components.waist?.score ?? 0), 0) / filteredPFRAEntries.length,
+          strength: filteredPFRAEntries.reduce((sum, entry) => sum + entry.assessment.components.pushups.score, 0) / filteredPFRAEntries.length,
+          core: filteredPFRAEntries.reduce((sum, entry) => sum + entry.assessment.components.situps.score, 0) / filteredPFRAEntries.length,
+          cardio: filteredPFRAEntries.reduce((sum, entry) => sum + entry.assessment.components.cardio.score, 0) / filteredPFRAEntries.length,
+        }
+      : { waist: 0, strength: 0, core: 0, cardio: 0 };
 
     return {
       totalMembers,
@@ -301,14 +344,18 @@ export default function AnalyticsScreen() {
       pfraTimeline,
       maxPFRAAverage,
       recentPFRARecords,
+      latestMockBatch,
+      pfraTotalCount: filteredPFRAEntries.length,
+      componentAverages,
+      recentPFRABatches: pfraBatches.slice(0, 5),
       flightStats,
       avgPFRAScore: Math.round(avgPFRAScore * 10) / 10,
-      membersWithFA: membersWithFA.length,
+      membersWithFA: membersWithFA.size,
       workoutTypeBreakdown,
       totalWorkouts,
       activeMonthKey,
     };
-  }, [activeMonthKey, members, ptSessions]);
+  }, [activeMonthKey, members, pfraBatches, ptSessions, selectedPFRARecordType]);
 
   const buildPdfHtml = () => {
     const generatedAt = new Date().toLocaleString();
@@ -359,6 +406,7 @@ export default function AnalyticsScreen() {
               <div class="card"><div class="label">Workouts</div><div class="value">${analytics.totalWorkouts}</div></div>
               <div class="card"><div class="label">PT Sessions</div><div class="value">${analytics.totalSessions}</div></div>
               <div class="card"><div class="label">Avg PFRA</div><div class="value">${analytics.avgPFRAScore}</div></div>
+              <div class="card"><div class="label">Logged PFRAs</div><div class="value">${analytics.pfraTotalCount}</div></div>
               <div class="card"><div class="label">Attendance This Week</div><div class="value">${analytics.totalAttendanceMarksThisWeek}</div></div>
               <div class="card"><div class="label">Members at 5/5</div><div class="value">${analytics.membersMeetingWeeklyTarget}/${analytics.totalMembers} (${analytics.weeklyCompliancePercent}%)</div></div>
             </div>
@@ -401,6 +449,8 @@ export default function AnalyticsScreen() {
       { metric: 'Weekly Compliance %', value: analytics.weeklyCompliancePercent },
       { metric: 'Average PFRA', value: analytics.avgPFRAScore },
       { metric: 'Members With PFRA', value: analytics.membersWithFA },
+      { metric: 'Logged PFRA Count', value: analytics.pfraTotalCount },
+      { metric: 'Latest Mock Completion %', value: analytics.latestMockBatch ? Math.round(analytics.latestMockBatch.completionRate * 100) : '' },
     ]);
 
     const membersSheet = workbook.addWorksheet('Members');
@@ -475,7 +525,29 @@ export default function AnalyticsScreen() {
     ];
     analytics.pfraTimeline.forEach((entry) => pfraSheet.addRow(entry));
 
-    [overviewSheet, membersSheet, flightsSheet, workoutsSheet, pfraSheet].forEach((sheet) => {
+    const pfraBatchSheet = workbook.addWorksheet('PFRA Batches');
+    pfraBatchSheet.columns = [
+      { header: 'Date', key: 'assessmentDate', width: 14 },
+      { header: 'Type', key: 'recordType', width: 14 },
+      { header: 'Flights', key: 'flights', width: 24 },
+      { header: 'Completed', key: 'completedCount', width: 12 },
+      { header: 'Expected', key: 'expectedCount', width: 12 },
+      { header: 'Completion %', key: 'completionRate', width: 14 },
+      { header: 'Created By', key: 'createdByName', width: 24 },
+    ];
+    analytics.recentPFRABatches.forEach((batch) => {
+      pfraBatchSheet.addRow({
+        assessmentDate: batch.assessmentDate,
+        recordType: batch.recordType,
+        flights: batch.selectedFlights.join(', '),
+        completedCount: batch.completedCount,
+        expectedCount: batch.expectedCount,
+        completionRate: Math.round(batch.completionRate * 100),
+        createdByName: batch.createdByName,
+      });
+    });
+
+    [overviewSheet, membersSheet, flightsSheet, workoutsSheet, pfraSheet, pfraBatchSheet].forEach((sheet) => {
       sheet.getRow(1).font = { bold: true };
       sheet.views = [{ state: 'frozen', ySplit: 1 }];
     });
@@ -626,6 +698,29 @@ export default function AnalyticsScreen() {
                     activeMonthKey === monthKey ? "text-white font-semibold" : "text-af-silver"
                   )}>
                     {formatMonthLabel(monthKey)}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </Animated.View>
+
+          <Animated.View entering={FadeInDown.delay(138).springify()} className="mt-4">
+            <Text className="text-white/60 text-xs uppercase tracking-wider mb-2">PFRA Record Type</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingRight: 12 }}>
+              {(['all', 'self', 'mock', 'diagnostic', 'official'] as const).map((value) => (
+                <Pressable
+                  key={value}
+                  onPress={() => {
+                    Haptics.selectionAsync();
+                    setSelectedPFRARecordType(value);
+                  }}
+                  className={cn(
+                    'px-3 py-2 rounded-full mr-2 border',
+                    selectedPFRARecordType === value ? 'bg-af-accent border-af-accent' : 'bg-white/5 border-white/10'
+                  )}
+                >
+                  <Text className={cn('text-xs', selectedPFRARecordType === value ? 'text-white font-semibold' : 'text-af-silver')}>
+                    {value === 'all' ? 'All' : value === 'self' ? 'Self' : value.charAt(0).toUpperCase() + value.slice(1)}
                   </Text>
                 </Pressable>
               ))}
@@ -911,13 +1006,75 @@ export default function AnalyticsScreen() {
                     <Text className="text-af-gold font-bold">{record.score.toFixed(1)}</Text>
                   </View>
                   <View className="mt-2 flex-row items-center justify-between">
-                    <Text className="text-af-silver text-xs">{record.date}</Text>
+                    <Text className="text-af-silver text-xs">{record.date} • {(record.recordType ?? 'self').toUpperCase()}</Text>
                     <Text className="text-af-silver text-xs">Logged by {record.loggedByName}</Text>
                   </View>
                 </View>
               ))}
             </Animated.View>
           )}
+
+          <Animated.View entering={FadeInDown.delay(268).springify()} className="mt-4 p-4 bg-white/5 rounded-2xl border border-white/10">
+            <Text className="text-white font-semibold text-lg">PFRA Leadership Summary</Text>
+            <View className="mt-4 flex-row justify-between">
+              <View className="items-center flex-1">
+                <Text className="text-white font-bold text-xl">{analytics.pfraTotalCount}</Text>
+                <Text className="text-af-silver text-xs">Logged PFRAs</Text>
+              </View>
+              <View className="w-px bg-white/10" />
+              <View className="items-center flex-1">
+                <Text className="text-white font-bold text-xl">{analytics.membersWithFA}</Text>
+                <Text className="text-af-silver text-xs">Members Logged</Text>
+              </View>
+              <View className="w-px bg-white/10" />
+              <View className="items-center flex-1">
+                <Text className="text-white font-bold text-xl">
+                  {analytics.latestMockBatch ? `${Math.round(analytics.latestMockBatch.completionRate * 100)}%` : '--'}
+                </Text>
+                <Text className="text-af-silver text-xs">Latest Mock Completion</Text>
+              </View>
+            </View>
+            <View className="mt-4 pt-4 border-t border-white/10 flex-row justify-between">
+              <View className="items-center flex-1">
+                <Text className="text-white font-semibold">{analytics.componentAverages.waist.toFixed(1)}</Text>
+                <Text className="text-af-silver text-xs">Waist Avg</Text>
+              </View>
+              <View className="items-center flex-1">
+                <Text className="text-white font-semibold">{analytics.componentAverages.strength.toFixed(1)}</Text>
+                <Text className="text-af-silver text-xs">Strength Avg</Text>
+              </View>
+              <View className="items-center flex-1">
+                <Text className="text-white font-semibold">{analytics.componentAverages.core.toFixed(1)}</Text>
+                <Text className="text-af-silver text-xs">Core Avg</Text>
+              </View>
+              <View className="items-center flex-1">
+                <Text className="text-white font-semibold">{analytics.componentAverages.cardio.toFixed(1)}</Text>
+                <Text className="text-af-silver text-xs">Cardio Avg</Text>
+              </View>
+            </View>
+          </Animated.View>
+
+          {analytics.recentPFRABatches.length > 0 ? (
+            <Animated.View entering={FadeInDown.delay(272).springify()} className="mt-4 p-4 bg-white/5 rounded-2xl border border-white/10">
+              <Text className="text-white font-semibold text-lg mb-3">Recent PFRA Batches</Text>
+              {analytics.recentPFRABatches.map((batch) => (
+                <Pressable
+                  key={batch.id}
+                  onPress={() => router.push(`/bulk-pfra-entry?batchId=${encodeURIComponent(batch.id)}`)}
+                  className="mb-3 rounded-xl border border-white/10 bg-black/10 p-3 last:mb-0"
+                >
+                  <View className="flex-row items-center justify-between">
+                    <Text className="text-white font-semibold">{batch.assessmentDate} • {batch.recordType.toUpperCase()}</Text>
+                    <Text className="text-af-accent text-sm">Edit</Text>
+                  </View>
+                  <View className="mt-2 flex-row items-center justify-between">
+                    <Text className="text-af-silver text-xs">{batch.selectedFlights.join(', ')}</Text>
+                    <Text className="text-af-silver text-xs">{batch.completedCount}/{batch.expectedCount} completed</Text>
+                  </View>
+                </Pressable>
+              ))}
+            </Animated.View>
+          ) : null}
 
           {/* Workout Type Breakdown */}
           {analytics.workoutTypeBreakdown.length > 0 && (

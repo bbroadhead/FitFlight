@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { Dimensions, LayoutChangeEvent, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
-import { useAuthStore, useMemberStore, canEditAttendance, canManagePTL, canManagePTPrograms, type AccountType } from '@/lib/store';
+import { useAuthStore, useMemberStore, canEditAttendance, canManagePFRARecords, canManagePTL, canManagePTPrograms, type AccountType } from '@/lib/store';
 import { updateRosterPasswordStatus } from '@/lib/supabaseData';
 
 type TutorialStep = {
@@ -89,7 +89,9 @@ function buildTutorialSteps(accountType: AccountType): TutorialStep[] {
       route: '/calculator',
       targetId: 'calculator-actions',
       title: 'PFRA Tools',
-      description: 'Calculate PFRA results, export them, and save PFRA records to account history.',
+      description: canManagePFRARecords(accountType)
+        ? 'Calculate PFRA results, export them, save them to your account, or open bulk PFRA entry from one menu.'
+        : 'Calculate PFRA results, export them, and save them to your account from one menu.',
     },
     {
       id: 'account-summary',

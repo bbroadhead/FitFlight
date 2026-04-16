@@ -1504,7 +1504,7 @@ export default function ProfileScreen() {
                 memberId: user.id,
                 createdBy: user.id,
                 isAttending: true,
-                source: 'workout',
+                source: 'strava',
                 accessToken: accessToken ?? undefined,
               }).catch(() => undefined)
             )

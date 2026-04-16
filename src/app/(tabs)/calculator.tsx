@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, Pressable, ScrollView, TextInput, Platform, Linking, LayoutChangeEvent, useWindowDimensions, Modal } from 'react-native';
+import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -15,7 +16,7 @@ import { Buffer } from 'buffer';
 import SmartSlider from '@/components/SmartSlider';
 import { TutorialTarget } from '@/contexts/TutorialTourContext';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
-import { useAuthStore, useMemberStore } from '@/lib/store';
+import { canManagePFRARecords, useAuthStore, useMemberStore } from '@/lib/store';
 import { savePFRARecord } from '@/lib/supabaseData';
 import {
   HAND_RELEASE_PUSHUP_ROWS,
@@ -732,8 +733,10 @@ export default function CalculatorScreen() {
   }, []);
 
   const [audioCollapsed, setAudioCollapsed] = useState(true);
+  const router = useRouter();
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [showOfficialSaveModal, setShowOfficialSaveModal] = useState(false);
+  const [showPfraActionsMenu, setShowPfraActionsMenu] = useState(false);
   const [isSavingPdf, setIsSavingPdf] = useState(false);
   const [isSavingOfficialPfRA, setIsSavingOfficialPfRA] = useState(false);
   const [pdfFileName, setPdfFileName] = useState('name-date-official');
@@ -743,6 +746,7 @@ export default function CalculatorScreen() {
   const user = useAuthStore((s) => s.user);
   const accessToken = useAuthStore((s) => s.accessToken);
   const currentMember = user ? members.find((member) => member.id === user.id) : null;
+  const canBulkSavePFRA = user ? canManagePFRARecords(user.accountType) : false;
   const [savePfRADate, setSavePfRADate] = useState(new Date());
   const [showSavePfRADatePicker, setShowSavePfRADatePicker] = useState(false);
   const [ageYears, setAgeYears] = useState(34);
@@ -1406,19 +1410,49 @@ export default function CalculatorScreen() {
                 <Text className="mt-1 text-sm text-af-silver">Based on PFRA Scoring Charts released on 1 MAR 2026</Text>
               </View>
               <TutorialTarget id="calculator-actions">
-                <View className="items-end gap-2">
+                <View className="items-end">
                   <Pressable
-                    onPress={() => setShowSaveModal(true)}
+                    onPress={() => setShowPfraActionsMenu((current) => !current)}
                     className="rounded-xl border border-af-accent/50 bg-af-accent/15 px-4 py-2.5"
                   >
-                    <Text className="font-semibold text-af-accent">Export Results</Text>
+                    <View className="flex-row items-center">
+                      <Text className="font-semibold text-af-accent">Save/PFRA Actions</Text>
+                      <Ionicons name={showPfraActionsMenu ? 'chevron-up' : 'chevron-down'} size={16} color="#4A90D9" style={{ marginLeft: 8 }} />
+                    </View>
                   </Pressable>
-                  <Pressable
-                    onPress={() => setShowOfficialSaveModal(true)}
-                    className="rounded-xl border border-af-gold/50 bg-af-gold/15 px-4 py-2.5"
-                  >
-                    <Text className="font-semibold text-af-gold">Save PFRA to Account</Text>
-                  </Pressable>
+                  {showPfraActionsMenu ? (
+                    <View className="mt-2 min-w-[240px] rounded-2xl border border-white/10 bg-[#0F1F36] p-2">
+                      <Pressable
+                        onPress={() => {
+                          setShowPfraActionsMenu(false);
+                          setShowSaveModal(true);
+                        }}
+                        className="rounded-xl px-4 py-3"
+                      >
+                        <Text className="font-semibold text-af-accent">Export Results</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => {
+                          setShowPfraActionsMenu(false);
+                          setShowOfficialSaveModal(true);
+                        }}
+                        className="rounded-xl px-4 py-3"
+                      >
+                        <Text className="font-semibold text-af-gold">Save PFRA to My Account</Text>
+                      </Pressable>
+                      {canBulkSavePFRA ? (
+                        <Pressable
+                          onPress={() => {
+                            setShowPfraActionsMenu(false);
+                            router.push('/bulk-pfra-entry');
+                          }}
+                          className="rounded-xl px-4 py-3"
+                        >
+                          <Text className="font-semibold text-violet-300">Bulk PFRA Entry</Text>
+                        </Pressable>
+                      ) : null}
+                    </View>
+                  ) : null}
                 </View>
               </TutorialTarget>
             </View>
@@ -1584,7 +1618,7 @@ export default function CalculatorScreen() {
       <Modal visible={showOfficialSaveModal} transparent animationType="fade">
         <View className="flex-1 items-center justify-center bg-black/75 p-6">
           <View className="w-full max-w-md rounded-3xl border border-white/15 bg-[#0F1F36] p-6">
-            <Text className="text-xl font-bold text-white">Save PFRA to Account</Text>
+            <Text className="text-xl font-bold text-white">Save PFRA to My Account</Text>
             <Text className="mt-3 text-sm leading-6 text-af-silver">
               This saves the current calculator state to your FitFlight account as a recorded PFRA result for your own tracking.
             </Text>

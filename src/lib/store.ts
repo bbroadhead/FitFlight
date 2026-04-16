@@ -11,6 +11,9 @@ export type WorkoutType = 'Running' | 'Walking' | 'Cycling' | 'Strength' | 'HIIT
 export type IntegrationService = 'apple_health' | 'strava' | 'garmin';
 export type ScheduledPTScope = 'squadron' | 'flight' | 'personal';
 export type ScheduledPTKind = 'pt' | 'pfra_mock' | 'pfra_diagnostic' | 'pfra_official';
+export type PFRARecordType = 'self' | 'mock' | 'diagnostic' | 'official';
+export type PFRAAccountabilityStatus = 'completed' | 'pending' | 'absent' | 'excused' | 'postponed';
+export type AttendanceSource = 'manual' | 'workout' | 'strava' | 'pfra';
 
 export const SQUADRONS: Squadron[] = ['Hawks', 'Tigers'];
 export const WORKOUT_TYPES: WorkoutType[] = ['Running', 'Walking', 'Cycling', 'Strength', 'HIIT', 'Swimming', 'Sports', 'Cardio', 'Flexibility', 'Other'];
@@ -67,6 +70,9 @@ export interface FitnessAssessment {
   id: string;
   date: string; // ISO date string
   overallScore: number;
+  recordType?: PFRARecordType;
+  batchId?: string;
+  accountabilityStatus?: PFRAAccountabilityStatus;
   components: {
     cardio: { score: number; time?: string; laps?: number; test?: string; exempt?: boolean };
     pushups: { score: number; reps: number; test?: string; exempt?: boolean };
@@ -169,7 +175,7 @@ export interface PTSession {
   flight: Flight;
   squadron: Squadron;
   attendees: string[];
-  attendeeSources?: Record<string, 'manual' | 'workout'>;
+  attendeeSources?: Record<string, AttendanceSource>;
   createdBy: string;
 }
 
@@ -1360,6 +1366,10 @@ export const canEditAttendance = (accountType: AccountType): boolean => {
 // Helper for UFPM-like or PT-program features that Demo can still access
 export const canManagePTPrograms = (accountType: AccountType): boolean => {
   return canEditAttendance(accountType) || accountType === 'demo';
+};
+
+export const canManagePFRARecords = (accountType: AccountType): boolean => {
+  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'squadron_leadership' || accountType === 'ptl';
 };
 
 // Helper to check if user has admin access

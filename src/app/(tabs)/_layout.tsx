@@ -666,7 +666,7 @@ function TabsInner() {
           lazyPreloadDistance: 1,
           animationEnabled: true,
           tabBarShowIcon: true,
-          tabBarActiveTintColor: "#ffffff",
+          tabBarActiveTintColor: "#9FD3FF",
         tabBarInactiveTintColor: "rgba(255,255,255,0.6)",
         tabBarStyle: {
           backgroundColor: "#071226",
@@ -703,8 +703,21 @@ function TabsInner() {
         name="index"
         options={{
           title: "Home",
-          tabBarIcon: ({ color }: { color: string }) => (
-            <Ionicons name="home-outline" size={22} color={color} />
+          tabBarIcon: ({ color, focused }: { color: string; focused: boolean }) => (
+            <View
+              style={focused ? {
+                borderRadius: 16,
+                backgroundColor: 'rgba(74,144,217,0.18)',
+                borderWidth: 1,
+                borderColor: 'rgba(159,211,255,0.35)',
+                shadowColor: '#4A90D9',
+                shadowOpacity: 0.45,
+                shadowRadius: 12,
+                shadowOffset: { width: 0, height: 0 },
+              } : undefined}
+            >
+              <Ionicons name="home-outline" size={24} color={color} />
+            </View>
           ),
         }}
       />
@@ -712,8 +725,21 @@ function TabsInner() {
         name="attendance"
         options={{
           title: "Attendance",
-          tabBarIcon: ({ color }: { color: string }) => (
-            <Ionicons name="checkbox-outline" size={22} color={color} />
+          tabBarIcon: ({ color, focused }: { color: string; focused: boolean }) => (
+            <View
+              style={focused ? {
+                borderRadius: 16,
+                backgroundColor: 'rgba(74,144,217,0.18)',
+                borderWidth: 1,
+                borderColor: 'rgba(159,211,255,0.35)',
+                shadowColor: '#4A90D9',
+                shadowOpacity: 0.45,
+                shadowRadius: 12,
+                shadowOffset: { width: 0, height: 0 },
+              } : undefined}
+            >
+              <Ionicons name="checkbox-outline" size={24} color={color} />
+            </View>
           ),
         }}
       />
@@ -721,8 +747,21 @@ function TabsInner() {
         name="workouts"
         options={{
           title: "Workouts",
-          tabBarIcon: ({ color }: { color: string }) => (
-            <Ionicons name="barbell-outline" size={22} color={color} />
+          tabBarIcon: ({ color, focused }: { color: string; focused: boolean }) => (
+            <View
+              style={focused ? {
+                borderRadius: 16,
+                backgroundColor: 'rgba(74,144,217,0.18)',
+                borderWidth: 1,
+                borderColor: 'rgba(159,211,255,0.35)',
+                shadowColor: '#4A90D9',
+                shadowOpacity: 0.45,
+                shadowRadius: 12,
+                shadowOffset: { width: 0, height: 0 },
+              } : undefined}
+            >
+              <Ionicons name="barbell-outline" size={24} color={color} />
+            </View>
           ),
         }}
       />
@@ -730,8 +769,21 @@ function TabsInner() {
         name="calculator"
         options={{
           title: "Calculator",
-          tabBarIcon: ({ color }: { color: string }) => (
-            <Ionicons name="calculator-outline" size={22} color={color} />
+          tabBarIcon: ({ color, focused }: { color: string; focused: boolean }) => (
+            <View
+              style={focused ? {
+                borderRadius: 16,
+                backgroundColor: 'rgba(74,144,217,0.18)',
+                borderWidth: 1,
+                borderColor: 'rgba(159,211,255,0.35)',
+                shadowColor: '#4A90D9',
+                shadowOpacity: 0.45,
+                shadowRadius: 12,
+                shadowOffset: { width: 0, height: 0 },
+              } : undefined}
+            >
+              <Ionicons name="calculator-outline" size={24} color={color} />
+            </View>
           ),
         }}
       />
@@ -739,8 +791,21 @@ function TabsInner() {
         name="profile"
         options={{
           title: "Account",
-          tabBarIcon: ({ color }: { color: string }) => (
-            <Ionicons name="person-outline" size={22} color={color} />
+          tabBarIcon: ({ color, focused }: { color: string; focused: boolean }) => (
+            <View
+              style={focused ? {
+                borderRadius: 16,
+                backgroundColor: 'rgba(74,144,217,0.18)',
+                borderWidth: 1,
+                borderColor: 'rgba(159,211,255,0.35)',
+                shadowColor: '#4A90D9',
+                shadowOpacity: 0.45,
+                shadowRadius: 12,
+                shadowOffset: { width: 0, height: 0 },
+              } : undefined}
+            >
+              <Ionicons name="person-outline" size={24} color={color} />
+            </View>
           ),
         }}
       />
