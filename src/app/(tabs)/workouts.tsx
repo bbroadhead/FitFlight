@@ -1,8 +1,10 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { Alert, View, Text, Pressable, ScrollView, TextInput, Modal, KeyboardAvoidingView, Platform } from 'react-native';
+import { Alert, View, Text, Pressable, RefreshControl, ScrollView, TextInput, Modal, KeyboardAvoidingView, Platform, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Plus, Search, X, ThumbsUp, ThumbsDown, Star, Trash2, Clock, Flame, ChevronDown, ChevronUp, Check, ListOrdered, Filter, Pencil } from 'lucide-react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Plus, Search, X, ThumbsUp, ThumbsDown, Star, Trash2, Clock, Flame, ChevronDown, ChevronUp, Check, ListOrdered, Filter, Pencil, CalendarPlus } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeInRight } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import SmartSlider from "../../components/SmartSlider";
@@ -11,9 +13,25 @@ import { cn } from '@/lib/cn';
 import { createSharedWorkout, deleteSharedWorkoutFromSupabase, fetchSharedWorkouts, updateSharedWorkout } from '@/lib/supabaseData';
 import { TutorialTarget } from '@/contexts/TutorialTourContext';
 import { PLAYBOOK_WORKOUT_CREATOR_ID, PLAYBOOK_WORKOUT_SOURCE_LABEL, PLAYBOOK_WORKOUTS } from '@/lib/playbookWorkouts';
+import { parseScheduledWorkoutLink } from '@/lib/scheduledWorkoutLinks';
+import { getThemeBodyStyle, getThemeButtonStyle, getThemeButtonTextStyle, getThemeControlStyle, getThemeHeadingStyle, getThemeIconWellStyle, getThemeInputContainerStyle, getThemeLabelStyle, useAppTheme, type AppThemePalette } from '@/lib/theme';
+import { PageContainer } from '@/components/PageContainer';
+import { ThemeBackdrop } from '@/components/ThemeBackdrop';
+import { ThemeChrome } from '@/components/ThemeChrome';
+import { TopStatusBar } from '@/components/TopStatusBar';
+import { createOfflineActionId, requestRegisteredSync, runOrQueueOfflineMutation } from '@/lib/appSync';
 
-type FilterType = 'all' | 'favorites' | 'mine';
+type FilterType = 'all' | 'favorites' | 'mine' | 'playbook';
 type SortType = 'newest' | 'popular' | 'duration';
+const PLAYBOOK_FAVORITES_KEY_PREFIX = 'fitflight-playbook-favorites:';
+
+function getWorkoutVoteScore(workout: SharedWorkout) {
+  return workout.thumbsUp.length;
+}
+
+function getWorkoutNetScore(workout: SharedWorkout) {
+  return workout.thumbsUp.length - workout.thumbsDown.length;
+}
 
 function getSharedWorkoutErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : 'Unable to reach shared workouts right now.';
@@ -35,6 +53,12 @@ function WorkoutCard({
   creatorName,
   editorName,
   allowFeedback = true,
+  allowFavorite = true,
+  usageCount,
+  onScheduleSession,
+  isExpandedOverride,
+  onToggleExpanded,
+  theme,
 }: {
   workout: SharedWorkout;
   currentUserId: string;
@@ -47,8 +71,15 @@ function WorkoutCard({
   creatorName: string;
   editorName?: string | null;
   allowFeedback?: boolean;
+  allowFavorite?: boolean;
+  usageCount: number;
+  onScheduleSession: () => void;
+  isExpandedOverride?: boolean;
+  onToggleExpanded?: (expanded: boolean) => void;
+  theme: AppThemePalette;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const isExpanded = isExpandedOverride ?? expanded;
 
   const userRating = workout.thumbsUp.includes(currentUserId)
     ? 'up'
@@ -96,69 +127,79 @@ function WorkoutCard({
   };
 
   return (
-    <Animated.View
-      entering={FadeInRight.springify()}
-      className="bg-white/5 rounded-2xl border border-white/10 mb-3 overflow-hidden"
-    >
+    <Animated.View entering={FadeInRight.springify()} className="mb-3">
+      <ThemeChrome theme={theme} variant={workout.source === 'playbook' ? 'feature' : 'default'}>
       <Pressable
-        onPress={() => setExpanded(!expanded)}
+        onPress={() => {
+          const nextExpanded = !isExpanded;
+          setExpanded(nextExpanded);
+          onToggleExpanded?.(nextExpanded);
+        }}
         className="p-4"
       >
         {/* Header */}
         <View className="flex-row items-start justify-between">
             <View className="flex-1">
-              <Text className="text-white font-bold text-lg">{workout.name}</Text>
-              <Text className="text-af-silver text-sm">by {creatorName}</Text>
+              <Text style={getThemeHeadingStyle(theme, 18)}>{workout.name}</Text>
+              <Text style={getThemeBodyStyle(theme, 13)}>by {creatorName}</Text>
               {editorName && workout.editedBy !== workout.createdBy ? (
-                <Text className="text-white text-xs mt-1 italic">edited by {editorName}</Text>
+                <Text style={getThemeBodyStyle(theme, 12, theme.textSecondary)} className="mt-1 italic">edited by {editorName}</Text>
               ) : null}
             </View>
-          <View className="flex-row items-center">
-            {allowFeedback ? (
-              <Pressable
-                onPress={handleFavorite}
-                className="w-9 h-9 items-center justify-center"
-              >
-                <Star
-                  size={20}
-                  color={isFavorited ? '#FFD700' : '#6B7280'}
-                  fill={isFavorited ? '#FFD700' : 'transparent'}
-                />
-              </Pressable>
-            ) : null}
-            {canEdit && (
-              <Pressable
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  onEdit();
-                }}
-                className="w-9 h-9 items-center justify-center"
-              >
-                <Pencil size={17} color="#4A90D9" />
-              </Pressable>
-            )}
-            {canDelete && (
-              <Pressable
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-                  onDelete();
-                }}
-                className="w-9 h-9 items-center justify-center"
-              >
-                <Trash2 size={18} color="#EF4444" />
-              </Pressable>
-            )}
+          <View className="items-end">
+            <View className="flex-row items-center justify-end">
+              {allowFavorite ? (
+                <Pressable
+                  onPress={handleFavorite}
+                  className="w-9 h-9 items-center justify-center"
+                >
+                  <Star
+                    size={20}
+                    color={isFavorited ? theme.accentAlt : theme.textMuted}
+                    fill={isFavorited ? '#FFD700' : 'transparent'}
+                  />
+                </Pressable>
+              ) : null}
+              {canEdit && (
+                <Pressable
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    onEdit();
+                  }}
+                  className="w-9 h-9 items-center justify-center"
+                >
+                  <Pencil size={17} color={theme.accent} />
+                </Pressable>
+              )}
+              {canDelete && (
+                <Pressable
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+                    onDelete();
+                  }}
+                  className="w-9 h-9 items-center justify-center"
+                >
+                  <Trash2 size={18} color="#EF4444" />
+                </Pressable>
+              )}
+            </View>
+            <Text style={getThemeBodyStyle(theme, 11, theme.textMuted)} className="mt-1">Used {usageCount}x</Text>
           </View>
         </View>
 
         {/* Tags */}
         <View className="flex-row flex-wrap mt-2 gap-2">
-          <View className="bg-af-accent/20 px-2 py-1 rounded-full">
-            <Text className="text-af-accent text-xs">{workout.type}</Text>
+          {workout.source === 'playbook' ? (
+            <View className="px-2 py-1 rounded-full" style={{ ...getThemeControlStyle(theme, true), borderColor: theme.accentAlt }}>
+              <Text style={getThemeBodyStyle(theme, 12, theme.accentAlt)}>Playbook</Text>
+            </View>
+          ) : null}
+          <View className="px-2 py-1 rounded-full" style={getThemeControlStyle(theme, true)}>
+            <Text style={getThemeBodyStyle(theme, 12, theme.accent)}>{workout.type}</Text>
           </View>
-          <View className="flex-row items-center bg-white/10 px-2 py-1 rounded-full">
-            <Clock size={12} color="#C0C0C0" />
-            <Text className="text-af-silver text-xs ml-1">{workout.duration} min</Text>
+          <View className="flex-row items-center px-2 py-1 rounded-full" style={getThemeControlStyle(theme)}>
+            <Clock size={12} color={theme.textSecondary} />
+            <Text style={getThemeBodyStyle(theme, 12)} className="ml-1">{workout.duration} min</Text>
           </View>
           <View className="flex-row items-center px-2 py-1 rounded-full" style={{ backgroundColor: `${getIntensityColor(workout.intensity)}20` }}>
             <Flame size={12} color={getIntensityColor(workout.intensity)} />
@@ -167,16 +208,11 @@ function WorkoutCard({
             </Text>
           </View>
           {workout.isMultiStep && (
-            <View className="flex-row items-center bg-purple-500/20 px-2 py-1 rounded-full">
-              <ListOrdered size={12} color="#A855F7" />
-              <Text className="text-purple-400 text-xs ml-1">{workout.steps.length} steps</Text>
+            <View className="flex-row items-center px-2 py-1 rounded-full" style={{ ...getThemeControlStyle(theme, true), borderColor: theme.accentAlt }}>
+              <ListOrdered size={12} color={theme.accentAlt} />
+              <Text style={getThemeBodyStyle(theme, 12, theme.accentAlt)} className="ml-1">{workout.steps.length} steps</Text>
             </View>
           )}
-          {workout.source === 'playbook' ? (
-            <View className="bg-af-gold/20 px-2 py-1 rounded-full border border-af-gold/30">
-              <Text className="text-af-gold text-xs">Playbook</Text>
-            </View>
-          ) : null}
         </View>
 
         {/* Rating Section */}
@@ -192,7 +228,7 @@ function WorkoutCard({
               >
                 <ThumbsUp
                   size={16}
-                  color={userRating === 'up' ? '#22C55E' : '#6B7280'}
+                  color={userRating === 'up' ? '#22C55E' : theme.textMuted}
                   fill={userRating === 'up' ? '#22C55E' : 'transparent'}
                 />
                 <Text className={cn(
@@ -211,7 +247,7 @@ function WorkoutCard({
               >
                 <ThumbsDown
                   size={16}
-                  color={userRating === 'down' ? '#EF4444' : '#6B7280'}
+                  color={userRating === 'down' ? '#EF4444' : theme.textMuted}
                   fill={userRating === 'down' ? '#EF4444' : 'transparent'}
                 />
                 <Text className={cn(
@@ -223,66 +259,84 @@ function WorkoutCard({
               </Pressable>
             </View>
           ) : (
-            <Text className="text-af-silver text-sm">Reference workout</Text>
+            <Text style={getThemeBodyStyle(theme, 14)}>Reference workout</Text>
           )}
-          {expanded ? (
-            <ChevronUp size={20} color="#C0C0C0" />
+          {isExpanded ? (
+            <ChevronUp size={20} color={theme.textSecondary} />
           ) : (
-            <ChevronDown size={20} color="#C0C0C0" />
+            <ChevronDown size={20} color={theme.textSecondary} />
           )}
         </View>
       </Pressable>
 
       {/* Expanded Content */}
-      {expanded && (
+      {isExpanded && (
         <View className="px-4 pb-4 border-t border-white/10">
           {workout.description && (
             <View className="mt-3">
-              <Text className="text-white/60 text-xs uppercase mb-1">Description</Text>
-              <Text className="text-white">{workout.description}</Text>
+              <Text style={getThemeLabelStyle(theme)} className="mb-1">Description</Text>
+              <Text style={getThemeBodyStyle(theme, 14, theme.textPrimary)}>{workout.description}</Text>
             </View>
           )}
 
           {workout.isMultiStep && workout.steps.length > 0 && (
             <View className="mt-3">
-              <Text className="text-white/60 text-xs uppercase mb-2">Steps</Text>
+              <Text style={getThemeLabelStyle(theme)} className="mb-2">Steps</Text>
               {workout.steps.map((step, index) => (
                 <View key={index} className="flex-row mb-2">
                   <View className="w-6 h-6 bg-af-accent/30 rounded-full items-center justify-center mr-3">
                     <Text className="text-af-accent text-xs font-bold">{index + 1}</Text>
                   </View>
-                  <Text className="text-white flex-1">{step}</Text>
-                </View>
-              ))}
-            </View>
+                    <Text style={getThemeBodyStyle(theme, 14, theme.textPrimary)} className="flex-1">{step}</Text>
+                  </View>
+                ))}
+              </View>
           )}
 
           {workout.detailSections?.length ? (
             <View className="mt-3">
               {workout.detailSections.map((section) => (
                 <View key={section.title} className="mb-3">
-                  <Text className="text-white/60 text-xs uppercase mb-2">{section.title}</Text>
+                  <Text style={getThemeLabelStyle(theme)} className="mb-2">{section.title}</Text>
                   {section.items.map((item, index) => (
                     <View key={`${section.title}-${index}`} className="flex-row mb-2">
                       <View className="w-1.5 h-1.5 rounded-full bg-af-accent mt-2 mr-2" />
-                      <Text className="text-white flex-1 leading-5">{item}</Text>
+                      <Text style={getThemeBodyStyle(theme, 14, theme.textPrimary)} className="flex-1 leading-5">{item}</Text>
                     </View>
                   ))}
                 </View>
               ))}
             </View>
           ) : null}
+
+          <Pressable
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              onScheduleSession();
+            }}
+            className="mt-4 flex-row items-center justify-center px-4 py-3"
+            style={getThemeButtonStyle(theme, 'secondary')}
+          >
+            <CalendarPlus size={18} color={theme.accent} />
+            <Text className="ml-2" style={getThemeButtonTextStyle(theme, 'secondary')}>Schedule a PT session using this workout</Text>
+          </Pressable>
         </View>
       )}
+      </ThemeChrome>
     </Animated.View>
   );
 }
 
 export default function WorkoutsScreen() {
+  const theme = useAppTheme();
+  const { width } = useWindowDimensions();
+  const router = useRouter();
+  const params = useLocalSearchParams<{ openWorkoutId?: string }>();
   const user = useAuthStore(s => s.user);
   const accessToken = useAuthStore(s => s.accessToken);
   const members = useMemberStore(s => s.members);
   const sharedWorkouts = useMemberStore(s => s.sharedWorkouts);
+  const scheduledSessions = useMemberStore(s => s.scheduledSessions);
   const syncSharedWorkouts = useMemberStore(s => s.syncSharedWorkouts);
   const addSharedWorkout = useMemberStore(s => s.addSharedWorkout);
   const deleteSharedWorkout = useMemberStore(s => s.deleteSharedWorkout);
@@ -297,6 +351,9 @@ export default function WorkoutsScreen() {
   const [filterType, setFilterType] = useState<FilterType>('all');
   const [sortType, setSortType] = useState<SortType>('newest');
   const [selectedWorkoutType, setSelectedWorkoutType] = useState<WorkoutType | 'all'>('all');
+  const [playbookFavoriteIds, setPlaybookFavoriteIds] = useState<string[]>([]);
+  const [expandedWorkoutId, setExpandedWorkoutId] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Create modal state
   const [newName, setNewName] = useState('');
@@ -312,6 +369,29 @@ export default function WorkoutsScreen() {
   const userAccountType = user?.accountType ?? 'standard';
   const userSquadron: Squadron = (user?.squadron as Squadron) ?? 'Hawks';
   const canManageSharedWorkouts = canManagePTPrograms(userAccountType);
+  const playbookFavoritesStorageKey = `${PLAYBOOK_FAVORITES_KEY_PREFIX}${currentUserId || 'guest'}`;
+
+  useEffect(() => {
+    if (!currentUserId) {
+      setPlaybookFavoriteIds([]);
+      return;
+    }
+
+    void AsyncStorage.getItem(playbookFavoritesStorageKey)
+      .then((stored) => {
+        setPlaybookFavoriteIds(stored ? JSON.parse(stored) : []);
+      })
+      .catch(() => {
+        setPlaybookFavoriteIds([]);
+      });
+  }, [currentUserId, playbookFavoritesStorageKey]);
+
+  useEffect(() => {
+    const openWorkoutId = Array.isArray(params.openWorkoutId) ? params.openWorkoutId[0] : params.openWorkoutId;
+    if (openWorkoutId) {
+      setExpandedWorkoutId(openWorkoutId);
+    }
+  }, [params.openWorkoutId]);
 
   useEffect(() => {
     if (!accessToken || !userSquadron) {
@@ -346,6 +426,15 @@ export default function WorkoutsScreen() {
     };
   }, [accessToken, syncSharedWorkouts, userSquadron]);
 
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await requestRegisteredSync('global');
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   const getMemberName = (memberId: string, workout?: SharedWorkout) => {
     if (memberId === PLAYBOOK_WORKOUT_CREATOR_ID || workout?.source === 'playbook') {
       return PLAYBOOK_WORKOUT_SOURCE_LABEL;
@@ -355,8 +444,26 @@ export default function WorkoutsScreen() {
   };
 
   // Filter and sort workouts
+  const workoutUsageCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    scheduledSessions.forEach((session) => {
+      const linkedWorkout = parseScheduledWorkoutLink(session.description);
+      if (linkedWorkout) {
+        counts.set(linkedWorkout.workoutId, (counts.get(linkedWorkout.workoutId) ?? 0) + 1);
+      }
+    });
+    return counts;
+  }, [scheduledSessions]);
+
   const filteredWorkouts = useMemo(() => {
-    let filtered = [...PLAYBOOK_WORKOUTS, ...sharedWorkouts.filter(w => w.squadron === userSquadron)];
+    const workoutsWithFavorites = [
+      ...PLAYBOOK_WORKOUTS.map((workout) => ({
+        ...workout,
+        favoritedBy: playbookFavoriteIds.includes(workout.id) ? [currentUserId] : [],
+      })),
+      ...sharedWorkouts.filter(w => w.squadron === userSquadron),
+    ];
+    let filtered = workoutsWithFavorites;
 
     // Search filter
     if (searchQuery.trim()) {
@@ -383,19 +490,33 @@ export default function WorkoutsScreen() {
       filtered = filtered.filter(w => w.favoritedBy.includes(currentUserId));
     } else if (filterType === 'mine') {
       filtered = filtered.filter(w => w.createdBy === currentUserId && w.source !== 'playbook');
+    } else if (filterType === 'playbook') {
+      filtered = filtered.filter((workout) => workout.source === 'playbook');
     }
 
-    // Sort
-    if (sortType === 'newest') {
-      filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    } else if (sortType === 'popular') {
-      filtered.sort((a, b) => (b.thumbsUp.length - b.thumbsDown.length) - (a.thumbsUp.length - a.thumbsDown.length));
-    } else if (sortType === 'duration') {
-      filtered.sort((a, b) => a.duration - b.duration);
-    }
+    filtered.sort((a, b) => {
+      const voteDifference = getWorkoutVoteScore(b) - getWorkoutVoteScore(a);
+      if (voteDifference !== 0) {
+        return voteDifference;
+      }
+
+      const netDifference = getWorkoutNetScore(b) - getWorkoutNetScore(a);
+      if (netDifference !== 0) {
+        return netDifference;
+      }
+
+      if (sortType === 'duration') {
+        const durationDifference = a.duration - b.duration;
+        if (durationDifference !== 0) {
+          return durationDifference;
+        }
+      }
+
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
 
     return filtered;
-  }, [sharedWorkouts, userSquadron, searchQuery, selectedWorkoutType, filterType, sortType, currentUserId]);
+  }, [sharedWorkouts, userSquadron, searchQuery, selectedWorkoutType, filterType, sortType, currentUserId, playbookFavoriteIds]);
 
   const resetCreateForm = () => {
     setEditingWorkoutId(null);
@@ -443,7 +564,7 @@ export default function WorkoutsScreen() {
 
   const handleSubmitWorkout = () => {
     const run = async () => {
-      if (!newName.trim() || !user || !accessToken) {
+      if (!newName.trim() || !user) {
         return;
       }
 
@@ -457,7 +578,7 @@ export default function WorkoutsScreen() {
             throw new Error('Unable to find that workout to edit.');
           }
 
-          const updatedWorkout = await updateSharedWorkout({
+          const nextWorkout = {
             ...existingWorkout,
             name: newName.trim(),
             type: newType,
@@ -468,14 +589,33 @@ export default function WorkoutsScreen() {
             steps: trimmedSteps,
             editedBy: user.id,
             editedAt: new Date().toISOString(),
-          }, accessToken);
+          };
 
           syncSharedWorkouts(
-            sharedWorkouts.map((candidate) => candidate.id === updatedWorkout.id ? updatedWorkout : candidate)
+            sharedWorkouts.map((candidate) => candidate.id === nextWorkout.id ? nextWorkout : candidate)
           );
+
+          const mutation = await runOrQueueOfflineMutation({
+            action: {
+              id: createOfflineActionId('shared-workout-update'),
+              type: 'update_shared_workout',
+              createdAt: new Date().toISOString(),
+              payload: { workout: nextWorkout },
+            },
+            execute: () => updateSharedWorkout(nextWorkout, accessToken ?? undefined),
+            onQueued: () => {
+              Alert.alert('Saved offline', 'Your workout changes were saved locally and will sync automatically when you reconnect.');
+            },
+          });
+
+          if (mutation.result) {
+            syncSharedWorkouts(
+              sharedWorkouts.map((candidate) => candidate.id === mutation.result!.id ? mutation.result! : candidate)
+            );
+          }
         } else {
           const newWorkout: SharedWorkout = {
-            id: Date.now().toString() + Math.random().toString(36).substring(2, 9),
+            id: createOfflineActionId('shared-workout'),
             name: newName.trim(),
             type: newType,
             duration,
@@ -491,9 +631,27 @@ export default function WorkoutsScreen() {
             favoritedBy: [],
           };
 
-          const createdWorkout = await createSharedWorkout(newWorkout, accessToken);
           const alreadyHadCreatorTrophy = members.find((member) => member.id === user.id)?.achievements.includes('shared_workout_creator') ?? false;
-          addSharedWorkout(createdWorkout);
+          addSharedWorkout(newWorkout);
+          const mutation = await runOrQueueOfflineMutation({
+            action: {
+              id: createOfflineActionId('shared-workout-create'),
+              type: 'create_shared_workout',
+              createdAt: new Date().toISOString(),
+              payload: { workout: newWorkout },
+            },
+            execute: () => createSharedWorkout(newWorkout, accessToken ?? undefined),
+            onQueued: () => {
+              Alert.alert('Saved offline', 'Your workout was saved locally and will sync automatically when you reconnect.');
+            },
+          });
+          if (mutation.result) {
+            syncSharedWorkouts(
+              [...sharedWorkouts.filter((candidate) => candidate.id !== newWorkout.id), mutation.result].sort(
+                (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+              )
+            );
+          }
           if (!alreadyHadCreatorTrophy) {
             previewAchievementCelebration('shared_workout_creator');
           }
@@ -514,12 +672,20 @@ export default function WorkoutsScreen() {
 
   const handleDeleteWorkout = (workoutId: string) => {
     const run = async () => {
-      if (!accessToken) {
-        return;
-      }
       try {
-        await deleteSharedWorkoutFromSupabase(workoutId, accessToken);
         deleteSharedWorkout(workoutId);
+        await runOrQueueOfflineMutation({
+          action: {
+            id: createOfflineActionId('shared-workout-delete'),
+            type: 'delete_shared_workout',
+            createdAt: new Date().toISOString(),
+            payload: { workoutId },
+          },
+          execute: () => deleteSharedWorkoutFromSupabase(workoutId, accessToken ?? undefined),
+          onQueued: () => {
+            Alert.alert('Saved offline', 'This workout deletion will sync automatically when you reconnect.');
+          },
+        });
         setSharedWorkoutError(null);
       } catch (error) {
         const message = getSharedWorkoutErrorMessage(error);
@@ -569,6 +735,16 @@ export default function WorkoutsScreen() {
 
   const handleToggleFavorite = (workout: SharedWorkout) => {
     const run = async () => {
+      if (workout.source === 'playbook') {
+        const isFavorited = playbookFavoriteIds.includes(workout.id);
+        const nextFavorites = isFavorited
+          ? playbookFavoriteIds.filter((id) => id !== workout.id)
+          : [...playbookFavoriteIds, workout.id];
+        setPlaybookFavoriteIds(nextFavorites);
+        await AsyncStorage.setItem(playbookFavoritesStorageKey, JSON.stringify(nextFavorites)).catch(() => undefined);
+        return;
+      }
+
       if (!accessToken) {
         return;
       }
@@ -597,18 +773,24 @@ export default function WorkoutsScreen() {
     void run();
   };
 
+  const shouldShowPlaybookSeparator = filterType === 'all' && filteredWorkouts.some((workout) => workout.source === 'playbook') && filteredWorkouts.some((workout) => workout.source !== 'playbook');
+  const contentMaxWidth = width >= 1440 ? 1280 : width >= 1180 ? 1180 : 1024;
+
   const canSubmit = newName.trim().length > 0 && (!isMultiStep || steps.some(s => s.trim()));
 
   return (
     <View className="flex-1">
       <LinearGradient
-        colors={['#0A1628', '#001F5C', '#0A1628']}
+        colors={theme.gradient}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
       />
+      <ThemeBackdrop />
 
       <SafeAreaView edges={['top']} className="flex-1">
+        <TopStatusBar title="Workouts" subtitle={`${userSquadron} Squadron`} />
+        <PageContainer maxWidth={contentMaxWidth}>
         {/* Header */}
         <Animated.View
           entering={FadeInDown.delay(100).springify()}
@@ -616,8 +798,8 @@ export default function WorkoutsScreen() {
         >
           <View className="flex-row items-center justify-between">
             <View>
-              <Text className="text-white text-2xl font-bold">Workouts</Text>
-              <Text className="text-af-silver text-sm">{filteredWorkouts.length} workouts available</Text>
+              <Text style={getThemeHeadingStyle(theme, 28)}>Workouts</Text>
+              <Text style={getThemeBodyStyle(theme, 14)}>{filteredWorkouts.length} workouts available</Text>
             </View>
             <TutorialTarget id="workouts-new">
                 <Pressable
@@ -625,10 +807,11 @@ export default function WorkoutsScreen() {
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                     openCreateModal();
                   }}
-                  className="bg-af-accent px-4 py-2 rounded-xl flex-row items-center"
+                  className="px-4 py-2 flex-row items-center"
+                  style={getThemeButtonStyle(theme, 'accent')}
                 >
-                <Plus size={18} color="white" />
-                <Text className="text-white font-semibold ml-1">New</Text>
+                <Plus size={18} color={theme.id === 'pixel' ? '#0F181D' : '#08111B'} />
+                <Text className="ml-1" style={getThemeButtonTextStyle(theme, 'accent')}>New</Text>
               </Pressable>
             </TutorialTarget>
           </View>
@@ -648,8 +831,8 @@ export default function WorkoutsScreen() {
             entering={FadeInDown.delay(150).springify()}
             className="px-6 mt-2"
           >
-            <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10">
-            <Search size={20} color="#C0C0C0" />
+            <View className="flex-row items-center px-4 py-3" style={getThemeInputContainerStyle(theme)}>
+            <Search size={20} color={theme.textSecondary} />
             <TextInput
               value={searchQuery}
               onChangeText={setSearchQuery}
@@ -659,7 +842,7 @@ export default function WorkoutsScreen() {
             />
             {searchQuery.length > 0 && (
               <Pressable onPress={() => setSearchQuery('')}>
-                <X size={18} color="#C0C0C0" />
+                <X size={18} color={theme.textSecondary} />
               </Pressable>
             )}
           </View>
@@ -674,13 +857,14 @@ export default function WorkoutsScreen() {
           >
             <Pressable
               onPress={() => setShowFilterModal(true)}
-              className="flex-row items-center bg-white/10 px-3 py-2 rounded-full mr-2"
+              className="flex-row items-center px-3 py-2 rounded-full mr-2"
+              style={getThemeControlStyle(theme)}
             >
-              <Filter size={14} color="#C0C0C0" />
-              <Text className="text-af-silver text-sm ml-1">Filters</Text>
+              <Filter size={14} color={theme.textSecondary} />
+              <Text style={getThemeBodyStyle(theme, 13)} className="ml-1">Filters</Text>
             </Pressable>
 
-            {(['all', 'favorites', 'mine'] as FilterType[]).map((type) => (
+            {(['all', 'favorites', 'mine', 'playbook'] as FilterType[]).map((type) => (
               <Pressable
                 key={type}
                 onPress={() => {
@@ -689,27 +873,30 @@ export default function WorkoutsScreen() {
                 }}
                 className={cn(
                   "px-4 py-2 rounded-full mr-2",
-                  filterType === type ? "bg-af-accent" : "bg-white/10"
+                  filterType === type ? "" : ""
                 )}
+                style={filterType === type ? getThemeButtonStyle(theme, 'accent') : getThemeControlStyle(theme)}
               >
-                <Text className={cn(
-                  "text-sm",
-                  filterType === type ? "text-white font-semibold" : "text-af-silver"
-                )}>
-                  {type === 'all' ? 'All' : type === 'favorites' ? 'Favorites' : 'My Workouts'}
+                <Text style={filterType === type ? getThemeButtonTextStyle(theme, 'accent') : getThemeBodyStyle(theme, 13, theme.textSecondary)}>
+                  {type === 'all' ? 'All' : type === 'favorites' ? 'Favorites' : type === 'mine' ? 'My Workouts' : 'Playbook'}
                 </Text>
               </Pressable>
             ))}
           </ScrollView>
           </Animated.View>
         </TutorialTarget>
+        </PageContainer>
 
         {/* Workouts List */}
         <ScrollView
-          className="flex-1 px-6 mt-4"
-          contentContainerStyle={{ paddingBottom: 120 }}
+          className="flex-1 mt-4"
+          contentContainerStyle={{ paddingBottom: 120, alignItems: 'center' }}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} tintColor={theme.accent} />
+          }
         >
+          <PageContainer maxWidth={contentMaxWidth} className="px-6">
           {filteredWorkouts.length === 0 ? (
             <View className="items-center justify-center py-12">
               <Text className="text-white/40 text-lg">No workouts found</Text>
@@ -718,12 +905,21 @@ export default function WorkoutsScreen() {
               </Text>
             </View>
           ) : (
-            filteredWorkouts.map((workout) => (
+            filteredWorkouts.map((workout, index) => (
               (() => {
                 const isPlaybookWorkout = workout.source === 'playbook';
+                const previousWorkout = filteredWorkouts[index - 1];
+                const showSeparator = shouldShowPlaybookSeparator && previousWorkout?.source === 'playbook' && workout.source !== 'playbook';
                 return (
+              <React.Fragment key={workout.id}>
+                {showSeparator ? (
+                  <View className="mb-3 mt-1 flex-row items-center">
+                    <View className="h-px flex-1 bg-white/10" />
+                    <Text className="mx-3 text-af-silver text-xs uppercase tracking-[1px]">User Workouts</Text>
+                    <View className="h-px flex-1 bg-white/10" />
+                  </View>
+                ) : null}
               <WorkoutCard
-                key={workout.id}
                 workout={workout}
                 currentUserId={currentUserId}
                 creatorName={getMemberName(workout.createdBy, workout)}
@@ -735,11 +931,19 @@ export default function WorkoutsScreen() {
                 canEdit={!isPlaybookWorkout && (workout.createdBy === currentUserId || canManageSharedWorkouts)}
                 canDelete={!isPlaybookWorkout && (workout.createdBy === currentUserId || isAdmin(userAccountType))}
                 allowFeedback={!isPlaybookWorkout}
+                allowFavorite
+                usageCount={workoutUsageCounts.get(workout.id) ?? 0}
+                onScheduleSession={() => router.push(`/schedule-session?workoutId=${encodeURIComponent(workout.id)}&workoutName=${encodeURIComponent(workout.name)}`)}
+                isExpandedOverride={expandedWorkoutId === workout.id}
+                onToggleExpanded={(isExpanded) => setExpandedWorkoutId(isExpanded ? workout.id : (expandedWorkoutId === workout.id ? null : expandedWorkoutId))}
+                theme={theme}
               />
+              </React.Fragment>
                 );
               })()
             ))
           )}
+          </PageContainer>
         </ScrollView>
       </SafeAreaView>
 
@@ -750,36 +954,41 @@ export default function WorkoutsScreen() {
           className="flex-1"
         >
           <View className="flex-1 bg-black/80 justify-end">
-            <View className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[90%]">
+            <ThemeChrome theme={theme} variant="feature">
+            <View className="p-6 pb-12 max-h-[90%]">
                 <View className="flex-row items-center justify-between mb-6">
-                <Text className="text-white text-xl font-bold">{editingWorkoutId ? 'Edit Workout' : 'Create Workout'}</Text>
+                <Text style={getThemeHeadingStyle(theme, 22)}>{editingWorkoutId ? 'Edit Workout' : 'Create Workout'}</Text>
                 <Pressable
                   onPress={() => {
                     setShowCreateModal(false);
                     resetCreateForm();
                   }}
-                  className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+                  className="w-8 h-8 items-center justify-center"
+                  style={getThemeIconWellStyle(theme)}
                 >
-                  <X size={20} color="#C0C0C0" />
+                  <X size={20} color={theme.textSecondary} />
                 </Pressable>
               </View>
 
               <ScrollView showsVerticalScrollIndicator={false}>
                 {/* Name */}
                 <View className="mb-4">
-                  <Text className="text-white/60 text-sm mb-2">Workout Name *</Text>
-                  <TextInput
-                    value={newName}
-                    onChangeText={setNewName}
-                    placeholder="e.g., Morning HIIT Circuit"
-                    placeholderTextColor="#ffffff40"
-                    className="bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10"
-                  />
+                  <Text style={getThemeBodyStyle(theme, 13, theme.textSecondary)} className="mb-2">Workout Name *</Text>
+                  <View style={getThemeInputContainerStyle(theme)}>
+                    <TextInput
+                      value={newName}
+                      onChangeText={setNewName}
+                      placeholder="e.g., Morning HIIT Circuit"
+                      placeholderTextColor="#ffffff40"
+                      className="px-4 py-3"
+                      style={{ color: theme.textPrimary }}
+                    />
+                  </View>
                 </View>
 
                 {/* Type */}
                 <View className="mb-4">
-                  <Text className="text-white/60 text-sm mb-2">Workout Type</Text>
+                  <Text style={getThemeBodyStyle(theme, 13, theme.textSecondary)} className="mb-2">Workout Type</Text>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }}>
                     <View className="flex-row">
                       {WORKOUT_TYPES.map((type) => (
@@ -788,16 +997,12 @@ export default function WorkoutsScreen() {
                           onPress={() => setNewType(type)}
                           className={cn(
                             "px-4 py-2 rounded-lg mr-2 border",
-                            newType === type
-                              ? "bg-af-accent border-af-accent"
-                              : "bg-white/5 border-white/10"
-                          )}
-                        >
-                          <Text className={cn(
-                            "text-sm",
-                            newType === type ? "text-white" : "text-white/60"
-                          )}>{type}</Text>
-                        </Pressable>
+                              newType === type ? "" : ""
+                            )}
+                            style={newType === type ? getThemeButtonStyle(theme, 'accent') : getThemeControlStyle(theme)}
+                          >
+                            <Text style={newType === type ? getThemeButtonTextStyle(theme, 'accent') : getThemeBodyStyle(theme, 13, theme.textPrimary)}>{type}</Text>
+                          </Pressable>
                       ))}
                     </View>
                   </ScrollView>
@@ -929,6 +1134,7 @@ export default function WorkoutsScreen() {
                   </Pressable>
               </ScrollView>
             </View>
+            </ThemeChrome>
           </View>
         </KeyboardAvoidingView>
       </Modal>
@@ -936,35 +1142,33 @@ export default function WorkoutsScreen() {
       {/* Filter Modal */}
       <Modal visible={showFilterModal} transparent animationType="slide">
         <View className="flex-1 bg-black/80 justify-end">
-          <View className="bg-af-navy rounded-t-3xl p-6 pb-12">
+          <ThemeChrome theme={theme} variant="feature">
+          <View className="p-6 pb-12">
             <View className="flex-row items-center justify-between mb-6">
-              <Text className="text-white text-xl font-bold">Filter & Sort</Text>
+              <Text style={getThemeHeadingStyle(theme, 22)}>Filter & Sort</Text>
               <Pressable
                 onPress={() => setShowFilterModal(false)}
-                className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+                className="w-8 h-8 items-center justify-center"
+                style={getThemeIconWellStyle(theme)}
               >
-                <X size={20} color="#C0C0C0" />
+                <X size={20} color={theme.textSecondary} />
               </Pressable>
             </View>
 
             {/* Workout Type Filter */}
             <View className="mb-4">
-              <Text className="text-white/60 text-sm mb-2">Workout Type</Text>
+              <Text style={getThemeBodyStyle(theme, 13, theme.textSecondary)} className="mb-2">Workout Type</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }}>
                 <View className="flex-row">
                   <Pressable
                     onPress={() => setSelectedWorkoutType('all')}
                     className={cn(
                       "px-4 py-2 rounded-lg mr-2 border",
-                      selectedWorkoutType === 'all'
-                        ? "bg-af-accent border-af-accent"
-                        : "bg-white/5 border-white/10"
+                      selectedWorkoutType === 'all' ? "" : ""
                     )}
+                    style={selectedWorkoutType === 'all' ? getThemeButtonStyle(theme, 'accent') : getThemeControlStyle(theme)}
                   >
-                    <Text className={cn(
-                      "text-sm",
-                      selectedWorkoutType === 'all' ? "text-white" : "text-white/60"
-                    )}>All Types</Text>
+                    <Text style={selectedWorkoutType === 'all' ? getThemeButtonTextStyle(theme, 'accent') : getThemeBodyStyle(theme, 13, theme.textPrimary)}>All Types</Text>
                   </Pressable>
                   {WORKOUT_TYPES.map((type) => (
                     <Pressable
@@ -972,15 +1176,11 @@ export default function WorkoutsScreen() {
                       onPress={() => setSelectedWorkoutType(type)}
                       className={cn(
                         "px-4 py-2 rounded-lg mr-2 border",
-                        selectedWorkoutType === type
-                          ? "bg-af-accent border-af-accent"
-                          : "bg-white/5 border-white/10"
+                        selectedWorkoutType === type ? "" : ""
                       )}
+                      style={selectedWorkoutType === type ? getThemeButtonStyle(theme, 'accent') : getThemeControlStyle(theme)}
                     >
-                      <Text className={cn(
-                        "text-sm",
-                        selectedWorkoutType === type ? "text-white" : "text-white/60"
-                      )}>{type}</Text>
+                      <Text style={selectedWorkoutType === type ? getThemeButtonTextStyle(theme, 'accent') : getThemeBodyStyle(theme, 13, theme.textPrimary)}>{type}</Text>
                     </Pressable>
                   ))}
                 </View>
@@ -989,7 +1189,7 @@ export default function WorkoutsScreen() {
 
             {/* Sort Options */}
             <View className="mb-4">
-              <Text className="text-white/60 text-sm mb-2">Sort By</Text>
+              <Text style={getThemeBodyStyle(theme, 13, theme.textSecondary)} className="mb-2">Sort By</Text>
               {(['newest', 'popular', 'duration'] as SortType[]).map((sort) => (
                 <Pressable
                   key={sort}
@@ -999,20 +1199,16 @@ export default function WorkoutsScreen() {
                   }}
                   className={cn(
                     "flex-row items-center justify-between p-4 rounded-xl mb-2 border",
-                    sortType === sort
-                      ? "bg-af-accent/20 border-af-accent"
-                      : "bg-white/5 border-white/10"
+                    sortType === sort ? "" : ""
                   )}
+                  style={sortType === sort ? getThemeControlStyle(theme, true) : getThemeControlStyle(theme)}
                 >
-                  <Text className={cn(
-                    "font-medium",
-                    sortType === sort ? "text-white" : "text-af-silver"
-                  )}>
+                  <Text style={getThemeBodyStyle(theme, 14, sortType === sort ? theme.textPrimary : theme.textSecondary)}>
                     {sort === 'newest' ? 'Newest First' :
                      sort === 'popular' ? 'Most Popular' : 'Shortest Duration'}
                   </Text>
                   {sortType === sort && (
-                    <Check size={18} color="#4A90D9" />
+                    <Check size={18} color={theme.accent} />
                   )}
                 </Pressable>
               ))}
@@ -1020,11 +1216,13 @@ export default function WorkoutsScreen() {
 
             <Pressable
               onPress={() => setShowFilterModal(false)}
-              className="bg-af-accent py-4 rounded-xl"
+              className="py-4"
+              style={getThemeButtonStyle(theme, 'accent')}
             >
-              <Text className="text-white font-bold text-center">Apply Filters</Text>
+              <Text className="text-center" style={getThemeButtonTextStyle(theme, 'accent')}>Apply Filters</Text>
             </Pressable>
           </View>
+          </ThemeChrome>
         </View>
       </Modal>
     </View>

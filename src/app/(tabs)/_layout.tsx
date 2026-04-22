@@ -5,6 +5,14 @@ import { Ionicons } from "@expo/vector-icons";
 import { ActivityIndicator, AppState, Image, Platform, View } from "react-native";
 import { TabSwipeProvider, useTabSwipe } from "@/contexts/TabSwipeContext";
 import { ALL_ACHIEVEMENTS, getAutomaticAchievementIds, useAuthStore, useMemberStore } from "@/lib/store";
+import { getThemeCardStyle, useAppTheme } from "@/lib/theme";
+import {
+  flushOfflineQueue,
+  initializeAppSyncNetworkMonitor,
+  registerSyncHandler,
+  runTrackedSync,
+  useAppSyncStore,
+} from '@/lib/appSync';
 import {
   awardMemberTrophy,
   fetchApprovedManualWorkouts,
@@ -36,6 +44,7 @@ const FULL_SYNC_INTERVAL_MS = 10 * 60_000;
 
 function TabsInner() {
   const { swipeEnabled } = useTabSwipe();
+  const theme = useAppTheme();
   const isStandaloneWeb =
     Platform.OS === 'web' &&
     typeof window !== 'undefined' &&
@@ -45,9 +54,8 @@ function TabsInner() {
   const hasCheckedAuth = useAuthStore((state) => state.hasCheckedAuth);
   const user = useAuthStore((state) => state.user);
   const accessToken = useAuthStore((state) => state.accessToken);
+  const isOnline = useAppSyncStore((state) => state.isOnline);
   const updateUser = useAuthStore((state) => state.updateUser);
-  const seenAchievementCelebrations = useAuthStore((state) => state.seenAchievementCelebrations);
-  const markAchievementCelebrationSeen = useAuthStore((state) => state.markAchievementCelebrationSeen);
   const syncMembersFromRoster = useMemberStore((state) => state.syncMembersFromRoster);
   const syncPTSessions = useMemberStore((state) => state.syncPTSessions);
   const syncScheduledSessions = useMemberStore((state) => state.syncScheduledSessions);
@@ -69,13 +77,17 @@ function TabsInner() {
   const handledCelebrationTrophyIdsRef = useRef<Set<string>>(new Set());
   const handledCelebrationRowIdsRef = useRef<Set<string>>(new Set());
   const markingCelebrationTrophyIdsRef = useRef<Set<string>>(new Set());
-  const pendingPostSyncCelebrationRef = useRef<{ id: string; trophyId: string } | null>(null);
+  const queuedCelebrationRowsRef = useRef<Array<{ id: string; trophyId: string }>>([]);
+  const activeCelebrationRef = useRef<{ id: string; trophyId: string } | null>(null);
+  const previousRecentAchievementIdRef = useRef<string | null>(null);
   const userId = user?.id ?? null;
   const userEmail = user?.email?.trim().toLowerCase() ?? null;
   const userSquadron = user?.squadron ?? 'Hawks';
   const userFirstName = user?.firstName?.trim().toLowerCase() ?? '';
   const userLastName = user?.lastName?.trim().toLowerCase() ?? '';
   const hasUser = Boolean(user);
+
+  useEffect(() => initializeAppSyncNetworkMonitor(), []);
 
   const buildMemberIdMap = (rosterMembers: ReturnType<typeof useMemberStore.getState>['members']) => {
     const currentMembers = useMemberStore.getState().members;
@@ -160,7 +172,9 @@ function TabsInner() {
     handledCelebrationTrophyIdsRef.current.clear();
     handledCelebrationRowIdsRef.current.clear();
     markingCelebrationTrophyIdsRef.current.clear();
-    pendingPostSyncCelebrationRef.current = null;
+    queuedCelebrationRowsRef.current = [];
+    activeCelebrationRef.current = null;
+    previousRecentAchievementIdRef.current = null;
   }, [userEmail, userId]);
 
   useEffect(() => {
@@ -171,29 +185,50 @@ function TabsInner() {
     handledCelebrationTrophyIdsRef.current.clear();
     handledCelebrationRowIdsRef.current.clear();
     markingCelebrationTrophyIdsRef.current.clear();
-    pendingPostSyncCelebrationRef.current = null;
+    queuedCelebrationRowsRef.current = [];
+    activeCelebrationRef.current = null;
+    previousRecentAchievementIdRef.current = null;
   }, [isAuthenticated]);
 
   useEffect(() => {
-    if (isInitialSyncing || !pendingPostSyncCelebrationRef.current) {
+    if (recentAchievementId) {
+      previousRecentAchievementIdRef.current = recentAchievementId;
       return;
     }
 
-    const pendingCelebration = pendingPostSyncCelebrationRef.current;
-    pendingPostSyncCelebrationRef.current = null;
-    if (userEmail) {
-      markAchievementCelebrationSeen(userEmail, pendingCelebration.trophyId);
+    const previousAchievementId = previousRecentAchievementIdRef.current;
+    previousRecentAchievementIdRef.current = null;
+
+    if (previousAchievementId && activeCelebrationRef.current) {
+      const completedCelebration = activeCelebrationRef.current;
+      activeCelebrationRef.current = null;
+      handledCelebrationRowIdsRef.current.add(completedCelebration.id);
+      handledCelebrationTrophyIdsRef.current.add(completedCelebration.trophyId);
+      void markMemberTrophyCelebrationShown(completedCelebration.id, accessToken ?? undefined)
+        .catch((error) => {
+          console.error(`Unable to mark trophy celebration ${completedCelebration.trophyId} as shown.`, error);
+        })
+        .finally(() => {
+          markingCelebrationTrophyIdsRef.current.delete(completedCelebration.trophyId);
+          const nextCelebration = queuedCelebrationRowsRef.current.shift() ?? null;
+          if (nextCelebration) {
+            activeCelebrationRef.current = nextCelebration;
+            previewAchievementCelebration(nextCelebration.trophyId);
+          }
+        });
+      return;
     }
-    previewAchievementCelebration(pendingCelebration.trophyId);
-    void markMemberTrophyCelebrationShown(pendingCelebration.id, accessToken ?? undefined)
-      .catch((error) => {
-        console.error(`Unable to mark trophy celebration ${pendingCelebration.trophyId} as shown.`, error);
-      })
-      .finally(() => {
-        handledCelebrationRowIdsRef.current.add(pendingCelebration.id);
-        markingCelebrationTrophyIdsRef.current.delete(pendingCelebration.trophyId);
-      });
-  }, [accessToken, isInitialSyncing, markAchievementCelebrationSeen, previewAchievementCelebration, userEmail]);
+
+    if (activeCelebrationRef.current || isInitialSyncing) {
+      return;
+    }
+
+    const nextCelebration = queuedCelebrationRowsRef.current.shift() ?? null;
+    if (nextCelebration) {
+      activeCelebrationRef.current = nextCelebration;
+      previewAchievementCelebration(nextCelebration.trophyId);
+    }
+  }, [accessToken, isInitialSyncing, previewAchievementCelebration, recentAchievementId]);
 
   useEffect(() => {
     if (!isAuthenticated || !hasCheckedAuth) {
@@ -215,7 +250,7 @@ function TabsInner() {
       return appState === 'active';
     };
 
-    const syncRoster = async (includeStaticData: boolean) => {
+    const performSyncRoster = async (includeStaticData: boolean) => {
       if (isSyncing) {
         return;
       }
@@ -293,7 +328,7 @@ function TabsInner() {
             activeTrophiesByMember.set(row.memberId, activeForId);
           }
 
-          if (!row.celebrationShownAt) {
+          if (row.celebrationStatusKnown && !row.celebrationShownAt) {
             const pendingForEmail = pendingCelebrationRowsByMember.get(emailKey) ?? [];
             pendingForEmail.push(row);
             pendingCelebrationRowsByMember.set(emailKey, pendingForEmail);
@@ -486,9 +521,6 @@ function TabsInner() {
         );
 
         if (hasUser) {
-          const locallySeenCelebrations = new Set(
-            userEmail ? (seenAchievementCelebrations[userEmail] ?? []) : []
-          );
           const currentUserKeys = new Set([
             userId ?? '',
             userEmail ?? '',
@@ -497,31 +529,37 @@ function TabsInner() {
             new Map(
               [
                 ...(Array.from(currentUserKeys).flatMap((key) => pendingCelebrationRowsByMember.get(key) ?? [])),
-                ...awardedRows.filter((row): row is NonNullable<typeof row> => Boolean(row)).filter(
-                  (row) =>
-                    row.memberEmail.trim().toLowerCase() === userEmail ||
-                    row.memberId === userId
-                ),
-              ].map((row) => [row.id, row] as const)
-            ).values()
-          ).sort((left, right) => left.earnedAt.localeCompare(right.earnedAt));
+                  ...awardedRows
+                    .filter((row): row is NonNullable<typeof row> => Boolean(row))
+                    .filter((row) => row.celebrationStatusKnown)
+                    .filter(
+                    (row) =>
+                      row.memberEmail.trim().toLowerCase() === userEmail ||
+                      row.memberId === userId
+                  ),
+                ].map((row) => [row.id, row] as const)
+              ).values()
+            ).sort((left, right) => left.earnedAt.localeCompare(right.earnedAt));
 
-          const nextCelebration = pendingCelebrationRows.find((row) =>
+          const nextCelebrations = pendingCelebrationRows.filter((row) =>
             ALL_ACHIEVEMENTS.some((achievement) => achievement.id === row.trophyId) &&
             !handledCelebrationRowIdsRef.current.has(row.id) &&
             !handledCelebrationTrophyIdsRef.current.has(row.trophyId) &&
-            !markingCelebrationTrophyIdsRef.current.has(row.trophyId) &&
-            !locallySeenCelebrations.has(row.trophyId)
+            !markingCelebrationTrophyIdsRef.current.has(row.trophyId)
           );
 
-          if (nextCelebration) {
-            handledCelebrationRowIdsRef.current.add(nextCelebration.id);
-            handledCelebrationTrophyIdsRef.current.add(nextCelebration.trophyId);
-            markingCelebrationTrophyIdsRef.current.add(nextCelebration.trophyId);
-            pendingPostSyncCelebrationRef.current = {
-              id: nextCelebration.id,
-              trophyId: nextCelebration.trophyId,
-            };
+          if (nextCelebrations.length > 0) {
+            const queuedIds = new Set(queuedCelebrationRowsRef.current.map((row) => row.id));
+            nextCelebrations.forEach((row) => {
+              if (activeCelebrationRef.current?.id === row.id || queuedIds.has(row.id)) {
+                return;
+              }
+              markingCelebrationTrophyIdsRef.current.add(row.trophyId);
+              queuedCelebrationRowsRef.current.push({
+                id: row.id,
+                trophyId: row.trophyId,
+              });
+            });
           }
         }
 
@@ -562,7 +600,18 @@ function TabsInner() {
       }
     };
 
+    const syncRoster = async (includeStaticData: boolean) =>
+      runTrackedSync(async () => {
+        await flushOfflineQueue(accessToken ?? undefined);
+        await performSyncRoster(includeStaticData);
+      });
+
     void syncRoster(true);
+
+    const unregisterGlobalSync = registerSyncHandler('global', async () => {
+      await flushOfflineQueue(accessToken ?? undefined);
+      await performSyncRoster(true);
+    });
 
     const appStateSubscription = AppState.addEventListener('change', (nextState) => {
       appState = nextState;
@@ -591,23 +640,32 @@ function TabsInner() {
 
     return () => {
       isCancelled = true;
+      unregisterGlobalSync();
       appStateSubscription.remove();
       clearInterval(liveInterval);
       clearInterval(fullInterval);
     };
-  }, [accessToken, hasCheckedAuth, hasUser, isAuthenticated, markAchievementCelebrationSeen, pruneOldWorkoutMedia, seenAchievementCelebrations, syncApprovedManualWorkouts, syncFitnessAssessments, syncLeaderboardHistory, syncMemberAchievements, syncMembersFromRoster, syncPTSessions, syncScheduledSessions, syncSharedWorkouts, updateUser, userEmail, userFirstName, userId, userLastName, userSquadron]);
+  }, [accessToken, hasCheckedAuth, hasUser, isAuthenticated, pruneOldWorkoutMedia, syncApprovedManualWorkouts, syncFitnessAssessments, syncLeaderboardHistory, syncMemberAchievements, syncMembersFromRoster, syncPTSessions, syncScheduledSessions, syncSharedWorkouts, updateUser, userEmail, userFirstName, userId, userLastName, userSquadron]);
+
+  useEffect(() => {
+    if (!isOnline || !accessToken || !isAuthenticated) {
+      return;
+    }
+
+    void runTrackedSync(async () => {
+      await flushOfflineQueue(accessToken);
+    });
+  }, [accessToken, isAuthenticated, isOnline]);
 
   if (!hasCheckedAuth) {
     return (
-      <View style={{ flex: 1, backgroundColor: '#0A1628', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <View style={{ flex: 1, backgroundColor: theme.background, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
         <View
           style={{
+            ...getThemeCardStyle(theme, 'feature'),
             width: 84,
             height: 84,
-            borderRadius: 24,
-            backgroundColor: 'rgba(255,255,255,0.08)',
-            borderWidth: 1,
-            borderColor: 'rgba(255,255,255,0.14)',
+            borderRadius: theme.id === 'pixel' ? 12 : 24,
             alignItems: 'center',
             justifyContent: 'center',
             overflow: 'hidden',
@@ -620,7 +678,7 @@ function TabsInner() {
             resizeMode="contain"
           />
         </View>
-        <ActivityIndicator size="large" color="#4A90D9" />
+        <ActivityIndicator size="large" color={theme.accent} />
       </View>
     );
   }
@@ -631,15 +689,13 @@ function TabsInner() {
 
   if (isInitialSyncing) {
     return (
-      <View style={{ flex: 1, backgroundColor: '#0A1628', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+        <View style={{ flex: 1, backgroundColor: theme.background, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
         <View
           style={{
+            ...getThemeCardStyle(theme, 'feature'),
             width: 84,
             height: 84,
-            borderRadius: 24,
-            backgroundColor: 'rgba(255,255,255,0.08)',
-            borderWidth: 1,
-            borderColor: 'rgba(255,255,255,0.14)',
+            borderRadius: theme.id === 'pixel' ? 12 : 24,
             alignItems: 'center',
             justifyContent: 'center',
             overflow: 'hidden',
@@ -652,7 +708,7 @@ function TabsInner() {
             resizeMode="contain"
           />
         </View>
-        <ActivityIndicator size="large" color="#4A90D9" />
+          <ActivityIndicator size="large" color={theme.accent} />
       </View>
     );
   }
@@ -666,12 +722,12 @@ function TabsInner() {
           lazyPreloadDistance: 1,
           animationEnabled: true,
           tabBarShowIcon: true,
-          tabBarActiveTintColor: "#ffffff",
+          tabBarActiveTintColor: theme.indicator,
         tabBarInactiveTintColor: "rgba(255,255,255,0.6)",
         tabBarStyle: {
-          backgroundColor: "#071226",
-          borderTopWidth: 1,
-          borderTopColor: "rgba(255,255,255,0.08)",
+            backgroundColor: theme.tabBar,
+            borderTopWidth: 1,
+            borderTopColor: theme.tabBarBorder,
           height: Platform.OS === 'web' ? 60 : 66,
           paddingBottom: 0,
           paddingTop: 0,
@@ -689,8 +745,10 @@ function TabsInner() {
           height: "100%",
         },
         tabBarLabelStyle: {
-          fontSize: 12,
+          fontSize: theme.id === 'pixel' ? 11 : 12,
           fontWeight: "600",
+          fontFamily: theme.bodyFontFamily,
+          letterSpacing: theme.buttonLetterSpacing,
           textTransform: "none",
           marginTop: -2,
         },
@@ -703,8 +761,21 @@ function TabsInner() {
         name="index"
         options={{
           title: "Home",
-          tabBarIcon: ({ color }: { color: string }) => (
-            <Ionicons name="home-outline" size={22} color={color} />
+          tabBarIcon: ({ color, focused }: { color: string; focused: boolean }) => (
+            <View
+                style={focused ? {
+                  borderRadius: 16,
+                  backgroundColor: theme.indicatorGlow,
+                  borderWidth: 1,
+                  borderColor: theme.indicator,
+                  shadowColor: theme.indicator,
+                  shadowOpacity: 0.45,
+                  shadowRadius: 12,
+                  shadowOffset: { width: 0, height: 0 },
+                } : undefined}
+            >
+              <Ionicons name="home-outline" size={24} color={color} />
+            </View>
           ),
         }}
       />
@@ -712,8 +783,21 @@ function TabsInner() {
         name="attendance"
         options={{
           title: "Attendance",
-          tabBarIcon: ({ color }: { color: string }) => (
-            <Ionicons name="checkbox-outline" size={22} color={color} />
+          tabBarIcon: ({ color, focused }: { color: string; focused: boolean }) => (
+            <View
+                style={focused ? {
+                  borderRadius: 16,
+                  backgroundColor: theme.indicatorGlow,
+                  borderWidth: 1,
+                  borderColor: theme.indicator,
+                  shadowColor: theme.indicator,
+                  shadowOpacity: 0.45,
+                  shadowRadius: 12,
+                  shadowOffset: { width: 0, height: 0 },
+                } : undefined}
+            >
+              <Ionicons name="checkbox-outline" size={24} color={color} />
+            </View>
           ),
         }}
       />
@@ -721,8 +805,21 @@ function TabsInner() {
         name="workouts"
         options={{
           title: "Workouts",
-          tabBarIcon: ({ color }: { color: string }) => (
-            <Ionicons name="barbell-outline" size={22} color={color} />
+          tabBarIcon: ({ color, focused }: { color: string; focused: boolean }) => (
+            <View
+                style={focused ? {
+                  borderRadius: 16,
+                  backgroundColor: theme.indicatorGlow,
+                  borderWidth: 1,
+                  borderColor: theme.indicator,
+                  shadowColor: theme.indicator,
+                  shadowOpacity: 0.45,
+                  shadowRadius: 12,
+                  shadowOffset: { width: 0, height: 0 },
+                } : undefined}
+            >
+              <Ionicons name="barbell-outline" size={24} color={color} />
+            </View>
           ),
         }}
       />
@@ -730,8 +827,21 @@ function TabsInner() {
         name="calculator"
         options={{
           title: "Calculator",
-          tabBarIcon: ({ color }: { color: string }) => (
-            <Ionicons name="calculator-outline" size={22} color={color} />
+          tabBarIcon: ({ color, focused }: { color: string; focused: boolean }) => (
+            <View
+                style={focused ? {
+                  borderRadius: 16,
+                  backgroundColor: theme.indicatorGlow,
+                  borderWidth: 1,
+                  borderColor: theme.indicator,
+                  shadowColor: theme.indicator,
+                  shadowOpacity: 0.45,
+                  shadowRadius: 12,
+                  shadowOffset: { width: 0, height: 0 },
+                } : undefined}
+            >
+              <Ionicons name="calculator-outline" size={24} color={color} />
+            </View>
           ),
         }}
       />
@@ -739,8 +849,21 @@ function TabsInner() {
         name="profile"
         options={{
           title: "Account",
-          tabBarIcon: ({ color }: { color: string }) => (
-            <Ionicons name="person-outline" size={22} color={color} />
+          tabBarIcon: ({ color, focused }: { color: string; focused: boolean }) => (
+            <View
+                style={focused ? {
+                  borderRadius: 16,
+                  backgroundColor: theme.indicatorGlow,
+                  borderWidth: 1,
+                  borderColor: theme.indicator,
+                  shadowColor: theme.indicator,
+                  shadowOpacity: 0.45,
+                  shadowRadius: 12,
+                  shadowOffset: { width: 0, height: 0 },
+                } : undefined}
+            >
+              <Ionicons name="person-outline" size={24} color={color} />
+            </View>
           ),
         }}
       />

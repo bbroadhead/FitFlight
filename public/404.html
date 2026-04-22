@@ -105,7 +105,13 @@
         }
 
         if (normalizedRoute === 'demo.html') {
-          window.location.replace(basePath + 'demo' + window.location.search + window.location.hash);
+          var demoParams = new URLSearchParams(window.location.search);
+          var demoKey = demoParams.get('key');
+          if (demoKey && demoKey.trim()) {
+            window.location.replace(basePath + 'demo' + window.location.search + window.location.hash);
+          } else {
+            window.location.replace(basePath + 'login' + window.location.search + window.location.hash);
+          }
           return;
         }
 

@@ -100,6 +100,17 @@ with check (
   or lower(requester_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
 );
 
+drop policy if exists "support_threads_delete_owner_or_requester" on public.support_threads;
+create policy "support_threads_delete_owner_or_requester"
+on public.support_threads
+for delete
+to authenticated
+using (
+  public.current_member_role() = 'fitflight_creator'
+  or lower(recipient_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+  or lower(requester_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+);
+
 drop policy if exists "support_messages_select_owner_or_requester" on public.support_messages;
 create policy "support_messages_select_owner_or_requester"
 on public.support_messages
@@ -201,5 +212,26 @@ with check (
     and body = support_messages.body
     and is_from_owner = support_messages.is_from_owner
     and created_at = support_messages.created_at
+  )
+);
+
+drop policy if exists "support_messages_delete_owner_or_requester" on public.support_messages;
+create policy "support_messages_delete_owner_or_requester"
+on public.support_messages
+for delete
+to authenticated
+using (
+  public.current_member_role() = 'fitflight_creator'
+  or exists (
+    select 1
+    from public.support_threads st
+    where st.id = support_messages.thread_id
+      and lower(st.recipient_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+  )
+  or exists (
+    select 1
+    from public.support_threads st
+    where st.id = support_messages.thread_id
+      and lower(st.requester_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
   )
 );

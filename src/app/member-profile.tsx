@@ -1,17 +1,20 @@
 import React, { useMemo, useEffect, useState } from 'react';
-import { View, Text, Pressable, ScrollView, Image, Modal } from 'react-native';
+import { View, Text, Pressable, ScrollView, Modal, Image, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ChevronLeft, Timer, MapPin, Trophy, Lock, Unlock, TrendingUp, Shield, Camera, Dumbbell, Activity, Image as ImageIcon, BarChart3, User, X, FileText } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeInUp, useAnimatedStyle, useSharedValue, withSpring, withDelay } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import { useMemberStore, useAuthStore, getDisplayName, ALL_ACHIEVEMENTS, canManagePTPrograms, type AccountType, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
+import { useMemberStore, useAuthStore, formatFlightDisplay, getDisplayName, ALL_ACHIEVEMENTS, canManagePTPrograms, type AccountType, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { TrophyCase, CompactTrophyBadges } from '@/components/TrophyCase';
+import { ThemeBackdrop } from '@/components/ThemeBackdrop';
 import { buildTrophyStats, getRarestEarnedTrophies } from '@/lib/trophies';
 import { formatMonthLabel, getAvailableMonthKeys, getMemberEffectiveWorkouts, getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
 import { fetchManualWorkoutProofImageMap } from '@/lib/supabaseData';
+import { useAppTheme } from '@/lib/theme';
+import { PageContainer } from '@/components/PageContainer';
 
 function getWorkoutDisplayTitle(type: WorkoutType) {
   switch (type) {
@@ -95,6 +98,8 @@ function getCompetitionPosition(scores: number[], index: number): number {
 export default function MemberProfileScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const theme = useAppTheme();
+  const { width } = useWindowDimensions();
   const members = useMemberStore(s => s.members);
   const ptSessions = useMemberStore(s => s.ptSessions);
   const currentUser = useAuthStore(s => s.user);
@@ -108,6 +113,7 @@ export default function MemberProfileScreen() {
   const [showLeaderboardHistoryModal, setShowLeaderboardHistoryModal] = useState(false);
   const [expandedWorkoutImageUri, setExpandedWorkoutImageUri] = useState<string | null>(null);
   const [manualWorkoutProofMap, setManualWorkoutProofMap] = useState<Record<string, string>>({});
+  const contentMaxWidth = width >= 1440 ? 1280 : width >= 1180 ? 1180 : 1024;
 
   const member = useMemo(() => {
     const rawId = Array.isArray(id) ? id[0] : id;
@@ -339,13 +345,15 @@ export default function MemberProfileScreen() {
   return (
     <View className="flex-1">
       <LinearGradient
-        colors={['#0A1628', '#001F5C', '#0A1628']}
+        colors={theme.gradient}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
       />
+      <ThemeBackdrop />
 
       <SafeAreaView edges={['top']} className="flex-1">
+        <PageContainer maxWidth={contentMaxWidth}>
         {/* Header */}
         <Animated.View
           entering={FadeInDown.delay(100).springify()}
@@ -362,40 +370,31 @@ export default function MemberProfileScreen() {
           </Pressable>
           <Text className="text-white text-xl font-bold">Profile</Text>
         </Animated.View>
+        </PageContainer>
 
         <ScrollView
-          className="flex-1 px-6"
-          contentContainerStyle={{ paddingBottom: 40 }}
+          className="flex-1"
+          contentContainerStyle={{ paddingBottom: 40, alignItems: 'center' }}
           showsVerticalScrollIndicator={false}
         >
+          <PageContainer maxWidth={contentMaxWidth} className="px-6">
           {/* Profile Card */}
           <Animated.View
             entering={FadeInDown.delay(150).springify()}
             className="mt-4 p-6 bg-white/10 rounded-3xl border border-white/20"
           >
             <View className="items-center">
-              {/* Profile Picture with gold border for completionist */}
               <View className="relative">
-                {(member.profilePicture || (isOwnProfile ? currentUser?.profilePicture : undefined)) ? (
-                  <Image
-                    source={{ uri: member.profilePicture || currentUser?.profilePicture }}
-                    className={cn(
-                      "w-20 h-20 rounded-full mb-4",
-                      member.achievements.includes('completionist') && "border-4 border-af-gold"
-                    )}
-                  />
-                ) : (
-                  <View className={cn(
-                    "w-20 h-20 rounded-full items-center justify-center mb-4",
-                    member.achievements.includes('completionist')
-                      ? "bg-af-gold/30 border-4 border-af-gold"
-                      : "bg-af-accent/30"
-                  )}>
-                    <Text className="text-white text-3xl font-bold">
-                      {member.firstName[0]}{member.lastName[0]}
-                    </Text>
-                  </View>
-                )}
+                <View className={cn(
+                  "w-20 h-20 rounded-full items-center justify-center mb-4",
+                  member.achievements.includes('completionist')
+                    ? "bg-af-gold/30 border-4 border-af-gold"
+                    : "bg-af-accent/30"
+                )}>
+                  <Text className="text-white text-3xl font-bold">
+                    {member.firstName[0]}{member.lastName[0]}
+                  </Text>
+                </View>
                 {/* Trophy indicator for users who have placed top 3 */}
                 {member.trophyCount > 0 && (
                   <View className="absolute -bottom-1 -right-1 bg-af-gold rounded-full p-1 border-2 border-af-navy">
@@ -413,7 +412,7 @@ export default function MemberProfileScreen() {
                 end={{ x: 1, y: 0.5 }}
                 style={{ marginTop: 12, height: 2, width: 144, borderRadius: 999 }}
               />
-              <Text className="mt-2 text-af-silver">{member.flight} Flight</Text>
+              <Text className="mt-2 text-af-silver">{formatFlightDisplay(member.flight)}</Text>
               <View className="flex-row items-center mt-2">
                 <View className={cn("px-3 py-1 rounded-full", accountColors.bg)}>
                   <Text className={cn("text-sm font-semibold", accountColors.text)}>
@@ -783,6 +782,7 @@ export default function MemberProfileScreen() {
           </Animated.View>
           ) : null}
 
+          </PageContainer>
         </ScrollView>
 
         <Modal visible={showWorkoutHistoryModal} transparent animationType="none">
@@ -844,8 +844,8 @@ export default function MemberProfileScreen() {
                           ) : null}
                         </View>
                       ))
-                )}
-              </ScrollView>
+          )}
+        </ScrollView>
             </Animated.View>
           </Animated.View>
         </Modal>

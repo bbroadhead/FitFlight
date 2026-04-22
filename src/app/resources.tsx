@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Alert, Platform, Pressable, ScrollView, Text, View } from 'react-native';
+import { Alert, Platform, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -8,6 +8,10 @@ import * as WebBrowser from 'expo-web-browser';
 import { Asset } from 'expo-asset';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { ArrowLeft, ExternalLink, FileText } from 'lucide-react-native';
+import { PageContainer } from '@/components/PageContainer';
+import { ThemeBackdrop } from '@/components/ThemeBackdrop';
+import { ThemeChrome } from '@/components/ThemeChrome';
+import { getThemeBodyStyle, getThemeControlStyle, getThemeHeadingStyle, getThemeIconWellStyle, useAppTheme } from '@/lib/theme';
 
 type ResourceItem = {
   id: string;
@@ -42,8 +46,12 @@ const RESOURCES: ResourceItem[] = [
 ];
 
 export default function ResourcesScreen() {
+  const theme = useAppTheme();
   const router = useRouter();
+  const { width } = useWindowDimensions();
   const [openingId, setOpeningId] = useState<string | null>(null);
+  const [activeWebDocument, setActiveWebDocument] = useState<{ title: string; uri: string } | null>(null);
+  const contentMaxWidth = width >= 1440 ? 1120 : width >= 1180 ? 980 : 860;
 
   const openResource = async (resource: ResourceItem) => {
     try {
@@ -61,7 +69,10 @@ export default function ResourcesScreen() {
       }
 
       if (Platform.OS === 'web') {
-        window.open(uri, '_blank', 'noopener,noreferrer');
+        setActiveWebDocument({
+          title: resource.title,
+          uri,
+        });
         return;
       }
 
@@ -79,20 +90,44 @@ export default function ResourcesScreen() {
   };
 
   return (
-    <View className="flex-1">
-      <LinearGradient
-        colors={['#0A1628', '#001F5C', '#0A1628']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
-      />
+    <View className="flex-1" style={{ backgroundColor: theme.background }}>
+      <ThemeBackdrop />
 
       <SafeAreaView edges={['top']} className="flex-1">
+        {Platform.OS === 'web' && activeWebDocument ? (
+          <View className="flex-1 px-4 pb-4">
+            <View className="flex-row items-center justify-between px-2 pt-4 pb-3">
+              <Pressable
+                onPress={() => setActiveWebDocument(null)}
+                className="flex-row items-center rounded-full px-4 py-2"
+                style={getThemeControlStyle(theme)}
+              >
+                <ArrowLeft size={16} color={theme.textSecondary} />
+                <Text className="ml-2 font-medium" style={{ color: theme.textSecondary }}>Back to Resources</Text>
+              </Pressable>
+                    <Text className="font-semibold ml-4 flex-1" style={{ color: theme.textPrimary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72}>{activeWebDocument.title}</Text>
+            </View>
+            {/* @ts-ignore web-only iframe */}
+            <iframe
+              src={activeWebDocument.uri}
+              title={activeWebDocument.title}
+              style={{
+                flex: 1,
+                width: '100%',
+                height: '100%',
+                border: '1px solid rgba(255,255,255,0.12)',
+                borderRadius: 20,
+                backgroundColor: theme.background,
+              }}
+            />
+          </View>
+        ) : (
         <ScrollView
           className="flex-1"
-          contentContainerStyle={{ paddingBottom: 48 }}
+          contentContainerStyle={{ paddingBottom: 48, alignItems: 'center' }}
           showsVerticalScrollIndicator={false}
         >
+          <PageContainer maxWidth={contentMaxWidth}>
           <Animated.View
             entering={FadeInDown.delay(100).springify()}
             className="px-6 pt-4 pb-2"
@@ -108,20 +143,22 @@ export default function ResourcesScreen() {
               <Text className="text-af-silver font-medium ml-2">Back</Text>
             </Pressable>
 
-            <Text className="text-white text-3xl font-bold">Resources</Text>
-            <Text className="text-af-silver text-sm mt-2">
+            <Text style={getThemeHeadingStyle(theme, 30)}>Resources</Text>
+            <Text style={[getThemeBodyStyle(theme, 14), { marginTop: 8 }]}>
               Access official fitness guidance and reference documents.
             </Text>
           </Animated.View>
 
           <Animated.View
             entering={FadeInDown.delay(150).springify()}
-            className="mx-6 mt-4 p-4 bg-white/5 rounded-2xl border border-white/10"
+            className="mx-6 mt-4"
           >
-            <Text className="text-white/60 text-xs uppercase tracking-wider mb-2">Official Documents</Text>
-            <Text className="text-af-silver text-sm">
-              These PDFs open in your browser or device viewer.
-            </Text>
+            <ThemeChrome theme={theme} variant="feature">
+              <View className="p-4">
+                <Text style={[getThemeBodyStyle(theme, 11, theme.textMuted), { textTransform: 'uppercase', marginBottom: 8 }]}>Official Documents</Text>
+                <Text style={getThemeBodyStyle(theme, 14)}>These PDFs open in your browser or device viewer.</Text>
+              </View>
+            </ThemeChrome>
           </Animated.View>
 
           {RESOURCES.map((resource, index) => (
@@ -132,29 +169,34 @@ export default function ResourcesScreen() {
             >
               <Pressable
                 onPress={() => openResource(resource)}
-                className="bg-white/5 border border-white/10 rounded-2xl p-5"
               >
-                <View className="flex-row items-start">
-                  <View className="w-12 h-12 rounded-2xl bg-af-accent/20 items-center justify-center">
-                    <FileText size={24} color="#4A90D9" />
-                  </View>
-                  <View className="ml-4 flex-1">
-                    <Text className="text-white text-lg font-semibold">{resource.title}</Text>
-                    <Text className="text-af-accent text-sm mt-1">{resource.subtitle}</Text>
-                    <Text className="text-af-silver text-sm mt-3">{resource.description}</Text>
-                  </View>
-                  <ExternalLink size={18} color="#C0C0C0" />
-                </View>
+                <ThemeChrome theme={theme}>
+                  <View className="p-5">
+                    <View className="flex-row items-start">
+                      <View className="w-12 h-12 rounded-2xl items-center justify-center" style={getThemeIconWellStyle(theme)}>
+                        <FileText size={24} color={theme.accent} />
+                      </View>
+                      <View className="ml-4 flex-1">
+                        <Text className="text-lg font-semibold" style={{ color: theme.textPrimary }}>{resource.title}</Text>
+                        <Text className="text-sm mt-1" style={{ color: theme.accent }}>{resource.subtitle}</Text>
+                        <Text className="text-sm mt-3" style={getThemeBodyStyle(theme, 14)}>{resource.description}</Text>
+                      </View>
+                      <ExternalLink size={18} color={theme.textSecondary} />
+                    </View>
 
-                <View className="mt-4 pt-4 border-t border-white/10">
-                  <Text className="text-white font-medium">
-                    {openingId === resource.id ? 'Opening document...' : 'Tap to open'}
-                  </Text>
-                </View>
+                    <View className="mt-4 pt-4" style={{ borderTopWidth: 1, borderTopColor: theme.border }}>
+                      <Text style={{ color: theme.textPrimary, fontWeight: '500' }}>
+                        {openingId === resource.id ? 'Opening document...' : 'Tap to open'}
+                      </Text>
+                    </View>
+                  </View>
+                </ThemeChrome>
               </Pressable>
             </Animated.View>
           ))}
+          </PageContainer>
         </ScrollView>
+        )}
       </SafeAreaView>
     </View>
   );

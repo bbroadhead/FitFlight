@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { View, Text, Pressable, ScrollView, Modal, TextInput, Alert } from 'react-native';
+import { View, Text, Pressable, ScrollView, Modal, TextInput, Alert, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -8,12 +8,13 @@ import Animated, { FadeInDown } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
-import { useMemberStore, useAuthStore, type Flight, type Member, type Squadron } from '@/lib/store';
+import { ALL_RANKS, useMemberStore, useAuthStore, type Flight, type Member, type Squadron } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { createRosterMember } from '@/lib/supabaseData';
+import { PageContainer } from '@/components/PageContainer';
 
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
-const RANKS = ['AB', 'Amn', 'A1C', 'SrA', 'SSgt', 'TSgt', 'MSgt', 'SMSgt', 'CMSgt'];
+const RANKS = [...ALL_RANKS];
 
 interface ParsedRow {
   rank: string;
@@ -70,6 +71,7 @@ function parseXLSX(content: string): string[][] {
 
 export default function ImportRosterScreen() {
   const router = useRouter();
+  const { width } = useWindowDimensions();
   const user = useAuthStore(s => s.user);
   const members = useMemberStore(s => s.members);
   const addMember = useMemberStore(s => s.addMember);
@@ -88,6 +90,7 @@ export default function ImportRosterScreen() {
   const [showMappingModal, setShowMappingModal] = useState(false);
   const [selectedColumn, setSelectedColumn] = useState<keyof ColumnMapping | null>(null);
   const [fileName, setFileName] = useState<string>('');
+  const contentMaxWidth = width >= 1440 ? 1240 : width >= 1180 ? 1100 : 980;
 
   const userSquadron: Squadron = user?.squadron ?? 'Hawks';
 
@@ -133,6 +136,20 @@ export default function ImportRosterScreen() {
       'MSGT': 'MSgt',
       'SMSGT': 'SMSgt',
       'CMSGT': 'CMSgt',
+      '2DLT': '2nd Lt.',
+      '2D LT': '2nd Lt.',
+      '2ND LT': '2nd Lt.',
+      '1LT': '1st Lt.',
+      '1ST LT': '1st Lt.',
+      'CAPT': 'Capt.',
+      'MAJ': 'Maj.',
+      'LTC': 'Lt. Col.',
+      'LT COL': 'Lt. Col.',
+      'COL': 'Col.',
+      'BRIG GEN': 'Brig. Gen.',
+      'MAJ GEN': 'Maj. Gen.',
+      'LT GEN': 'Lt. Gen.',
+      'GEN': 'Gen.',
       // Common variations
       'AIRMAN BASIC': 'AB',
       'AIRMAN': 'Amn',
@@ -143,6 +160,16 @@ export default function ImportRosterScreen() {
       'MASTER SERGEANT': 'MSgt',
       'SENIOR MASTER SERGEANT': 'SMSgt',
       'CHIEF MASTER SERGEANT': 'CMSgt',
+      'SECOND LIEUTENANT': '2nd Lt.',
+      'FIRST LIEUTENANT': '1st Lt.',
+      'CAPTAIN': 'Capt.',
+      'MAJOR': 'Maj.',
+      'LIEUTENANT COLONEL': 'Lt. Col.',
+      'COLONEL': 'Col.',
+      'BRIGADIER GENERAL': 'Brig. Gen.',
+      'MAJOR GENERAL': 'Maj. Gen.',
+      'LIEUTENANT GENERAL': 'Lt. Gen.',
+      'GENERAL': 'Gen.',
     };
     return rankMap[normalized] || RANKS.find(r => r.toUpperCase() === normalized) || null;
   };
@@ -373,10 +400,11 @@ export default function ImportRosterScreen() {
         </Animated.View>
 
         <ScrollView
-          className="flex-1 px-6"
-          contentContainerStyle={{ paddingBottom: 40 }}
+          className="flex-1"
+          contentContainerStyle={{ paddingBottom: 40, alignItems: 'center' }}
           showsVerticalScrollIndicator={false}
         >
+          <PageContainer maxWidth={contentMaxWidth} className="px-6">
           {/* Step 1: Upload */}
           {step === 'upload' && (
             <Animated.View entering={FadeInDown.delay(150).springify()}>
@@ -578,7 +606,7 @@ export default function ImportRosterScreen() {
                           {row.rank} {row.firstName} {row.lastName}
                         </Text>
                         <Text className="text-af-silver text-sm">{row.email}</Text>
-                        <Text className="text-af-silver text-sm">{row.flight} Flight</Text>
+                <Text className="text-af-silver text-sm">{row.flight}</Text>
                       </View>
                       {row.isValid ? (
                         <View className="w-8 h-8 bg-af-success/20 rounded-full items-center justify-center">
@@ -657,6 +685,7 @@ export default function ImportRosterScreen() {
               </Pressable>
             </Animated.View>
           )}
+          </PageContainer>
         </ScrollView>
       </SafeAreaView>
 

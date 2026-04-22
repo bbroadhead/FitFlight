@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, LayoutChangeEvent, Modal, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, ScrollView, Text, View } from 'react-native';
+import { Alert, LayoutChangeEvent, Modal, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, RefreshControl, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -11,11 +11,18 @@ import * as FileSystem from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { format, startOfWeek, addDays, subWeeks, addWeeks, isSameDay } from 'date-fns';
-import { useMemberStore, useAuthStore, type Flight, type ScheduledPTSession, canEditAttendance, canManagePTPrograms, formatRankDisplay } from '@/lib/store';
+import { useMemberStore, useAuthStore, formatFlightDisplay, type AttendanceSource, type Flight, type ScheduledPTSession, canEditAttendance, canManagePTPrograms, formatRankDisplay } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { useTabSwipe } from '@/contexts/TabSwipeContext';
-import { deleteScheduledPTSession as deleteScheduledPTSessionFromSupabase, fetchAttendanceSessions, setAttendanceStatus } from '@/lib/supabaseData';
+import { deleteScheduledPTSession as deleteScheduledPTSessionFromSupabase, fetchAttendanceSessions, fetchWeeklyAttendanceExcusals, setAttendanceStatus, setWeeklyAttendanceExcusal } from '@/lib/supabaseData';
+import { parseScheduledWorkoutLink, stripScheduledWorkoutToken } from '@/lib/scheduledWorkoutLinks';
+import { useAppTheme } from '@/lib/theme';
+import { PageContainer } from '@/components/PageContainer';
+import { ThemeBackdrop } from '@/components/ThemeBackdrop';
+import { ThemeChrome } from '@/components/ThemeChrome';
+import { TopStatusBar } from '@/components/TopStatusBar';
+import { createOfflineActionId, requestRegisteredSync, runOrQueueOfflineMutation } from '@/lib/appSync';
 import ExcelJS from 'exceljs';
 import { TutorialTarget } from '@/contexts/TutorialTourContext';
 
@@ -35,6 +42,36 @@ const slugify = (value: string) =>
 const buildLegacyRosterId = (member: { rank: string; firstName: string; lastName: string; flight: Flight }) =>
   `roster-${slugify(`${member.rank}-${member.lastName}-${member.firstName}-${member.flight}`)}`;
 const isUpcomingScheduledSession = (date: string, time: string) => new Date(`${date}T${time}:00`).getTime() >= Date.now();
+const ATTENDANCE_SOURCE_STYLE: Record<AttendanceSource, { border: string; background: string; icon: string; label: string; description: string }> = {
+  manual: {
+    border: 'border-af-success',
+    background: 'bg-af-success/20',
+    icon: '#22C55E',
+    label: 'Green Checkmark',
+    description: 'Attendance was marked manually by a PFL, UFPM, Owner, or Squadron Leadership.',
+  },
+  workout: {
+    border: 'border-af-accent',
+    background: 'bg-af-accent/20',
+    icon: '#4A90D9',
+    label: 'Blue Checkmark',
+    description: 'Attendance was added automatically from an approved manual workout.',
+  },
+  strava: {
+    border: 'border-orange-400',
+    background: 'bg-orange-400/20',
+    icon: '#FB923C',
+    label: 'Orange Checkmark',
+    description: 'Attendance was added automatically from a Strava-imported workout.',
+  },
+  pfra: {
+    border: 'border-violet-400',
+    background: 'bg-violet-400/20',
+    icon: '#A78BFA',
+    label: 'Purple Checkmark',
+    description: 'Attendance was marked automatically from a completed mock PFRA entry.',
+  },
+};
 const scheduledSessionScopeLabel = (session: ScheduledPTSession) =>
   session.scope === 'personal' ? 'Personal PT' : session.scope === 'squadron' ? 'Squadron PT' : session.flights.join(', ');
 const scheduledSessionKindLabel = (session: ScheduledPTSession) =>
@@ -45,6 +82,30 @@ const scheduledSessionKindLabel = (session: ScheduledPTSession) =>
       : session.kind === 'pfra_official'
         ? 'PFRA Official'
         : 'Normal PT';
+
+function ScheduledSessionDescription({
+  description,
+  onOpenWorkout,
+}: {
+  description: string;
+  onOpenWorkout: (workoutId: string) => void;
+}) {
+  const linkedWorkout = parseScheduledWorkoutLink(description);
+  const displayDescription = stripScheduledWorkoutToken(description);
+
+  if (!linkedWorkout) {
+    return <Text className="text-af-silver text-sm mt-2">{displayDescription}</Text>;
+  }
+
+  return (
+    <View className="mt-2">
+      <Text className="text-af-silver text-sm">{displayDescription}</Text>
+      <Pressable onPress={() => onOpenWorkout(linkedWorkout.workoutId)} className="self-start mt-2 rounded-full border border-af-accent/40 bg-af-accent/10 px-3 py-1.5">
+        <Text className="text-af-accent text-xs font-semibold">{linkedWorkout.workoutName}</Text>
+      </Pressable>
+    </View>
+  );
+}
 
 async function downloadWebFile(filename: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
@@ -58,6 +119,8 @@ async function downloadWebFile(filename: string, blob: Blob) {
 }
 
 export default function AttendanceScreen() {
+  const theme = useAppTheme();
+  const { width } = useWindowDimensions();
   const router = useRouter();
   const [currentWeekStart, setCurrentWeekStart] = useState(() => startOfWeek(new Date(), { weekStartsOn: 1 }));
   const [selectedFlight, setSelectedFlight] = useState<Flight | 'all'>('all');
@@ -69,9 +132,12 @@ export default function AttendanceScreen() {
   const [showDayScheduledSessionsModal, setShowDayScheduledSessionsModal] = useState(false);
   const [showAttendanceLegendModal, setShowAttendanceLegendModal] = useState(false);
   const [isExportingReport, setIsExportingReport] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [deletingScheduledSessionId, setDeletingScheduledSessionId] = useState<string | null>(null);
   const [selectedScheduledDayKey, setSelectedScheduledDayKey] = useState<string | null>(null);
   const [expandedScheduledSessionIds, setExpandedScheduledSessionIds] = useState<string[]>([]);
+  const contentMaxWidth = width >= 1440 ? 1320 : width >= 1180 ? 1180 : 980;
+  const [weeklyExcusedMemberIds, setWeeklyExcusedMemberIds] = useState<string[]>([]);
   const { setSwipeEnabled } = useTabSwipe();
   const flightScrollRef = useRef<ScrollView | null>(null);
   const flightScrollXRef = useRef(0);
@@ -90,7 +156,11 @@ export default function AttendanceScreen() {
 
   const canEdit = user ? canEditAttendance(user.accountType) : false;
   const canManagePrograms = user ? canManagePTPrograms(user.accountType) : false;
+  const canManageWeeklyExcusals = user
+    ? ['fitflight_creator', 'ufpm', 'squadron_leadership'].includes(user.accountType)
+    : false;
   const userSquadron = user?.squadron ?? 'Hawks';
+  const currentWeekStartKey = format(currentWeekStart, 'yyyy-MM-dd');
 
   const weekDays = useMemo(
     () => Array.from({ length: 7 }, (_, index) => addDays(currentWeekStart, index)),
@@ -187,6 +257,10 @@ export default function AttendanceScreen() {
     return null;
   }, [getAttendanceAliases, getSession, userSquadron]);
 
+  const isMemberWeeklyExcused = useCallback((memberId: string) => {
+    return weeklyExcusedMemberIds.includes(memberId);
+  }, [weeklyExcusedMemberIds]);
+
   const getWeeklyAttendance = useCallback((memberId: string) => {
     const member = members.find((entry) => entry.id === memberId);
     if (!member) return 0;
@@ -206,8 +280,8 @@ export default function AttendanceScreen() {
   );
   const averageWeeklyCheckIns = flightMembers.length > 0 ? totalWeeklyCheckIns / flightMembers.length : 0;
   const membersOnTarget = useMemo(
-    () => flightMembers.filter((member) => getWeeklyAttendance(member.id) >= WEEKLY_PROGRESS_TARGET).length,
-    [flightMembers, getWeeklyAttendance]
+    () => flightMembers.filter((member) => isMemberWeeklyExcused(member.id) || getWeeklyAttendance(member.id) >= WEEKLY_PROGRESS_TARGET).length,
+    [flightMembers, getWeeklyAttendance, isMemberWeeklyExcused]
   );
   const canViewReport = !!user && canManagePTPrograms(user.accountType);
   const currentWeekLabel = `${format(currentWeekStart, 'MMM d')} - ${format(addDays(currentWeekStart, 6), 'MMM d, yyyy')}`;
@@ -232,7 +306,7 @@ export default function AttendanceScreen() {
     );
 
     return {
-      scope: selectedFlight === 'all' ? `${userSquadron} Squadron` : `${selectedFlight} Flight`,
+      scope: selectedFlight === 'all' ? userSquadron : formatFlightDisplay(selectedFlight),
       totalMembers: flightMembers.length,
       totalCheckIns: totalWeeklyCheckIns,
       averageCheckIns: averageWeeklyCheckIns,
@@ -323,17 +397,37 @@ export default function AttendanceScreen() {
     syncPTSessions(sessions);
   }, [accessToken, syncPTSessions]);
 
+  const loadWeeklyExcusals = useCallback(async () => {
+    if (!accessToken) {
+      return;
+    }
+
+    const excusals = await fetchWeeklyAttendanceExcusals({
+      weekStart: currentWeekStartKey,
+      squadron: userSquadron,
+      accessToken,
+    });
+    setWeeklyExcusedMemberIds(excusals.map((entry) => entry.memberId));
+  }, [accessToken, currentWeekStartKey, userSquadron]);
+
   const handleToggleAttendance = async (date: Date, memberId: string, flight: Flight, squadron: typeof userSquadron = userSquadron) => {
     if (!canEdit || attendanceInteractionRef.current || !accessToken || !user) {
       return;
     }
 
+    if (isMemberWeeklyExcused(memberId)) {
+      Alert.alert('Member excused this week', 'This member is currently excused from the weekly workout requirement for this week.');
+      return;
+    }
+
     const attendanceSource = getAttendanceSource(date, memberId, flight, squadron);
     const currentlyAttending = isAttending(date, memberId, flight, squadron);
-    if (currentlyAttending && attendanceSource === 'workout') {
+    if (currentlyAttending && attendanceSource && attendanceSource !== 'manual') {
       Alert.alert(
-        'Workout-backed attendance',
-        'This attendance came from an approved or imported workout and cannot be removed here. Remove or edit the workout instead.'
+        'Managed attendance',
+        attendanceSource === 'pfra'
+          ? 'This attendance came from a mock PFRA entry and cannot be removed here. Edit the PFRA batch instead.'
+          : 'This attendance came from an approved or imported workout and cannot be removed here. Remove or edit the workout instead.'
       );
       return;
     }
@@ -341,18 +435,84 @@ export default function AttendanceScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
     try {
-      const updatedSessions = await setAttendanceStatus({
-          date: format(date, 'yyyy-MM-dd'),
-          flight,
-          squadron,
-          memberId,
-          createdBy: user.id,
-          isAttending: !currentlyAttending,
-          source: 'manual',
-          accessToken,
-        });
+      const dateKey = format(date, 'yyyy-MM-dd');
+      const session = getSession(date, flight, squadron);
+      const nextSessions = (() => {
+        if (!session) {
+          return [
+            ...ptSessions,
+            {
+              id: createOfflineActionId('pt-session'),
+              date: dateKey,
+              flight,
+              squadron,
+              createdBy: user.id,
+              attendees: [memberId],
+              attendeeSources: { [memberId]: 'manual' as const },
+            },
+          ];
+        }
 
-      syncPTSessions(updatedSessions);
+        const nextAttendees = !currentlyAttending
+          ? Array.from(new Set([...session.attendees, memberId]))
+          : session.attendees.filter((attendeeId) => attendeeId !== memberId);
+        const nextAttendanceSources = {
+          ...(session.attendeeSources ?? {}),
+          ...(currentlyAttending ? {} : { [memberId]: 'manual' as const }),
+        };
+        if (currentlyAttending) {
+          delete nextAttendanceSources[memberId];
+        }
+
+        return ptSessions.map((candidate) =>
+          candidate.id === session.id
+            ? {
+                ...candidate,
+                attendees: nextAttendees,
+                attendanceSources: nextAttendanceSources,
+              }
+            : candidate
+        );
+      })();
+
+      syncPTSessions(nextSessions);
+
+      const mutation = await runOrQueueOfflineMutation({
+        action: {
+          id: createOfflineActionId('attendance'),
+          type: 'attendance_status',
+          createdAt: new Date().toISOString(),
+          payload: {
+            date: dateKey,
+            flight,
+            squadron,
+            memberId,
+            createdBy: user.id,
+            isAttending: !currentlyAttending,
+            source: 'manual',
+          },
+        },
+        execute: () =>
+          setAttendanceStatus({
+            date: dateKey,
+            flight,
+            squadron,
+            memberId,
+            createdBy: user.id,
+            isAttending: !currentlyAttending,
+            source: 'manual',
+            accessToken,
+          }),
+        onQueued: () => {
+          Alert.alert('Saved offline', 'This attendance update will sync automatically when the device reconnects.');
+        },
+      });
+
+      const updatedSessions = mutation.result;
+      if (updatedSessions) {
+        syncPTSessions(updatedSessions);
+      }
+
       if (!currentlyAttending) {
         trackAnalyticsEvent('mark_attendance', {
           squadron,
@@ -365,9 +525,88 @@ export default function AttendanceScreen() {
     }
   };
 
+  const handleToggleWeeklyExcusal = (memberId: string) => {
+    if (!canManageWeeklyExcusals || !accessToken || !user) {
+      return;
+    }
+
+    const member = members.find((entry) => entry.id === memberId);
+    if (!member) {
+      return;
+    }
+
+    const isExcused = isMemberWeeklyExcused(memberId);
+    const title = isExcused ? 'Remove weekly excusal?' : 'Excuse member for this week?';
+    const message = isExcused
+      ? `${formatRankDisplay(member.rank)} ${member.firstName} ${member.lastName} will be counted normally again for the week of ${format(currentWeekStart, 'MMM d, yyyy')}.`
+      : `${formatRankDisplay(member.rank)} ${member.firstName} ${member.lastName} will be marked excused for the week of ${format(currentWeekStart, 'MMM d, yyyy')}.`;
+
+    Alert.alert(title, message, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: isExcused ? 'Remove Excusal' : 'Mark Excused',
+        style: isExcused ? 'destructive' : 'default',
+        onPress: () => {
+          void (async () => {
+            try {
+              setWeeklyExcusedMemberIds((current) =>
+                !isExcused ? Array.from(new Set([...current, memberId])) : current.filter((id) => id !== memberId)
+              );
+              const mutation = await runOrQueueOfflineMutation({
+                action: {
+                  id: createOfflineActionId('weekly-excusal'),
+                  type: 'weekly_excusal',
+                  createdAt: new Date().toISOString(),
+                  payload: {
+                    weekStart: currentWeekStartKey,
+                    squadron: userSquadron,
+                    memberId,
+                    excusedByMemberId: user.id,
+                    isExcused: !isExcused,
+                  },
+                },
+                execute: () =>
+                  setWeeklyAttendanceExcusal({
+                    weekStart: currentWeekStartKey,
+                    squadron: userSquadron,
+                    memberId,
+                    excusedByMemberId: user.id,
+                    isExcused: !isExcused,
+                    accessToken,
+                  }),
+                onQueued: () => {
+                  Alert.alert('Saved offline', 'This weekly excusal will sync automatically when the device reconnects.');
+                },
+              });
+              if (mutation.result) {
+                setWeeklyExcusedMemberIds(mutation.result.map((entry) => entry.memberId));
+              }
+            } catch (error) {
+              Alert.alert('Unable to update excusal', error instanceof Error ? error.message : 'Please try again.');
+              setWeeklyExcusedMemberIds((current) =>
+                isExcused ? Array.from(new Set([...current, memberId])) : current.filter((id) => id !== memberId)
+              );
+            }
+          })();
+        },
+      },
+    ]);
+  };
+
   const navigateWeek = (direction: 'prev' | 'next') => {
     Haptics.selectionAsync();
     setCurrentWeekStart((previous) => (direction === 'prev' ? subWeeks(previous, 1) : addWeeks(previous, 1)));
+  };
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await requestRegisteredSync('global');
+      await loadWeeklyExcusals();
+      await loadAttendanceFromBackend();
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   const handleDeleteScheduledSession = (sessionId: string) => {
@@ -392,6 +631,10 @@ export default function AttendanceScreen() {
       setDeletingScheduledSessionId(null);
     });
   };
+
+  const handleOpenScheduledWorkout = useCallback((workoutId: string) => {
+    router.push(`/workouts?openWorkoutId=${encodeURIComponent(workoutId)}`);
+  }, [router]);
 
   const handleOpenScheduledSessionsForDay = useCallback((day: Date) => {
     const dayKey = format(day, 'yyyy-MM-dd');
@@ -435,6 +678,14 @@ export default function AttendanceScreen() {
 
     return () => clearInterval(interval);
   }, [accessToken, loadAttendanceFromBackend]);
+
+  useEffect(() => {
+    if (!accessToken) {
+      return;
+    }
+
+    void loadWeeklyExcusals();
+  }, [accessToken, loadWeeklyExcusals]);
 
   useEffect(() => {
     let isMounted = true;
@@ -701,13 +952,16 @@ export default function AttendanceScreen() {
   return (
     <View className="flex-1">
       <LinearGradient
-        colors={['#0A1628', '#001F5C', '#0A1628']}
+        colors={theme.gradient}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
       />
+      <ThemeBackdrop />
 
-        <SafeAreaView edges={['top']} className="flex-1">
+      <SafeAreaView edges={['top']} className="flex-1">
+          <TopStatusBar title="Attendance" subtitle={`${userSquadron} Squadron`} />
+          <PageContainer maxWidth={contentMaxWidth}>
           <Animated.View entering={FadeInDown.delay(100).springify()} className="px-6 pt-4 pb-1 flex-row items-start justify-between">
             <View className="flex-1 pr-4">
               <View className="flex-row items-center">
@@ -757,10 +1011,20 @@ export default function AttendanceScreen() {
             <ChevronRight size={24} color="#C0C0C0" />
           </Pressable>
         </Animated.View>
+          </PageContainer>
 
-        <ScrollView className="flex-1 px-6" contentContainerStyle={{ paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          className="flex-1"
+          contentContainerStyle={{ paddingBottom: 120, alignItems: 'center' }}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} tintColor={theme.accent} />
+          }
+        >
+          <PageContainer maxWidth={contentMaxWidth} className="px-6">
           <Animated.View entering={FadeInDown.delay(200).springify()} className="mb-4">
-            <View className="rounded-2xl border border-white/10 bg-white/5 p-3">
+            <ThemeChrome theme={theme}>
+            <View className="p-3">
               <View onLayout={handleFlightStripLayout}>
                 <ScrollView
                   ref={flightScrollRef}
@@ -814,6 +1078,7 @@ export default function AttendanceScreen() {
                 </ScrollView>
               </View>
             </View>
+            </ThemeChrome>
           </Animated.View>
 
           <Animated.View entering={FadeInDown.delay(110).springify()} className="mb-3">
@@ -822,8 +1087,9 @@ export default function AttendanceScreen() {
                 Haptics.selectionAsync();
                 setShowScheduledSessionsModal(true);
               }}
-              className="rounded-2xl border border-white/10 bg-white/5 overflow-hidden"
+              className="overflow-hidden"
             >
+              <ThemeChrome theme={theme} variant="feature">
               <LinearGradient
                 colors={['rgba(34,197,94,0.14)', 'rgba(74,144,217,0.07)', 'rgba(255,255,255,0.02)']}
                 start={{ x: 0, y: 0 }}
@@ -875,11 +1141,12 @@ export default function AttendanceScreen() {
                   </View>
                 )}
               </LinearGradient>
+              </ThemeChrome>
             </Pressable>
           </Animated.View>
 
           <Animated.View entering={FadeInDown.delay(125).springify()} className="mb-4">
-            <View className="rounded-2xl border border-white/10 bg-white/6 overflow-hidden">
+            <ThemeChrome theme={theme} variant="feature">
               <LinearGradient
                 colors={['rgba(74,144,217,0.16)', 'rgba(20,184,166,0.07)', 'rgba(255,255,255,0.02)']}
                 start={{ x: 0, y: 0 }}
@@ -889,7 +1156,7 @@ export default function AttendanceScreen() {
                 <View className="flex-row items-center justify-between gap-3">
                   <View className="flex-1">
                     <Text className="text-white font-semibold text-base">
-                      {selectedFlight === 'all' ? `${userSquadron} Attendance` : `${selectedFlight} Flight`}
+                    {selectedFlight === 'all' ? `${userSquadron} Attendance` : formatFlightDisplay(selectedFlight)}
                     </Text>
                     <Text className="text-af-silver text-xs mt-1">
                       Tap a member for profile. Tap attendance markers to update.
@@ -916,12 +1183,13 @@ export default function AttendanceScreen() {
                   </View>
                 </View>
               </LinearGradient>
-            </View>
+            </ThemeChrome>
           </Animated.View>
 
           <TutorialTarget id="attendance-grid">
             <View onLayout={handleTableLayout}>
-              <View className="flex-row rounded-2xl border border-white/10 bg-white/5 overflow-hidden">
+              <ThemeChrome theme={theme}>
+              <View className="flex-row overflow-hidden">
               <View style={{ width: NAME_COLUMN_WIDTH }} className="border-r border-white/10">
                 <View className="flex-row items-center px-3" style={{ height: HEADER_HEIGHT }}>
                   <View style={{ width: NAME_COLUMN_WIDTH - 24 }}>
@@ -932,24 +1200,32 @@ export default function AttendanceScreen() {
                 {flightMembers.map((member, index) => {
                   const weeklyAttendance = getWeeklyAttendance(member.id);
                   const displayName = getAttendanceDisplayName(member.id);
+                  const isExcused = isMemberWeeklyExcused(member.id);
 
                   return (
                     <Animated.View
                       key={`fixed-${member.id}`}
                       entering={FadeInUp.delay(250 + index * 50).springify()}
-                      className="flex-row items-center px-3 border-t border-white/5"
+                      className={cn('flex-row items-center px-3 border-t border-white/5', isExcused && 'bg-white/5 opacity-60')}
                       style={{ height: ROW_HEIGHT }}
                     >
                       <Pressable
                         onPress={() => {
+                          if (canManageWeeklyExcusals) {
+                            Haptics.selectionAsync();
+                            handleToggleWeeklyExcusal(member.id);
+                            return;
+                          }
                           Haptics.selectionAsync();
                           router.push({ pathname: '/member-profile', params: { id: member.id } });
                         }}
                         style={{ width: NAME_COLUMN_WIDTH, paddingRight: 8 }}
                       >
-                        <Text className="text-af-silver text-[11px]" numberOfLines={1}>{displayName.rank}</Text>
-                        <Text className="text-white font-medium mt-0.5" numberOfLines={1}>{displayName.name}</Text>
-                          <Text className="text-af-silver text-xs mt-1">{weeklyAttendance}/{WEEKLY_PROGRESS_TARGET} sessions</Text>
+                          <Text className="text-af-silver text-[11px]" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72}>{displayName.rank}</Text>
+                          <Text className="text-white font-medium mt-0.5" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.68}>{displayName.name}</Text>
+                        <Text className="text-af-silver text-xs mt-1">
+                          {isExcused ? 'Excused this week' : `${weeklyAttendance}/${WEEKLY_PROGRESS_TARGET} sessions`}
+                        </Text>
                       </Pressable>
                     </Animated.View>
                   );
@@ -1054,18 +1330,19 @@ export default function AttendanceScreen() {
                       <Animated.View
                         key={`days-${member.id}`}
                         entering={FadeInUp.delay(250 + index * 50).springify()}
-                        className="flex-row items-center border-t border-white/5"
+                        className={cn('flex-row items-center border-t border-white/5', isMemberWeeklyExcused(member.id) && 'bg-white/5 opacity-60')}
                         style={{ height: ROW_HEIGHT }}
                       >
                           {weekDays.map((day) => {
+                            const isExcused = isMemberWeeklyExcused(member.id);
                             const attending = isAttending(day, member.id, member.flight, member.squadron);
                             const attendanceSource = getAttendanceSource(day, member.id, member.flight, member.squadron);
-                            const isWorkoutDerivedAttendance = attendanceSource === 'workout';
+                            const sourceStyle = attendanceSource ? ATTENDANCE_SOURCE_STYLE[attendanceSource] : null;
                             return (
                               <Pressable
                               key={`${member.id}-${day.toISOString()}`}
                               onPress={() => handleToggleAttendance(day, member.id, member.flight, member.squadron)}
-                              disabled={!canEdit}
+                              disabled={!canEdit || isExcused}
                               style={{ width: DAY_COLUMN_WIDTH }}
                               className="items-center"
                             >
@@ -1073,14 +1350,14 @@ export default function AttendanceScreen() {
                                   className={cn(
                                     'w-10 h-10 rounded-full items-center justify-center border shadow-sm',
                                     attending
-                                      ? isWorkoutDerivedAttendance
-                                        ? 'bg-af-accent/20 border-af-accent'
+                                      ? sourceStyle
+                                        ? `${sourceStyle.background} ${sourceStyle.border}`
                                         : 'bg-af-success/20 border-af-success'
                                       : 'bg-black/10 border-white/10'
                                   )}
                                 >
                                   {attending ? (
-                                    <Check size={20} color={isWorkoutDerivedAttendance ? '#4A90D9' : '#22C55E'} />
+                                    <Check size={20} color={sourceStyle?.icon ?? '#22C55E'} />
                                   ) : (
                                     <X size={20} color="#ffffff30" />
                                   )}
@@ -1125,6 +1402,7 @@ export default function AttendanceScreen() {
 
                 {flightMembers.map((member, index) => {
                   const weeklyAttendance = getWeeklyAttendance(member.id);
+                  const isExcused = isMemberWeeklyExcused(member.id);
                   const progressPercent = Math.min((weeklyAttendance / WEEKLY_PROGRESS_TARGET) * 100, 100);
 
                   return (
@@ -1135,22 +1413,27 @@ export default function AttendanceScreen() {
                       style={{ height: ROW_HEIGHT }}
                     >
                       <View className="w-10 h-10 items-center justify-center">
-                        <View className="w-8 h-8 rounded-full border-2 border-white/20 items-center justify-center overflow-hidden bg-black/10">
-                          <View
-                            className={cn(
-                              'absolute bottom-0 left-0 right-0',
-                              progressPercent >= 100 ? 'bg-af-success' : 'bg-af-accent'
-                            )}
-                            style={{ height: `${progressPercent}%` }}
-                          />
-                          <Text className="text-white text-xs font-bold z-10">{weeklyAttendance}</Text>
+                        <View className={cn('w-8 h-8 rounded-full border-2 items-center justify-center overflow-hidden', isExcused ? 'border-white/10 bg-white/5' : 'border-white/20 bg-black/10')}>
+                          {!isExcused ? (
+                            <View
+                              className={cn(
+                                'absolute bottom-0 left-0 right-0',
+                                progressPercent >= 100 ? 'bg-af-success' : 'bg-af-accent'
+                              )}
+                              style={{ height: `${progressPercent}%` }}
+                            />
+                          ) : null}
+                          <Text className={cn('text-xs font-bold z-10', isExcused ? 'text-white/40' : 'text-white')}>
+                            {isExcused ? '—' : weeklyAttendance}
+                          </Text>
                         </View>
                       </View>
                     </Animated.View>
                   );
                 })}
               </View>
-            </View>
+              </View>
+              </ThemeChrome>
             </View>
           </TutorialTarget>
 
@@ -1159,6 +1442,7 @@ export default function AttendanceScreen() {
               <Text className="text-white/40 text-base">No members in this flight</Text>
             </View>
           ) : null}
+          </PageContainer>
         </ScrollView>
 
         {!canEdit && (
@@ -1259,7 +1543,7 @@ export default function AttendanceScreen() {
                           <Text className="text-white font-semibold">
                             {format(new Date(`${session.date}T00:00:00`), 'EEEE, MMM d')} at {session.time}
                           </Text>
-                          <Text className="text-af-silver text-sm mt-2">{session.description}</Text>
+                          <ScheduledSessionDescription description={session.description} onOpenWorkout={handleOpenScheduledWorkout} />
                           <Text className="text-af-silver text-xs mt-2">{scheduledSessionKindLabel(session)}</Text>
                           <Text className="text-af-silver text-xs mt-2">
                             Scheduled by {creatorNameById.get(session.createdBy) ?? 'Unknown member'}
@@ -1349,7 +1633,7 @@ export default function AttendanceScreen() {
 
                         {expanded ? (
                           <View className="mt-3 border-t border-white/10 pt-3">
-                            <Text className="text-white text-sm">{session.description}</Text>
+                            <ScheduledSessionDescription description={session.description} onOpenWorkout={handleOpenScheduledWorkout} />
                             <Text className="text-af-silver text-xs mt-2">{scheduledSessionKindLabel(session)}</Text>
                             <Text className="text-af-silver text-xs mt-2">
                               Scheduled by {creatorNameById.get(session.createdBy) ?? 'Unknown member'}
@@ -1390,29 +1674,22 @@ export default function AttendanceScreen() {
                   </Pressable>
                 </View>
 
-                <View className="rounded-2xl border border-white/10 bg-white/5 p-4 mb-3">
-                  <View className="flex-row items-center">
-                    <View className="w-10 h-10 rounded-full items-center justify-center border border-af-success bg-af-success/20">
-                      <Check size={20} color="#22C55E" />
+                {(['manual', 'workout', 'strava', 'pfra'] as AttendanceSource[]).map((source, index) => {
+                  const style = ATTENDANCE_SOURCE_STYLE[source];
+                  return (
+                    <View key={source} className={cn('rounded-2xl border border-white/10 bg-white/5 p-4', index < 3 ? 'mb-3' : '')}>
+                      <View className="flex-row items-center">
+                        <View className={cn('w-10 h-10 rounded-full items-center justify-center border', style.border, style.background)}>
+                          <Check size={20} color={style.icon} />
+                        </View>
+                        <View className="ml-3 flex-1">
+                          <Text className="text-white font-semibold">{style.label}</Text>
+                          <Text className="text-af-silver text-sm mt-1">{style.description}</Text>
+                        </View>
+                      </View>
                     </View>
-                    <View className="ml-3 flex-1">
-                      <Text className="text-white font-semibold">Green Checkmark</Text>
-                      <Text className="text-af-silver text-sm mt-1">Attendance was marked manually by a PFL, UFPM, Owner, or Squadron Leadership.</Text>
-                    </View>
-                  </View>
-                </View>
-
-                <View className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <View className="flex-row items-center">
-                    <View className="w-10 h-10 rounded-full items-center justify-center border border-af-accent bg-af-accent/20">
-                      <Check size={20} color="#4A90D9" />
-                    </View>
-                    <View className="ml-3 flex-1">
-                      <Text className="text-white font-semibold">Blue Checkmark</Text>
-                      <Text className="text-af-silver text-sm mt-1">Attendance was added automatically from an approved manual workout or a Strava-imported workout.</Text>
-                    </View>
-                  </View>
-                </View>
+                  );
+                })}
               </View>
             </View>
          </Modal>

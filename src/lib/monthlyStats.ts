@@ -81,7 +81,7 @@ export function getMemberEffectiveWorkouts(
       duration: 0,
       distance: 0,
       source: 'attendance',
-      title: `Attendance - ${session.flight} Flight`,
+      title: `Attendance - ${session.flight}`,
       isPrivate: false,
     }));
 

@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, Pressable, ScrollView, Alert, Platform } from 'react-native';
+import { View, Text, Pressable, ScrollView, Alert, Platform, Modal, ActivityIndicator, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { ChevronLeft, FileSpreadsheet, FileText, Users, Activity, TrendingUp, Calendar, BarChart3, Dumbbell } from 'lucide-react-native';
+import { ChevronLeft, FileSpreadsheet, FileText, Users, Activity, TrendingUp, Calendar, BarChart3, Dumbbell, X } from 'lucide-react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Animated, { FadeInDown, useAnimatedStyle, useSharedValue, withSpring, withDelay } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
@@ -12,11 +12,17 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import Svg, { Circle } from 'react-native-svg';
 import { format, startOfWeek, addDays } from 'date-fns';
-import { useMemberStore, useAuthStore, getDisplayName, type Flight, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
+import { useMemberStore, useAuthStore, formatFlightDisplay, getDisplayName, type Flight, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
+import { fetchPFRABatchMembers, fetchPFRABatches, fetchWeeklyAttendanceExcusals, type PFRABatchMemberEntry, type PFRABatchSummary } from '@/lib/supabaseData';
 import ExcelJS from 'exceljs';
 import { formatMonthLabel, getAvailableMonthKeys, getMemberMonthSummary, getMonthKey, getMonthSessions } from '@/lib/monthlyStats';
+import { useAppTheme } from '@/lib/theme';
+import { PageContainer } from '@/components/PageContainer';
+import { ThemeBackdrop } from '@/components/ThemeBackdrop';
+import { ThemeChrome } from '@/components/ThemeChrome';
+import { getThemeBodyStyle, getThemeControlStyle, getThemeHeadingStyle } from '@/lib/theme';
 
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
 const WEEKLY_ATTENDANCE_TARGET = 5;
@@ -51,6 +57,30 @@ async function downloadWebFile(filename: string, blob: Blob) {
 }
 
 type OverviewCardKey = 'members' | 'workouts' | 'sessions' | 'pfra';
+type PFRALeadershipFilter = 'all' | 'mock' | 'diagnostic' | 'official';
+
+function formatPFRALabel(value: PFRALeadershipFilter) {
+  return value === 'all' ? 'All' : value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function getPFRALeadershipFilters() {
+  return ['all', 'mock', 'diagnostic', 'official'] as const;
+}
+
+function didPassAssessment(assessment: { overallScore: number; components: {
+  cardio: { score: number; exempt?: boolean };
+  pushups: { score: number; exempt?: boolean };
+  situps: { score: number; exempt?: boolean };
+  waist?: { score: number; exempt?: boolean };
+} }) {
+  return (
+    assessment.overallScore >= 75 &&
+    (assessment.components.cardio.exempt || assessment.components.cardio.score >= 20) &&
+    (assessment.components.pushups.exempt || assessment.components.pushups.score >= 20) &&
+    (assessment.components.situps.exempt || assessment.components.situps.score >= 20) &&
+    (assessment.components.waist?.exempt || (assessment.components.waist?.score ?? 20) >= 20)
+  );
+}
 
 function WorkoutTypeBar({
   type,
@@ -99,12 +129,23 @@ function WorkoutTypeBar({
 
 export default function AnalyticsScreen() {
   const router = useRouter();
+  const theme = useAppTheme();
+  const { width } = useWindowDimensions();
   const allMembers = useMemberStore(s => s.members);
   const allPtSessions = useMemberStore(s => s.ptSessions);
   const user = useAuthStore(s => s.user);
+  const accessToken = useAuthStore(s => s.accessToken);
   const [isExporting, setIsExporting] = useState(false);
   const [expandedOverviewCard, setExpandedOverviewCard] = useState<OverviewCardKey | null>(null);
   const [selectedMonthKey, setSelectedMonthKey] = useState(getMonthKey());
+  const [selectedPFRARecordType, setSelectedPFRARecordType] = useState<PFRALeadershipFilter>('all');
+  const [pfraBatches, setPfraBatches] = useState<PFRABatchSummary[]>([]);
+  const [weeklyExcusedMemberIds, setWeeklyExcusedMemberIds] = useState<string[]>([]);
+  const [showPFRADetailModal, setShowPFRADetailModal] = useState(false);
+  const [selectedPFRABatch, setSelectedPFRABatch] = useState<PFRABatchSummary | null>(null);
+  const [selectedPFRABatchMembers, setSelectedPFRABatchMembers] = useState<PFRABatchMemberEntry[]>([]);
+  const [isLoadingBatchMembers, setIsLoadingBatchMembers] = useState(false);
+  const contentMaxWidth = width >= 1440 ? 1320 : width >= 1180 ? 1180 : 1040;
   const userSquadron = user?.squadron ?? 'Hawks';
   const members = useMemo(
     () => allMembers.filter((member) => member.squadron === userSquadron),
@@ -128,6 +169,47 @@ export default function AnalyticsScreen() {
     });
   }, [userSquadron]);
 
+  useEffect(() => {
+    if (!accessToken) {
+      return;
+    }
+
+    let isCancelled = false;
+    void fetchPFRABatches(accessToken, userSquadron)
+      .then((batches) => {
+        if (!isCancelled) {
+          setPfraBatches(batches);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [accessToken, userSquadron]);
+
+  useEffect(() => {
+    if (!accessToken) {
+      return;
+    }
+
+    const weekStart = format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd');
+    let isCancelled = false;
+    void fetchWeeklyAttendanceExcusals({
+      weekStart,
+      squadron: userSquadron,
+      accessToken,
+    }).then((entries) => {
+      if (!isCancelled) {
+        setWeeklyExcusedMemberIds(entries.map((entry) => entry.memberId));
+      }
+    }).catch(() => undefined);
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [accessToken, userSquadron]);
+
   // Calculate analytics
   const analytics = useMemo(() => {
     const currentWeekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
@@ -142,15 +224,20 @@ export default function AnalyticsScreen() {
     const totalMiles = members.reduce((acc, m) => acc + getMemberMonthSummary(m, activeMonthKey).miles, 0);
     const currentWeekSessions = ptSessions.filter((session) => currentWeekDates.has(session.date));
     const totalAttendanceMarksThisWeek = currentWeekSessions.reduce((acc, session) => acc + session.attendees.length, 0);
+    const excusedThisWeekCount = members.filter((member) => weeklyExcusedMemberIds.includes(member.id)).length;
+    const weeklyComplianceEligibleMembers = Math.max(totalMembers - excusedThisWeekCount, 0);
     const membersMeetingWeeklyTarget = members.filter((member) => {
+      if (weeklyExcusedMemberIds.includes(member.id)) {
+        return true;
+      }
       const weeklyAttendance = currentWeekSessions.reduce((count, session) => {
         return session.attendees.includes(member.id) ? count + 1 : count;
       }, 0);
 
       return weeklyAttendance >= WEEKLY_ATTENDANCE_TARGET;
     }).length;
-    const weeklyCompliancePercent = totalMembers > 0
-      ? Math.round((membersMeetingWeeklyTarget / totalMembers) * 100)
+    const weeklyCompliancePercent = weeklyComplianceEligibleMembers > 0
+      ? Math.round(((membersMeetingWeeklyTarget - excusedThisWeekCount) / weeklyComplianceEligibleMembers) * 100)
       : 0;
     const averageWeeklyAttendance = totalMembers > 0
       ? totalAttendanceMarksThisWeek / totalMembers
@@ -174,13 +261,26 @@ export default function AnalyticsScreen() {
       };
     });
 
-    // Fitness assessment stats
-    const membersWithFA = members.filter(m => m.fitnessAssessments.length > 0);
-    const avgPFRAScore = membersWithFA.length > 0
-      ? membersWithFA.reduce((acc, m) => {
-          const latest = m.fitnessAssessments[m.fitnessAssessments.length - 1];
-          return acc + (latest?.overallScore ?? 0);
-        }, 0) / membersWithFA.length
+    const pfraEntries = members.flatMap((member) =>
+      member.fitnessAssessments.map((assessment) => ({
+        id: assessment.id,
+        memberId: member.id,
+        memberName: getDisplayName(member),
+        flight: member.flight,
+        assessment,
+      }))
+    );
+    const filteredPFRAEntries = pfraEntries.filter((entry) => {
+      const recordType = entry.assessment.recordType ?? 'self';
+      if (selectedPFRARecordType === 'all') {
+        return recordType === 'mock' || recordType === 'diagnostic' || recordType === 'official';
+      }
+
+      return recordType === selectedPFRARecordType;
+    });
+    const membersWithFA = new Set(filteredPFRAEntries.map((entry) => entry.memberId));
+    const avgPFRAScore = filteredPFRAEntries.length > 0
+      ? filteredPFRAEntries.reduce((sum, entry) => sum + entry.assessment.overallScore, 0) / filteredPFRAEntries.length
       : 0;
 
     // Workout type breakdown
@@ -222,6 +322,7 @@ export default function AnalyticsScreen() {
           lastName: member.lastName,
           flight: member.flight,
           attendance: weeklyAttendance,
+          isExcused: weeklyExcusedMemberIds.includes(member.id),
           workouts: weeklyWorkouts.length,
           minutes: weeklyMinutes,
         miles: Number(weeklyMiles.toFixed(2)),
@@ -251,14 +352,12 @@ export default function AnalyticsScreen() {
       const month = date.getMonth();
       const monthLabel = date.toLocaleString('en-US', { month: 'short' });
 
-      const monthScores = members.flatMap((member) =>
-        member.fitnessAssessments
-          .filter((assessment) => {
-            const assessmentDate = new Date(assessment.date);
-            return assessmentDate.getFullYear() === year && assessmentDate.getMonth() === month;
-          })
-          .map((assessment) => assessment.overallScore)
-      );
+      const monthScores = filteredPFRAEntries
+        .filter(({ assessment }) => {
+          const assessmentDate = new Date(assessment.date);
+          return assessmentDate.getFullYear() === year && assessmentDate.getMonth() === month;
+        })
+        .map(({ assessment }) => assessment.overallScore);
 
       const average = monthScores.length > 0
         ? monthScores.reduce((sum, score) => sum + score, 0) / monthScores.length
@@ -272,18 +371,48 @@ export default function AnalyticsScreen() {
     });
 
     const maxPFRAAverage = Math.max(...pfraTimeline.map((entry) => entry.average), 100);
-    const recentPFRARecords = members
-      .flatMap((member) =>
-        member.fitnessAssessments.map((assessment) => ({
-          id: assessment.id,
-          memberName: getDisplayName(member),
-          score: assessment.overallScore,
-          date: assessment.date,
-          loggedByName: assessment.loggedByName ?? getDisplayName(member),
-        }))
-      )
+    const recentPFRARecords = filteredPFRAEntries
+      .map(({ assessment, memberName }) => ({
+        id: assessment.id,
+        memberName,
+        score: assessment.overallScore,
+        date: assessment.date,
+        recordType: assessment.recordType ?? 'self',
+        loggedByName: assessment.loggedByName ?? memberName,
+      }))
       .sort((left, right) => right.date.localeCompare(left.date))
       .slice(0, 6);
+
+    const latestMockBatch = pfraBatches
+      .filter((batch) => batch.recordType === 'mock')
+      .sort((left, right) => right.assessmentDate.localeCompare(left.assessmentDate))[0] ?? null;
+
+    const componentAverages = filteredPFRAEntries.length > 0
+      ? {
+          waist: filteredPFRAEntries.reduce((sum, entry) => sum + (entry.assessment.components.waist?.score ?? 0), 0) / filteredPFRAEntries.length,
+          strength: filteredPFRAEntries.reduce((sum, entry) => sum + entry.assessment.components.pushups.score, 0) / filteredPFRAEntries.length,
+          core: filteredPFRAEntries.reduce((sum, entry) => sum + entry.assessment.components.situps.score, 0) / filteredPFRAEntries.length,
+          cardio: filteredPFRAEntries.reduce((sum, entry) => sum + entry.assessment.components.cardio.score, 0) / filteredPFRAEntries.length,
+        }
+      : { waist: 0, strength: 0, core: 0, cardio: 0 };
+
+    const passedEntries = filteredPFRAEntries.filter((entry) => didPassAssessment(entry.assessment));
+    const overallPassRate = filteredPFRAEntries.length > 0
+      ? passedEntries.length / filteredPFRAEntries.length
+      : 0;
+    const componentPassRates = filteredPFRAEntries.length > 0
+      ? {
+          waist: filteredPFRAEntries.filter((entry) => (entry.assessment.components.waist?.score ?? 0) >= 20 || entry.assessment.components.waist?.exempt).length / filteredPFRAEntries.length,
+          strength: filteredPFRAEntries.filter((entry) => entry.assessment.components.pushups.score >= 20 || entry.assessment.components.pushups.exempt).length / filteredPFRAEntries.length,
+          core: filteredPFRAEntries.filter((entry) => entry.assessment.components.situps.score >= 20 || entry.assessment.components.situps.exempt).length / filteredPFRAEntries.length,
+          cardio: filteredPFRAEntries.filter((entry) => entry.assessment.components.cardio.score >= 20 || entry.assessment.components.cardio.exempt).length / filteredPFRAEntries.length,
+        }
+      : { waist: 0, strength: 0, core: 0, cardio: 0 };
+    const pfraBatchesForFilter = pfraBatches.filter((batch) => (
+      selectedPFRARecordType === 'all' ? true : batch.recordType === selectedPFRARecordType
+    ));
+    const latestSelectedBatch = pfraBatchesForFilter
+      .sort((left, right) => right.assessmentDate.localeCompare(left.assessmentDate))[0] ?? null;
 
     return {
       totalMembers,
@@ -292,6 +421,8 @@ export default function AnalyticsScreen() {
       totalMinutes,
       totalMiles,
       totalAttendanceMarksThisWeek,
+      excusedThisWeekCount,
+      weeklyComplianceEligibleMembers,
       membersMeetingWeeklyTarget,
       weeklyCompliancePercent,
       averageWeeklyAttendance: Math.round(averageWeeklyAttendance * 10) / 10,
@@ -301,14 +432,21 @@ export default function AnalyticsScreen() {
       pfraTimeline,
       maxPFRAAverage,
       recentPFRARecords,
+      latestMockBatch,
+      pfraTotalCount: filteredPFRAEntries.length,
+      componentAverages,
+      componentPassRates,
+      overallPassRate,
+      recentPFRABatches: pfraBatchesForFilter.slice(0, 5),
+      latestSelectedBatch,
       flightStats,
       avgPFRAScore: Math.round(avgPFRAScore * 10) / 10,
-      membersWithFA: membersWithFA.length,
+      membersWithFA: membersWithFA.size,
       workoutTypeBreakdown,
       totalWorkouts,
       activeMonthKey,
     };
-  }, [activeMonthKey, members, ptSessions]);
+  }, [activeMonthKey, members, pfraBatches, ptSessions, selectedPFRARecordType, weeklyExcusedMemberIds]);
 
   const buildPdfHtml = () => {
     const generatedAt = new Date().toLocaleString();
@@ -359,6 +497,7 @@ export default function AnalyticsScreen() {
               <div class="card"><div class="label">Workouts</div><div class="value">${analytics.totalWorkouts}</div></div>
               <div class="card"><div class="label">PT Sessions</div><div class="value">${analytics.totalSessions}</div></div>
               <div class="card"><div class="label">Avg PFRA</div><div class="value">${analytics.avgPFRAScore}</div></div>
+              <div class="card"><div class="label">Logged PFRAs</div><div class="value">${analytics.pfraTotalCount}</div></div>
               <div class="card"><div class="label">Attendance This Week</div><div class="value">${analytics.totalAttendanceMarksThisWeek}</div></div>
               <div class="card"><div class="label">Members at 5/5</div><div class="value">${analytics.membersMeetingWeeklyTarget}/${analytics.totalMembers} (${analytics.weeklyCompliancePercent}%)</div></div>
             </div>
@@ -401,6 +540,8 @@ export default function AnalyticsScreen() {
       { metric: 'Weekly Compliance %', value: analytics.weeklyCompliancePercent },
       { metric: 'Average PFRA', value: analytics.avgPFRAScore },
       { metric: 'Members With PFRA', value: analytics.membersWithFA },
+      { metric: 'Logged PFRA Count', value: analytics.pfraTotalCount },
+      { metric: 'Latest Mock Completion %', value: analytics.latestMockBatch ? Math.round(analytics.latestMockBatch.completionRate * 100) : '' },
     ]);
 
     const membersSheet = workbook.addWorksheet('Members');
@@ -475,9 +616,169 @@ export default function AnalyticsScreen() {
     ];
     analytics.pfraTimeline.forEach((entry) => pfraSheet.addRow(entry));
 
-    [overviewSheet, membersSheet, flightsSheet, workoutsSheet, pfraSheet].forEach((sheet) => {
+    const pfraBatchSheet = workbook.addWorksheet('PFRA Batches');
+    pfraBatchSheet.columns = [
+      { header: 'Date', key: 'assessmentDate', width: 14 },
+      { header: 'Type', key: 'recordType', width: 14 },
+      { header: 'Flights', key: 'flights', width: 24 },
+      { header: 'Completed', key: 'completedCount', width: 12 },
+      { header: 'Expected', key: 'expectedCount', width: 12 },
+      { header: 'Completion %', key: 'completionRate', width: 14 },
+      { header: 'Created By', key: 'createdByName', width: 24 },
+    ];
+    analytics.recentPFRABatches.forEach((batch) => {
+      pfraBatchSheet.addRow({
+        assessmentDate: batch.assessmentDate,
+        recordType: batch.recordType,
+        flights: batch.selectedFlights.join(', '),
+        completedCount: batch.completedCount,
+        expectedCount: batch.expectedCount,
+        completionRate: Math.round(batch.completionRate * 100),
+        createdByName: batch.createdByName,
+      });
+    });
+
+    [overviewSheet, membersSheet, flightsSheet, workoutsSheet, pfraSheet, pfraBatchSheet].forEach((sheet) => {
       sheet.getRow(1).font = { bold: true };
       sheet.views = [{ state: 'frozen', ySplit: 1 }];
+    });
+
+    return workbook.xlsx.writeBuffer();
+  };
+
+  const buildPFRASummariesForExport = () => {
+    const recordTypes = getPFRALeadershipFilters();
+    return recordTypes.map((recordType) => {
+      const entries = members.flatMap((member) =>
+        member.fitnessAssessments
+          .filter((assessment) => {
+            const type = assessment.recordType ?? 'self';
+            if (recordType === 'all') {
+              return type === 'mock' || type === 'diagnostic' || type === 'official';
+            }
+
+            return type === recordType;
+          })
+          .map((assessment) => ({
+            memberName: getDisplayName(member),
+            flight: member.flight,
+            assessment,
+          }))
+      );
+      const batches = pfraBatches.filter((batch) => recordType === 'all' ? true : batch.recordType === recordType);
+      const avgScore = entries.length > 0
+        ? entries.reduce((sum, entry) => sum + entry.assessment.overallScore, 0) / entries.length
+        : 0;
+
+      return {
+        recordType,
+        label: formatPFRALabel(recordType),
+        avgScore: Number(avgScore.toFixed(1)),
+        count: entries.length,
+        completionRate: batches.length > 0
+          ? Number(((batches.reduce((sum, batch) => sum + batch.completionRate, 0) / batches.length) * 100).toFixed(1))
+          : 0,
+        entries,
+        batches,
+      };
+    });
+  };
+
+  const buildPFRAPdfHtml = () => {
+    const sections = buildPFRASummariesForExport().map((section) => {
+      const entryRows = section.entries.slice(0, 10).map((entry) => `
+        <tr>
+          <td>${entry.memberName}</td>
+          <td>${entry.flight}</td>
+          <td>${entry.assessment.date}</td>
+          <td>${entry.assessment.overallScore.toFixed(1)}</td>
+          <td>${didPassAssessment(entry.assessment) ? 'Pass' : 'Needs Improvement'}</td>
+        </tr>
+      `).join('');
+
+      return `
+        <div class="section">
+          <h2>${section.label}</h2>
+          <div class="grid">
+            <div class="card"><div class="label">Logged PFRAs</div><div class="value">${section.count}</div></div>
+            <div class="card"><div class="label">Average Score</div><div class="value">${section.avgScore}</div></div>
+            <div class="card"><div class="label">Batch Completion Rate</div><div class="value">${section.completionRate}%</div></div>
+          </div>
+          <table>
+            <thead>
+              <tr><th>Member</th><th>Flight</th><th>Date</th><th>Score</th><th>Status</th></tr>
+            </thead>
+            <tbody>${entryRows || '<tr><td colspan="5">No PFRA records</td></tr>'}</tbody>
+          </table>
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <html>
+        <head>
+          <style>
+            body { font-family: Arial, sans-serif; background: #0A1628; color: #fff; padding: 24px; }
+            h1, h2 { margin: 0 0 12px; }
+            .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+            .card { background: #12243f; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 16px; }
+            .label { color: #c0c0c0; font-size: 12px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.08em; }
+            .value { font-size: 24px; font-weight: bold; }
+            table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+            th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+            th { color: #9fb3d1; font-size: 12px; text-transform: uppercase; }
+            .section { margin-top: 24px; }
+          </style>
+        </head>
+        <body>
+          <h1>${userSquadron} PFRA Leadership Summary</h1>
+          <p>Generated ${new Date().toLocaleString()}</p>
+          ${sections}
+        </body>
+      </html>
+    `;
+  };
+
+  const buildPFRAWorkbook = async () => {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'FitFlight';
+    workbook.created = new Date();
+
+    buildPFRASummariesForExport().forEach((section) => {
+      const summarySheet = workbook.addWorksheet(`${section.label} PFRA`);
+      summarySheet.columns = [
+        { header: 'Metric', key: 'metric', width: 28 },
+        { header: 'Value', key: 'value', width: 18 },
+      ];
+      summarySheet.addRows([
+        { metric: 'Record Type', value: section.label },
+        { metric: 'Logged PFRAs', value: section.count },
+        { metric: 'Average Score', value: section.avgScore },
+        { metric: 'Batch Completion Rate %', value: section.completionRate },
+      ]);
+
+      const detailSheet = workbook.addWorksheet(`${section.label} Entries`);
+      detailSheet.columns = [
+        { header: 'Member', key: 'member', width: 28 },
+        { header: 'Flight', key: 'flight', width: 12 },
+        { header: 'Date', key: 'date', width: 14 },
+        { header: 'Score', key: 'score', width: 12 },
+        { header: 'Pass', key: 'pass', width: 12 },
+      ];
+      section.entries.forEach((entry) => {
+        detailSheet.addRow({
+          member: entry.memberName,
+          flight: entry.flight,
+          date: entry.assessment.date,
+          score: entry.assessment.overallScore,
+          pass: didPassAssessment(entry.assessment) ? 'Pass' : 'Needs Improvement',
+        });
+      });
+
+      [summarySheet, detailSheet].forEach((sheet) => {
+        sheet.getRow(1).font = { bold: true };
+        sheet.views = [{ state: 'frozen', ySplit: 1 }];
+      });
     });
 
     return workbook.xlsx.writeBuffer();
@@ -518,6 +819,41 @@ export default function AnalyticsScreen() {
       });
     } catch (error) {
       console.error('Export error:', error);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleExportPFRAExcel = async () => {
+    try {
+      setIsExporting(true);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      const buffer = await buildPFRAWorkbook();
+      const filename = `pfra_leadership_summary_${new Date().toISOString().split('T')[0]}.xlsx`;
+
+      if (Platform.OS === 'web') {
+        await downloadWebFile(
+          filename,
+          new Blob([buffer], {
+            type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          })
+        );
+      } else {
+        const base64 = Buffer.from(buffer).toString('base64');
+        const filePath = `${FileSystem.documentDirectory}${filename}`;
+        await FileSystem.writeAsStringAsync(filePath, base64, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(filePath, {
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            dialogTitle: 'Export PFRA Leadership Summary Excel',
+          });
+        }
+      }
+    } catch (error) {
+      console.error('PFRA export error:', error);
     } finally {
       setIsExporting(false);
     }
@@ -564,6 +900,59 @@ export default function AnalyticsScreen() {
     }
   };
 
+  const handleExportPFRAPDF = async () => {
+    try {
+      setIsExporting(true);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      const html = buildPFRAPdfHtml();
+      const filename = `pfra_leadership_summary_${new Date().toISOString().split('T')[0]}.pdf`;
+
+      if (Platform.OS === 'web') {
+        const printWindow = window.open('', '_blank');
+        if (printWindow) {
+          printWindow.document.write(html);
+          printWindow.document.close();
+          printWindow.focus();
+          setTimeout(() => printWindow.print(), 300);
+        }
+      } else {
+        const file = await Print.printToFileAsync({ html, base64: false });
+        const targetPath = `${FileSystem.documentDirectory}${filename}`;
+        await FileSystem.copyAsync({ from: file.uri, to: targetPath });
+
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(targetPath, {
+            mimeType: 'application/pdf',
+            dialogTitle: 'Export PFRA Leadership Summary PDF',
+          });
+        }
+      }
+    } catch (error) {
+      console.error('PFRA export error:', error);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleOpenPFRABatchDetails = async (batch: PFRABatchSummary) => {
+    if (!accessToken) {
+      return;
+    }
+
+    setSelectedPFRABatch(batch);
+    setShowPFRADetailModal(true);
+    setIsLoadingBatchMembers(true);
+    try {
+      const members = await fetchPFRABatchMembers(batch.id, accessToken);
+      setSelectedPFRABatchMembers(members);
+    } catch (error) {
+      console.error('Unable to load PFRA batch members', error);
+      setSelectedPFRABatchMembers([]);
+    } finally {
+      setIsLoadingBatchMembers(false);
+    }
+  };
+
   const toggleOverviewCard = (card: OverviewCardKey) => {
     Haptics.selectionAsync();
     setExpandedOverviewCard((current) => (current === card ? null : card));
@@ -572,13 +961,15 @@ export default function AnalyticsScreen() {
   return (
     <View className="flex-1">
       <LinearGradient
-        colors={['#0A1628', '#001F5C', '#0A1628']}
+        colors={theme.gradient}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
       />
+      <ThemeBackdrop />
 
       <SafeAreaView edges={['top']} className="flex-1">
+        <PageContainer maxWidth={contentMaxWidth}>
         {/* Header */}
         <Animated.View
           entering={FadeInDown.delay(100).springify()}
@@ -597,12 +988,14 @@ export default function AnalyticsScreen() {
             <Text className="text-white text-xl font-bold">Squadron Analytics</Text>
           </View>
         </Animated.View>
+        </PageContainer>
 
         <ScrollView
-          className="flex-1 px-6"
-          contentContainerStyle={{ paddingBottom: 40 }}
+          className="flex-1"
+          contentContainerStyle={{ paddingBottom: 40, alignItems: 'center' }}
           showsVerticalScrollIndicator={false}
         >
+          <PageContainer maxWidth={contentMaxWidth} className="px-6">
           <Animated.View
             entering={FadeInDown.delay(125).springify()}
             className="mt-4"
@@ -714,9 +1107,15 @@ export default function AnalyticsScreen() {
             <View className="mt-2 flex-row items-center justify-between">
               <Text className="text-af-silver text-xs">Members at 5/5</Text>
                 <Text className="text-white font-semibold text-sm">
-                  {analytics.membersMeetingWeeklyTarget}/{analytics.totalMembers} ({analytics.weeklyCompliancePercent}%)
+                  {analytics.membersMeetingWeeklyTarget - analytics.excusedThisWeekCount}/{analytics.weeklyComplianceEligibleMembers} ({analytics.weeklyCompliancePercent}%)
                 </Text>
             </View>
+            {analytics.excusedThisWeekCount > 0 ? (
+              <View className="mt-2 flex-row items-center justify-between">
+                <Text className="text-af-silver text-xs">Excused this week</Text>
+                <Text className="text-white font-semibold text-sm">{analytics.excusedThisWeekCount}</Text>
+              </View>
+            ) : null}
             {expandedOverviewCard === 'members' && (
               <View className="mt-4 pt-4 border-t border-white/10">
                 <Text className="text-white font-semibold mb-3">Squadron Members This Week</Text>
@@ -724,10 +1123,10 @@ export default function AnalyticsScreen() {
                   <View key={member.id} className="flex-row items-center justify-between py-2 border-b border-white/5">
                     <View className="flex-1 pr-3">
                       <Text className="text-white font-medium">{member.displayName}</Text>
-                      <Text className="text-af-silver text-xs">{member.flight} Flight</Text>
+                      <Text className="text-af-silver text-xs">{formatFlightDisplay(member.flight)}</Text>
                     </View>
                     <View className="items-end">
-                      <Text className="text-white text-sm">{member.attendance}/5 attendance</Text>
+                      <Text className="text-white text-sm">{member.isExcused ? 'Excused this week' : `${member.attendance}/5 attendance`}</Text>
                       <Text className="text-af-silver text-xs">
                     {member.workouts} workouts, {member.minutes} min, {member.miles.toFixed(2)} mi
                       </Text>
@@ -911,13 +1310,108 @@ export default function AnalyticsScreen() {
                     <Text className="text-af-gold font-bold">{record.score.toFixed(1)}</Text>
                   </View>
                   <View className="mt-2 flex-row items-center justify-between">
-                    <Text className="text-af-silver text-xs">{record.date}</Text>
+                    <Text className="text-af-silver text-xs">{record.date} • {(record.recordType ?? 'self').toUpperCase()}</Text>
                     <Text className="text-af-silver text-xs">Logged by {record.loggedByName}</Text>
                   </View>
                 </View>
               ))}
             </Animated.View>
           )}
+
+          <Animated.View entering={FadeInDown.delay(268).springify()}>
+            <Pressable
+              onPress={() => {
+                Haptics.selectionAsync();
+                setShowPFRADetailModal(true);
+              }}
+              className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4"
+            >
+              <View className="flex-row items-center justify-between">
+                <Text className="text-white font-semibold text-lg">PFRA Leadership Summary</Text>
+                <Text className="text-af-accent text-xs font-semibold">Open</Text>
+              </View>
+              <Text className="mt-1 text-af-silver text-xs">Use these filters for PFRA analytics only.</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingTop: 12, paddingRight: 8 }}>
+                {getPFRALeadershipFilters().map((value) => (
+                  <Pressable
+                    key={value}
+                    onPress={() => {
+                      Haptics.selectionAsync();
+                      setSelectedPFRARecordType(value);
+                    }}
+                    className={cn(
+                      'mr-2 rounded-full border px-3 py-2',
+                      selectedPFRARecordType === value ? 'border-af-accent bg-af-accent/20' : 'border-white/10 bg-white/5'
+                    )}
+                  >
+                    <Text className={cn('text-xs', selectedPFRARecordType === value ? 'font-semibold text-white' : 'text-af-silver')}>
+                      {formatPFRALabel(value)}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+              <View className="mt-4 flex-row justify-between">
+                <View className="items-center flex-1">
+                  <Text className="text-white font-bold text-xl">{analytics.pfraTotalCount}</Text>
+                  <Text className="text-af-silver text-xs">Logged PFRAs</Text>
+                </View>
+                <View className="w-px bg-white/10" />
+                <View className="items-center flex-1">
+                  <Text className="text-white font-bold text-xl">{analytics.membersWithFA}</Text>
+                  <Text className="text-af-silver text-xs">Members Logged</Text>
+                </View>
+                <View className="w-px bg-white/10" />
+                <View className="items-center flex-1">
+                  <Text className="text-white font-bold text-xl">
+                    {analytics.latestSelectedBatch ? `${Math.round(analytics.latestSelectedBatch.completionRate * 100)}%` : '--'}
+                  </Text>
+                  <Text className="text-af-silver text-xs">Latest Completion</Text>
+                </View>
+              </View>
+              <View className="mt-4 border-t border-white/10 pt-4">
+                <View className="flex-row justify-between">
+                  <View className="items-center flex-1">
+                    <Text className="text-white font-semibold">{analytics.componentAverages.waist.toFixed(1)}</Text>
+                    <Text className="text-af-silver text-xs">Waist Avg</Text>
+                  </View>
+                  <View className="items-center flex-1">
+                    <Text className="text-white font-semibold">{analytics.componentAverages.strength.toFixed(1)}</Text>
+                    <Text className="text-af-silver text-xs">Strength Avg</Text>
+                  </View>
+                  <View className="items-center flex-1">
+                    <Text className="text-white font-semibold">{analytics.componentAverages.core.toFixed(1)}</Text>
+                    <Text className="text-af-silver text-xs">Core Avg</Text>
+                  </View>
+                  <View className="items-center flex-1">
+                    <Text className="text-white font-semibold">{analytics.componentAverages.cardio.toFixed(1)}</Text>
+                    <Text className="text-af-silver text-xs">Cardio Avg</Text>
+                  </View>
+                </View>
+              </View>
+            </Pressable>
+          </Animated.View>
+
+          {analytics.recentPFRABatches.length > 0 ? (
+            <Animated.View entering={FadeInDown.delay(272).springify()} className="mt-4 p-4 bg-white/5 rounded-2xl border border-white/10">
+              <Text className="text-white font-semibold text-lg mb-3">Recent PFRA Batches</Text>
+              {analytics.recentPFRABatches.map((batch) => (
+                <Pressable
+                  key={batch.id}
+                  onPress={() => void handleOpenPFRABatchDetails(batch)}
+                  className="mb-3 rounded-xl border border-white/10 bg-black/10 p-3 last:mb-0"
+                >
+                  <View className="flex-row items-center justify-between">
+                    <Text className="text-white font-semibold">{batch.assessmentDate} • {batch.recordType.toUpperCase()}</Text>
+                    <Text className="text-af-accent text-sm">Details</Text>
+                  </View>
+                  <View className="mt-2 flex-row items-center justify-between">
+                    <Text className="text-af-silver text-xs">{batch.selectedFlights.join(', ')}</Text>
+                    <Text className="text-af-silver text-xs">{batch.completedCount}/{batch.expectedCount} completed</Text>
+                  </View>
+                </Pressable>
+              ))}
+            </Animated.View>
+          ) : null}
 
           {/* Workout Type Breakdown */}
           {analytics.workoutTypeBreakdown.length > 0 && (
@@ -981,7 +1475,209 @@ export default function AnalyticsScreen() {
               </View>
             ))}
           </Animated.View>
+          </PageContainer>
         </ScrollView>
+
+        <Modal visible={showPFRADetailModal} transparent animationType="slide" onRequestClose={() => setShowPFRADetailModal(false)}>
+          <View className="flex-1 justify-end bg-black/80">
+            <ThemeChrome theme={theme} variant="feature" style={{ borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '88%' }}>
+            <View className="p-6 pb-10">
+              <View className="mb-4 flex-row items-start justify-between">
+                <View className="flex-1 pr-4">
+                  <Text style={getThemeHeadingStyle(theme, 22)}>PFRA Leadership Summary</Text>
+                  <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>Detailed PFRA trends, accountability, and exports.</Text>
+                </View>
+                <Pressable onPress={() => setShowPFRADetailModal(false)} className="h-8 w-8 items-center justify-center rounded-full" style={getThemeControlStyle(theme)}>
+                  <X size={18} color={theme.textSecondary} />
+                </Pressable>
+              </View>
+
+              <ScrollView showsVerticalScrollIndicator={false}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingRight: 8 }}>
+                  {getPFRALeadershipFilters().map((value) => (
+                    <Pressable
+                      key={value}
+                      onPress={() => {
+                        Haptics.selectionAsync();
+                        setSelectedPFRARecordType(value);
+                      }}
+                      className='mr-2 rounded-full border px-3 py-2'
+                      style={selectedPFRARecordType === value ? { borderColor: theme.accent, backgroundColor: theme.accentSoft } : getThemeControlStyle(theme)}
+                    >
+                      <Text style={[getThemeBodyStyle(theme, 12, selectedPFRARecordType === value ? theme.textPrimary : theme.textSecondary), { fontWeight: selectedPFRARecordType === value ? '600' : '400' }]}>
+                        {formatPFRALabel(value)}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+
+                <View className="mt-4 flex-row">
+                  <Pressable
+                    onPress={handleExportPFRAPDF}
+                    disabled={isExporting}
+                    className={cn('mr-2 flex-1 flex-row items-center justify-center rounded-xl border p-4', isExporting && 'opacity-50')}
+                    style={{ borderColor: '#A855F788', backgroundColor: 'rgba(168,85,247,0.18)' }}
+                  >
+                    <FileText size={18} color="#A855F7" />
+                    <Text className="ml-2 font-semibold text-purple-300">Save PFRA PDF</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={handleExportPFRAExcel}
+                    disabled={isExporting}
+                    className={cn('ml-2 flex-1 flex-row items-center justify-center rounded-xl border p-4', isExporting && 'opacity-50')}
+                    style={{ borderColor: `${theme.accent}66`, backgroundColor: theme.accentSoft }}
+                  >
+                    <FileSpreadsheet size={18} color={theme.accent} />
+                    <Text className="ml-2 font-semibold" style={{ color: theme.accent }}>Save PFRA Excel</Text>
+                  </Pressable>
+                </View>
+
+                <ThemeChrome theme={theme}>
+                <View className="mt-4 p-4">
+                  <Text className="text-white font-semibold">Current PFRA Snapshot</Text>
+                  <View className="mt-4 flex-row justify-between">
+                    <View className="items-center flex-1">
+                      <Text className="text-xl font-bold text-white">{analytics.pfraTotalCount}</Text>
+                      <Text className="text-xs text-af-silver">Logged</Text>
+                    </View>
+                    <View className="items-center flex-1">
+                      <Text className="text-xl font-bold text-white">{analytics.avgPFRAScore}</Text>
+                      <Text className="text-xs text-af-silver">Avg Score</Text>
+                    </View>
+                    <View className="items-center flex-1">
+                      <Text className="text-xl font-bold text-white">{Math.round(analytics.overallPassRate * 100)}%</Text>
+                      <Text className="text-xs text-af-silver">Overall Pass</Text>
+                    </View>
+                  </View>
+                </View>
+                </ThemeChrome>
+
+                <ThemeChrome theme={theme}>
+                <View className="mt-4 p-4">
+                  <Text className="text-white font-semibold mb-3">Trend Over Time</Text>
+                  <View className="flex-row items-end justify-between h-36">
+                    {analytics.pfraTimeline.map((entry) => {
+                      const heightPercent = analytics.maxPFRAAverage > 0 ? (entry.average / analytics.maxPFRAAverage) * 100 : 0;
+                      return (
+                        <View key={entry.label} className="flex-1 items-center">
+                          <Text className="mb-2 text-[11px] text-af-silver">{entry.average ? entry.average.toFixed(1) : '--'}</Text>
+                          <View className="h-24 w-12 justify-end">
+                            <View
+                              className="w-12 rounded-t-xl border border-af-accent/30 bg-af-accent/80"
+                              style={{ height: `${Math.max(heightPercent, entry.count > 0 ? 12 : 0)}%` }}
+                            />
+                          </View>
+                          <Text className="mt-2 text-xs font-medium text-white">{entry.label}</Text>
+                          <Text className="text-[11px] text-af-silver">{entry.count} entries</Text>
+                        </View>
+                      );
+                    })}
+                  </View>
+                </View>
+                </ThemeChrome>
+
+                <ThemeChrome theme={theme}>
+                <View className="mt-4 p-4">
+                  <Text className="text-white font-semibold mb-3">Pass Rates by Component</Text>
+                  {([
+                    ['Waist', analytics.componentPassRates.waist],
+                    ['Strength', analytics.componentPassRates.strength],
+                    ['Core', analytics.componentPassRates.core],
+                    ['Cardio', analytics.componentPassRates.cardio],
+                  ] as const).map(([label, rate]) => (
+                    <View key={label} className="mb-3 last:mb-0">
+                      <View className="mb-1 flex-row items-center justify-between">
+                        <Text className="text-sm text-white">{label}</Text>
+                        <Text className="text-xs text-af-silver">{Math.round(rate * 100)}%</Text>
+                      </View>
+                      <View className="h-3 overflow-hidden rounded-full bg-white/10">
+                        <View className="h-full rounded-full bg-af-accent" style={{ width: `${Math.round(rate * 100)}%` }} />
+                      </View>
+                    </View>
+                  ))}
+                </View>
+                </ThemeChrome>
+
+                <ThemeChrome theme={theme}>
+                <View className="mt-4 p-4">
+                  <Text className="text-white font-semibold mb-3">Recent PFRA Batches</Text>
+                  {analytics.recentPFRABatches.length === 0 ? (
+                    <Text className="text-sm text-af-silver">No PFRA batches found for this filter yet.</Text>
+                  ) : (
+                    analytics.recentPFRABatches.map((batch) => (
+                      <Pressable
+                        key={batch.id}
+                        onPress={() => void handleOpenPFRABatchDetails(batch)}
+                        className={cn('mb-3 rounded-xl border p-3 last:mb-0', selectedPFRABatch?.id === batch.id ? 'border-af-accent bg-af-accent/10' : 'border-white/10 bg-black/10')}
+                      >
+                        <View className="flex-row items-center justify-between">
+                          <Text className="font-semibold text-white">{batch.assessmentDate} - {batch.recordType.toUpperCase()}</Text>
+                          <Text className="text-xs text-af-accent">{batch.completedCount}/{batch.expectedCount}</Text>
+                        </View>
+                        <Text className="mt-2 text-xs text-af-silver">{batch.selectedFlights.join(', ')} • Saved by {batch.createdByName}</Text>
+                      </Pressable>
+                    ))
+                  )}
+                </View>
+                </ThemeChrome>
+
+                <ThemeChrome theme={theme} variant="feature">
+                <View className="mt-4 p-4">
+                  <View className="flex-row items-center justify-between">
+                    <Text className="text-white font-semibold">PFRA Batch Detail</Text>
+                    {selectedPFRABatch ? (
+                      <Pressable onPress={() => router.push(`/bulk-pfra-entry?batchId=${encodeURIComponent(selectedPFRABatch.id)}`)}>
+                        <Text className="text-xs font-semibold text-af-accent">Edit Batch</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                  {!selectedPFRABatch ? (
+                    <Text className="mt-3 text-sm text-af-silver">Select a recent PFRA batch to view accountability details.</Text>
+                  ) : isLoadingBatchMembers ? (
+                    <View className="mt-4 items-center py-6">
+                      <ActivityIndicator color="#4A90D9" />
+                    </View>
+                  ) : (
+                    <>
+                      <Text className="mt-2 text-sm text-af-silver">
+                        {selectedPFRABatch.assessmentDate} • {selectedPFRABatch.recordType.toUpperCase()} • {selectedPFRABatch.selectedFlights.join(', ')}
+                      </Text>
+                      <View className="mt-4 flex-row flex-wrap">
+                        {([
+                          ['Completed', selectedPFRABatch.counts.completed],
+                          ['Pending', selectedPFRABatch.counts.pending],
+                          ['Absent', selectedPFRABatch.counts.absent],
+                          ['Excused', selectedPFRABatch.counts.excused],
+                          ['Postponed', selectedPFRABatch.counts.postponed],
+                        ] as const).map(([label, count]) => (
+                          <View key={label} className="mb-2 mr-2 rounded-full border border-white/10 bg-white/5 px-3 py-2">
+                            <Text className="text-xs text-white">{label}: <Text className="font-semibold">{count}</Text></Text>
+                          </View>
+                        ))}
+                      </View>
+                      <View className="mt-4">
+                        {selectedPFRABatchMembers.map((member) => (
+                          <View key={member.id} className="mb-2 rounded-xl border border-white/10 bg-black/10 p-3">
+                            <View className="flex-row items-center justify-between">
+                              <Text className="font-semibold text-white">{member.memberName}</Text>
+                              <Text className="text-xs text-af-silver">{member.flight}</Text>
+                            </View>
+                            <View className="mt-2 flex-row items-center justify-between">
+                              <Text className="text-xs text-af-silver">{member.accountabilityStatus.toUpperCase()}</Text>
+                              <Text className="text-xs text-white">{member.overallScore !== null ? member.overallScore.toFixed(1) : '--'}</Text>
+                            </View>
+                          </View>
+                        ))}
+                      </View>
+                    </>
+                  )}
+                </View>
+                </ThemeChrome>
+              </ScrollView>
+            </View>
+            </ThemeChrome>
+          </View>
+        </Modal>
       </SafeAreaView>
     </View>
   );

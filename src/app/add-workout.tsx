@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { View, Text, Pressable, ScrollView, TextInput, Modal, Image, Platform } from 'react-native';
+import { View, Text, Pressable, ScrollView, TextInput, Modal, Image, Platform, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -9,9 +9,13 @@ import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { format } from 'date-fns';
-import { useMemberStore, useAuthStore, getDisplayName, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
+import { useMemberStore, useAuthStore, canManagePTPrograms, getDisplayName, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
-import { createManualWorkoutSubmission, fetchApprovedManualWorkouts, fetchAttendanceSessions, setAttendanceStatus, updateManualWorkoutSubmission, uploadWorkoutProofImage } from '@/lib/supabaseData';
+import { createManualWorkoutSubmission, fetchApprovedManualWorkouts, fetchAttendanceSessions, reviewManualWorkoutSubmission, setAttendanceStatus, updateManualWorkoutSubmission, uploadWorkoutProofImage } from '@/lib/supabaseData';
+import { PageContainer } from '@/components/PageContainer';
+import { ThemeBackdrop } from '@/components/ThemeBackdrop';
+import { ThemeChrome } from '@/components/ThemeChrome';
+import { getThemeBodyStyle, getThemeButtonStyle, getThemeButtonTextStyle, getThemeControlStyle, getThemeHeadingStyle, useAppTheme } from '@/lib/theme';
 
 const getLocalDateString = (date: Date) => format(date, 'yyyy-MM-dd');
 const getWorkoutDisplayTitle = (type: WorkoutType) => {
@@ -30,7 +34,9 @@ const getWorkoutDisplayTitle = (type: WorkoutType) => {
 };
 
 export default function AddWorkoutScreen() {
+  const theme = useAppTheme();
   const router = useRouter();
+  const { width } = useWindowDimensions();
   const params = useLocalSearchParams<{
     mode?: string;
     submissionId?: string;
@@ -49,6 +55,8 @@ export default function AddWorkoutScreen() {
   const syncApprovedManualWorkouts = useMemberStore(s => s.syncApprovedManualWorkouts);
   const syncPTSessions = useMemberStore(s => s.syncPTSessions);
   const isEditing = params.mode === 'edit' && !!params.submissionId;
+  const canAutoApproveOwnWorkout = user ? canManagePTPrograms(user.accountType) : false;
+  const contentMaxWidth = width >= 1440 ? 1120 : width >= 1180 ? 980 : 840;
 
   const [screenshotUri, setScreenshotUri] = useState<string | null>(params.screenshotUri ?? null);
   const [workoutType, setWorkoutType] = useState<WorkoutType>(params.workoutType ?? 'Running');
@@ -170,7 +178,7 @@ export default function AddWorkoutScreen() {
           );
           syncPTSessions(nextSessions);
         } else {
-          await createManualWorkoutSubmission({
+          const submission = await createManualWorkoutSubmission({
             submissionId,
             memberId: user.id,
             memberEmail: user.email,
@@ -187,6 +195,35 @@ export default function AddWorkoutScreen() {
             proofImageData,
             accessToken,
           });
+
+          if (canAutoApproveOwnWorkout) {
+            await reviewManualWorkoutSubmission({
+              submissionId: submission.id,
+              reviewerMemberId: user.id,
+              reviewerName: getDisplayName(user),
+              approved: true,
+              attendanceMarkedBySubmission: true,
+              accessToken,
+            });
+
+            await setAttendanceStatus({
+              date: getLocalDateString(selectedDate),
+              flight: user.flight,
+              squadron: user.squadron,
+              memberId: user.id,
+              createdBy: user.id,
+              isAttending: true,
+              source: 'workout',
+              accessToken,
+            }).catch(() => undefined);
+
+            const [approvedManualWorkouts, nextSessions] = await Promise.all([
+              fetchApprovedManualWorkouts(accessToken, user.squadron).catch(() => []),
+              fetchAttendanceSessions(accessToken).catch(() => []),
+            ]);
+            syncApprovedManualWorkouts(approvedManualWorkouts);
+            syncPTSessions(nextSessions);
+          }
         }
 
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -219,14 +256,10 @@ export default function AddWorkoutScreen() {
 
   return (
     <View className="flex-1">
-      <LinearGradient
-        colors={['#0A1628', '#001F5C', '#0A1628']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
-      />
+      <ThemeBackdrop />
 
-      <SafeAreaView edges={['top']} className="flex-1">
+      <SafeAreaView edges={['top', 'bottom']} className="flex-1">
+        <PageContainer maxWidth={contentMaxWidth}>
         {/* Header */}
         <Animated.View
           entering={FadeInDown.delay(100).springify()}
@@ -237,18 +270,21 @@ export default function AddWorkoutScreen() {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
               router.back();
             }}
-            className="w-10 h-10 bg-white/10 rounded-full items-center justify-center mr-4"
+            className="w-10 h-10 rounded-full items-center justify-center mr-4"
+            style={getThemeControlStyle(theme)}
           >
-            <ChevronLeft size={24} color="#C0C0C0" />
+            <ChevronLeft size={24} color={theme.textSecondary} />
           </Pressable>
-          <Text className="text-white text-xl font-bold">{isEditing ? 'Edit Manual Workout' : 'Add Manual Workout'}</Text>
+          <Text style={getThemeHeadingStyle(theme, 22)}>{isEditing ? 'Edit Manual Workout' : 'Add Manual Workout'}</Text>
         </Animated.View>
+        </PageContainer>
 
         <ScrollView
-          className="flex-1 px-6"
-          contentContainerStyle={{ paddingBottom: 40 }}
+          className="flex-1"
+          contentContainerStyle={{ paddingBottom: 40, alignItems: 'center' }}
           showsVerticalScrollIndicator={false}
         >
+          <PageContainer maxWidth={contentMaxWidth} className="px-6">
           {isEditing ? (
             <Animated.View entering={FadeInDown.delay(125).springify()} className="mt-4 rounded-2xl border border-af-warning/30 bg-af-warning/10 p-4">
               <Text className="text-af-warning font-semibold">Editing requires re-approval</Text>
@@ -257,10 +293,12 @@ export default function AddWorkoutScreen() {
               </Text>
             </Animated.View>
           ) : null}
+          <ThemeChrome theme={theme} variant="feature">
+          <View className="p-4">
           {/* Screenshot Upload - Required */}
           <Animated.View
             entering={FadeInDown.delay(150).springify()}
-            className="mt-4"
+            className={isEditing ? "mt-4" : ""}
           >
             <View className="flex-row items-center mb-2">
               <Text className="text-white/60 text-sm">Workout Proof Image *</Text>
@@ -505,10 +543,8 @@ export default function AddWorkoutScreen() {
                 }
               }}
               disabled={!canSubmit || isSubmitting}
-              className={cn(
-                "py-4 rounded-xl flex-row items-center justify-center",
-                canSubmit && !isSubmitting ? "bg-af-accent" : "bg-white/10"
-              )}
+              className="py-4 rounded-xl flex-row items-center justify-center"
+              style={canSubmit && !isSubmitting ? getThemeButtonStyle(theme, 'accent') : getThemeControlStyle(theme)}
             >
               <Check size={20} color={canSubmit && !isSubmitting ? "white" : "#666666"} />
               <Text className={cn(
@@ -519,16 +555,18 @@ export default function AddWorkoutScreen() {
               </Text>
             </Pressable>
           </Animated.View>
+          </View>
+          </ThemeChrome>
+          </PageContainer>
         </ScrollView>
       </SafeAreaView>
 
       {/* Confirmation Modal for Screenshot Uploads */}
       <Modal visible={showConfirmation} transparent animationType="fade">
         <View className="flex-1 bg-black/80 items-center justify-center p-6">
-          <Animated.View
-            entering={ZoomIn.duration(300)}
-            className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20"
-          >
+          <Animated.View entering={ZoomIn.duration(300)} style={{ width: '100%', maxWidth: 384 }}>
+            <ThemeChrome theme={theme} variant="feature">
+            <View className="p-6">
             <Text className="text-white text-xl font-bold mb-4">{isEditing ? 'Resubmit Manual Workout' : 'Submit Manual Workout'}</Text>
 
             {screenshotUri && (
@@ -582,7 +620,8 @@ export default function AddWorkoutScreen() {
             <View className="flex-row">
               <Pressable
                 onPress={() => setShowConfirmation(false)}
-                className="flex-1 bg-white/10 py-3 rounded-xl mr-2"
+                className="flex-1 py-3 rounded-xl mr-2"
+                style={getThemeControlStyle(theme)}
               >
                 <Text className="text-white text-center font-semibold">Edit</Text>
               </Pressable>
@@ -591,11 +630,14 @@ export default function AddWorkoutScreen() {
                   setShowConfirmation(false);
                   handleSubmit();
                 }}
-                className="flex-1 bg-af-accent py-3 rounded-xl ml-2"
+                className="flex-1 py-3 rounded-xl ml-2"
+                style={getThemeButtonStyle(theme, 'accent')}
               >
-                <Text className="text-white text-center font-semibold">{isEditing ? 'Resubmit for Review' : 'Send for Review'}</Text>
+                <Text style={[getThemeButtonTextStyle(theme, 'accent'), { textAlign: 'center' }]}>{isEditing ? 'Resubmit for Review' : 'Send for Review'}</Text>
               </Pressable>
             </View>
+            </View>
+            </ThemeChrome>
           </Animated.View>
         </View>
       </Modal>

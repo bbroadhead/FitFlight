@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, Pressable, ScrollView, TextInput, Platform, Linking, LayoutChangeEvent, useWindowDimensions, Modal } from 'react-native';
+import { Alert, View, Text, Pressable, RefreshControl, ScrollView, TextInput, Platform, Linking, LayoutChangeEvent, useWindowDimensions, Modal } from 'react-native';
+import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -13,9 +14,14 @@ import Svg, { Circle } from 'react-native-svg';
 import { Buffer } from 'buffer';
 
 import SmartSlider from '@/components/SmartSlider';
+import { ThemeBackdrop } from '@/components/ThemeBackdrop';
+import { ThemeChrome } from '@/components/ThemeChrome';
+import { TopStatusBar } from '@/components/TopStatusBar';
 import { TutorialTarget } from '@/contexts/TutorialTourContext';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
-import { useAuthStore, useMemberStore } from '@/lib/store';
+import { createOfflineActionId, requestRegisteredSync, runOrQueueOfflineMutation } from '@/lib/appSync';
+import { getThemeBodyStyle, getThemeControlStyle, getThemeHeadingStyle, useAppTheme } from '@/lib/theme';
+import { canManagePFRARecords, useAuthStore, useMemberStore } from '@/lib/store';
 import { savePFRARecord } from '@/lib/supabaseData';
 import {
   HAND_RELEASE_PUSHUP_ROWS,
@@ -705,6 +711,7 @@ function AudioPanel({
 
 
 export default function CalculatorScreen() {
+  const theme = useAppTheme();
   const scrollRef = useRef<ScrollView | null>(null);
   const sectionYRef = useRef<Record<'metrics' | 'bodycomp' | 'strength' | 'core' | 'cardio', number>>({ metrics: 0, bodycomp: 0, strength: 0, core: 0, cardio: 0 });
   const [summaryHeight, setSummaryHeight] = useState(0);
@@ -732,8 +739,11 @@ export default function CalculatorScreen() {
   }, []);
 
   const [audioCollapsed, setAudioCollapsed] = useState(true);
+  const router = useRouter();
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [showOfficialSaveModal, setShowOfficialSaveModal] = useState(false);
+  const [showPfraActionsMenu, setShowPfraActionsMenu] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSavingPdf, setIsSavingPdf] = useState(false);
   const [isSavingOfficialPfRA, setIsSavingOfficialPfRA] = useState(false);
   const [pdfFileName, setPdfFileName] = useState('name-date-official');
@@ -743,6 +753,15 @@ export default function CalculatorScreen() {
   const user = useAuthStore((s) => s.user);
   const accessToken = useAuthStore((s) => s.accessToken);
   const currentMember = user ? members.find((member) => member.id === user.id) : null;
+  const canBulkSavePFRA = user ? canManagePFRARecords(user.accountType) : false;
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await requestRegisteredSync('global');
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
   const [savePfRADate, setSavePfRADate] = useState(new Date());
   const [showSavePfRADatePicker, setShowSavePfRADatePicker] = useState(false);
   const [ageYears, setAgeYears] = useState(34);
@@ -1225,15 +1244,31 @@ export default function CalculatorScreen() {
         isPrivate: false,
       };
 
-      if (accessToken) {
-        await savePFRARecord({
-          memberId: user.id,
-          memberEmail: user.email,
-          squadron: user.squadron,
-          assessment,
-          accessToken,
-        });
-      }
+      const saveResult = await runOrQueueOfflineMutation({
+        action: {
+          id: createOfflineActionId('pfra-record'),
+          type: 'save_pfra_record',
+          payload: {
+            memberId: user.id,
+            memberEmail: user.email,
+            squadron: user.squadron,
+            assessment,
+          },
+          createdAt: new Date().toISOString(),
+        },
+        execute: async () => {
+          if (!accessToken) {
+            throw new Error('You must be signed in to save a PFRA record.');
+          }
+          return savePFRARecord({
+            memberId: user.id,
+            memberEmail: user.email,
+            squadron: user.squadron,
+            assessment,
+            accessToken,
+          });
+        },
+      });
 
       updateMember(user.id, {
         fitnessAssessments: [
@@ -1247,6 +1282,10 @@ export default function CalculatorScreen() {
       }
       if ((officialTotal ?? 0) === 100) {
         awardAchievement(user.id, 'perfect_fa');
+      }
+
+      if (saveResult.queued) {
+        Alert.alert('Saved offline', 'Your PFRA record will sync when FitFlight reconnects.');
       }
 
       setShowOfficialSaveModal(false);
@@ -1385,40 +1424,78 @@ export default function CalculatorScreen() {
   return (
     <View className="flex-1">
       <LinearGradient
-        colors={['#0A1628', '#001F5C', '#0A1628']}
+        colors={theme.gradient}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
       />
+      <ThemeBackdrop />
 
       <SafeAreaView edges={['top']} className="flex-1">
+        <TopStatusBar title="Calculator" subtitle={`${user?.squadron ?? 'Hawks'} Squadron`} />
         <ScrollView
           ref={scrollRef}
           className="flex-1"
           contentContainerStyle={{ paddingBottom: 120 }}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} tintColor={theme.accent} />
+          }
           stickyHeaderIndices={isWide ? undefined : [1]}
         >
           <View style={{ width: '100%', maxWidth: contentMaxWidth, alignSelf: 'center' }} className="px-6 pt-4 pb-2">
             <View className="flex-row items-start justify-between gap-4">
               <View className="flex-1">
-                <Text className="text-2xl font-bold text-white">PFRA Calculator</Text>
-                <Text className="mt-1 text-sm text-af-silver">Based on PFRA Scoring Charts released on 1 MAR 2026</Text>
+                <Text style={getThemeHeadingStyle(theme, 28)}>PFRA Calculator</Text>
+                <Text style={[getThemeBodyStyle(theme, 14), { marginTop: 4 }]}>Based on PFRA Scoring Charts released on 1 MAR 2026</Text>
               </View>
               <TutorialTarget id="calculator-actions">
-                <View className="items-end gap-2">
+                <View className="items-end">
                   <Pressable
-                    onPress={() => setShowSaveModal(true)}
-                    className="rounded-xl border border-af-accent/50 bg-af-accent/15 px-4 py-2.5"
+                    onPress={() => setShowPfraActionsMenu((current) => !current)}
+                    className="rounded-xl px-4 py-2.5"
+                    style={getThemeControlStyle(theme, true)}
                   >
-                    <Text className="font-semibold text-af-accent">Export Results</Text>
+                    <View className="flex-row items-center">
+                      <Text className="font-semibold" style={{ color: theme.accent }}>Save/PFRA Actions</Text>
+                      <Ionicons name={showPfraActionsMenu ? 'chevron-up' : 'chevron-down'} size={16} color={theme.accent} style={{ marginLeft: 8 }} />
+                    </View>
                   </Pressable>
-                  <Pressable
-                    onPress={() => setShowOfficialSaveModal(true)}
-                    className="rounded-xl border border-af-gold/50 bg-af-gold/15 px-4 py-2.5"
-                  >
-                    <Text className="font-semibold text-af-gold">Save PFRA to Account</Text>
-                  </Pressable>
+                  {showPfraActionsMenu ? (
+                    <ThemeChrome theme={theme} style={{ marginTop: 8, minWidth: 240 }}>
+                    <View className="p-2">
+                      <Pressable
+                        onPress={() => {
+                          setShowPfraActionsMenu(false);
+                          setShowSaveModal(true);
+                        }}
+                        className="rounded-xl px-4 py-3"
+                      >
+                        <Text className="font-semibold text-af-accent">Export Results</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => {
+                          setShowPfraActionsMenu(false);
+                          setShowOfficialSaveModal(true);
+                        }}
+                        className="rounded-xl px-4 py-3"
+                      >
+                        <Text className="font-semibold text-af-gold">Save PFRA to My Account</Text>
+                      </Pressable>
+                      {canBulkSavePFRA ? (
+                        <Pressable
+                          onPress={() => {
+                            setShowPfraActionsMenu(false);
+                            router.push('/bulk-pfra-entry');
+                          }}
+                          className="rounded-xl px-4 py-3"
+                        >
+                          <Text className="font-semibold text-violet-300">Bulk PFRA Entry</Text>
+                        </Pressable>
+                      ) : null}
+                    </View>
+                    </ThemeChrome>
+                  ) : null}
                 </View>
               </TutorialTarget>
             </View>
@@ -1428,7 +1505,8 @@ export default function CalculatorScreen() {
             <View style={{ width: '100%', maxWidth: contentMaxWidth, alignSelf: 'center' }} className="px-6">
               <View className="mt-2 flex-row items-start" style={{ gap: 16 }}>
                 <View style={{ flex: 1, maxWidth: summaryMaxWidth }}>
-                  <View className="rounded-2xl border border-white/10 bg-[#10233E]/95 px-4 py-4">
+                  <ThemeChrome theme={theme} variant="feature" blurIntensity={60} forceBlur>
+                  <View className="px-4 py-4">
                     <View className="flex-row items-center gap-4">
                       <View className="w-[126px] items-center justify-center">
                         <View style={{ width: circleSize, height: circleSize }} className="items-center justify-center">
@@ -1469,6 +1547,7 @@ export default function CalculatorScreen() {
                       </View>
                     </View>
                   </View>
+                  </ThemeChrome>
                 </View>
 
                 <View style={{ flex: 1 }}>
@@ -1492,7 +1571,8 @@ export default function CalculatorScreen() {
                 style={{ width: '100%', maxWidth: contentMaxWidth, alignSelf: 'center' }}
                 className="px-6 pt-2 pb-2"
               >
-                <View style={{ maxWidth: summaryMaxWidth }} className="rounded-2xl border border-white/10 bg-[#10233E]/95 px-4 py-4">
+                <ThemeChrome theme={theme} variant="feature" blurIntensity={60} forceBlur style={{ maxWidth: summaryMaxWidth }}>
+                <View className="px-4 py-4">
                   <View className="flex-row items-center gap-4">
                     <View className="w-[126px] items-center justify-center">
                       <View style={{ width: circleSize, height: circleSize }} className="items-center justify-center">
@@ -1533,6 +1613,7 @@ export default function CalculatorScreen() {
                     </View>
                   </View>
                 </View>
+                </ThemeChrome>
               </View>,
 
               <View key="mobile-content" style={{ width: '100%', maxWidth: contentMaxWidth, alignSelf: 'center' }} className="px-6">
@@ -1550,41 +1631,48 @@ export default function CalculatorScreen() {
 
       <Modal visible={showSaveModal} transparent animationType="fade">
         <View className="flex-1 items-center justify-center bg-black/75 p-6">
-          <View className="w-full max-w-md rounded-3xl border border-white/15 bg-[#0F1F36] p-6">
-            <Text className="text-xl font-bold text-white">Export Calculator Results</Text>
-            <Text className="mt-2 text-sm text-af-silver">Name your 1-page PDF before it is saved.</Text>
+          <ThemeChrome theme={theme} variant="feature" style={{ width: '100%', maxWidth: 448 }}>
+          <View className="p-6">
+            <Text style={getThemeHeadingStyle(theme, 22)}>Export Calculator Results</Text>
+            <Text style={[getThemeBodyStyle(theme, 14), { marginTop: 8 }]}>Name your 1-page PDF before it is saved.</Text>
             <Text className="mt-1 text-xs text-white/55">Examples: `name-date-official` or `name-date-goal`</Text>
-            <TextInput
-              value={pdfFileName}
-              onChangeText={setPdfFileName}
-              autoCapitalize="none"
-              placeholder="name-date-official"
-              placeholderTextColor="rgba(255,255,255,0.35)"
-              className="mt-4 rounded-xl border border-white/15 bg-white/10 px-4 py-3 text-white"
-            />
+            <View className="mt-4" style={getThemeControlStyle(theme)}>
+              <TextInput
+                value={pdfFileName}
+                onChangeText={setPdfFileName}
+                autoCapitalize="none"
+                placeholder="name-date-official"
+                placeholderTextColor={theme.textMuted}
+                className="rounded-xl px-4 py-3"
+                style={{ color: theme.textPrimary }}
+              />
+            </View>
             <View className="mt-5 flex-row">
               <Pressable
                 onPress={() => !isSavingPdf && setShowSaveModal(false)}
-                className="mr-2 flex-1 rounded-xl border border-white/15 bg-white/10 py-3"
+                className="mr-2 flex-1 rounded-xl py-3"
+                style={getThemeControlStyle(theme)}
               >
                 <Text className="text-center font-semibold text-white">Cancel</Text>
               </Pressable>
               <Pressable
                 onPress={() => void saveCalculatorResults()}
-                className="ml-2 flex-1 rounded-xl bg-af-accent py-3"
+                className="ml-2 flex-1 rounded-xl py-3"
+                style={getThemeControlStyle(theme, true)}
                 disabled={isSavingPdf}
               >
-                <Text className="text-center font-semibold text-white">{isSavingPdf ? 'Exporting...' : 'Export PDF'}</Text>
+                <Text className="text-center font-semibold" style={{ color: theme.accent }}>{isSavingPdf ? 'Exporting...' : 'Export PDF'}</Text>
               </Pressable>
             </View>
           </View>
+          </ThemeChrome>
         </View>
       </Modal>
 
       <Modal visible={showOfficialSaveModal} transparent animationType="fade">
         <View className="flex-1 items-center justify-center bg-black/75 p-6">
           <View className="w-full max-w-md rounded-3xl border border-white/15 bg-[#0F1F36] p-6">
-            <Text className="text-xl font-bold text-white">Save PFRA to Account</Text>
+            <Text className="text-xl font-bold text-white">Save PFRA to My Account</Text>
             <Text className="mt-3 text-sm leading-6 text-af-silver">
               This saves the current calculator state to your FitFlight account as a recorded PFRA result for your own tracking.
             </Text>
@@ -1628,19 +1716,32 @@ export default function CalculatorScreen() {
                     >
                       <Text className="text-white">{savePfRADate.toLocaleDateString()}</Text>
                     </Pressable>
-                    {showSavePfRADatePicker ? (
-                      <DateTimePicker
-                        value={savePfRADate}
-                        mode="date"
-                        maximumDate={new Date()}
-                        onChange={(_, nextDate) => {
-                          setShowSavePfRADatePicker(false);
-                          if (nextDate && nextDate <= new Date()) {
-                            setSavePfRADate(nextDate);
-                          }
-                        }}
-                      />
-                    ) : null}
+                    <Modal visible={showSavePfRADatePicker} transparent animationType="fade" onRequestClose={() => setShowSavePfRADatePicker(false)}>
+                      <View className="flex-1 items-center justify-center bg-black/70 p-6">
+                        <View className="w-full max-w-sm rounded-3xl border border-white/15 bg-[#0F1F36] p-5">
+                          <Text className="text-lg font-bold text-white">Choose PFRA Date</Text>
+                          <View className="mt-4 self-center">
+                            <DateTimePicker
+                              value={savePfRADate}
+                              mode="date"
+                              maximumDate={new Date()}
+                              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                              onChange={(_, nextDate) => {
+                                if (nextDate && nextDate <= new Date()) {
+                                  setSavePfRADate(nextDate);
+                                }
+                              }}
+                            />
+                          </View>
+                          <Pressable
+                            onPress={() => setShowSavePfRADatePicker(false)}
+                            className="mt-4 rounded-xl bg-af-accent px-4 py-3"
+                          >
+                            <Text className="text-center font-semibold text-white">Done</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    </Modal>
                   </>
                 )}
               </View>

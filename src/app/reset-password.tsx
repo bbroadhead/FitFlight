@@ -6,13 +6,17 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Lock, CheckCircle2, AlertCircle } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
+import { ThemeBackdrop } from '@/components/ThemeBackdrop';
+import { ThemeChrome } from '@/components/ThemeChrome';
 import { clearUrlHashSession, readSessionFromUrlHash, updatePassword } from '@/lib/supabaseAuth';
 import { useAuthStore, useMemberStore } from '@/lib/store';
 import { updateRosterPasswordStatus } from '@/lib/supabaseData';
+import { getThemeBodyStyle, getThemeButtonStyle, getThemeButtonTextStyle, getThemeControlStyle, getThemeHeadingStyle, useAppTheme } from '@/lib/theme';
 
 const DEMO_ACCOUNT_EMAIL = 'fitflight@us.af.mil';
 
 export default function ResetPasswordScreen() {
+  const theme = useAppTheme();
   const router = useRouter();
   const params = useLocalSearchParams<{ mode?: string }>();
   const authUser = useAuthStore((state) => state.user);
@@ -140,13 +144,8 @@ export default function ResetPasswordScreen() {
   };
 
   return (
-    <View className="flex-1">
-      <LinearGradient
-        colors={['#0A1628', '#00308F', '#1E4FAD']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
-      />
+    <View className="flex-1" style={{ backgroundColor: theme.background }}>
+      <ThemeBackdrop />
 
       <SafeAreaView className="flex-1">
         <KeyboardAvoidingView
@@ -159,16 +158,15 @@ export default function ResetPasswordScreen() {
             showsVerticalScrollIndicator={false}
           >
             <Animated.View entering={FadeInDown.delay(100).springify()} className="items-center mb-8">
-              <Text className="text-3xl font-bold text-white">Reset Password</Text>
-              <Text className="text-af-silver text-base mt-2 text-center">
+              <Text style={getThemeHeadingStyle(theme, 30)}>Reset Password</Text>
+              <Text style={[getThemeBodyStyle(theme, 16), { marginTop: 8, textAlign: 'center' }]}>
                 Set a new password for your FitFlight account.
               </Text>
             </Animated.View>
 
-            <Animated.View
-              entering={FadeInUp.delay(200).springify()}
-              className="bg-white/10 rounded-3xl p-6 border border-white/20"
-            >
+            <Animated.View entering={FadeInUp.delay(200).springify()}>
+            <ThemeChrome theme={theme} variant="feature">
+            <View className="p-6">
               {error ? (
                 <View className="flex-row items-center bg-red-500/20 border border-red-500/50 rounded-xl px-4 py-3 mb-4">
                   <AlertCircle size={18} color="#EF4444" />
@@ -184,57 +182,64 @@ export default function ResetPasswordScreen() {
               ) : null}
 
               <View className="mb-4">
-                <Text className="text-white/60 text-sm mb-2 ml-1">New Password</Text>
-                <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10">
-                  <Lock size={20} color="#C0C0C0" />
+                <Text style={[getThemeBodyStyle(theme, 14, theme.textMuted), { marginBottom: 8, marginLeft: 4 }]}>New Password</Text>
+                <View className="flex-row items-center px-4 py-3" style={getThemeControlStyle(theme)}>
+                  <Lock size={20} color={theme.textSecondary} />
                   <TextInput
                     placeholder="Enter new password"
-                    placeholderTextColor="#ffffff40"
+                    placeholderTextColor={theme.textMuted}
                     value={password}
                     onChangeText={setPassword}
                     secureTextEntry
-                    className="flex-1 ml-3 text-white text-base"
+                    className="flex-1 ml-3 text-base"
+                    style={{ color: theme.textPrimary }}
                   />
                 </View>
               </View>
 
               <View className="mb-6">
-                <Text className="text-white/60 text-sm mb-2 ml-1">Confirm Password</Text>
-                <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10">
-                  <Lock size={20} color="#C0C0C0" />
+                <Text style={[getThemeBodyStyle(theme, 14, theme.textMuted), { marginBottom: 8, marginLeft: 4 }]}>Confirm Password</Text>
+                <View className="flex-row items-center px-4 py-3" style={getThemeControlStyle(theme)}>
+                  <Lock size={20} color={theme.textSecondary} />
                   <TextInput
                     placeholder="Confirm new password"
-                    placeholderTextColor="#ffffff40"
+                    placeholderTextColor={theme.textMuted}
                     value={confirmPassword}
                     onChangeText={setConfirmPassword}
                     secureTextEntry
-                    className="flex-1 ml-3 text-white text-base"
+                    className="flex-1 ml-3 text-base"
+                    style={{ color: theme.textPrimary }}
                   />
                 </View>
               </View>
 
               <Pressable
                 onPress={handleUpdatePassword}
-                className="bg-af-accent py-4 rounded-xl items-center justify-center active:opacity-80 mb-3"
+                className="py-4 items-center justify-center active:opacity-80 mb-3"
+                style={getThemeButtonStyle(theme, 'accent')}
               >
-                <Text className="text-white font-bold text-lg">Update Password</Text>
+                <Text style={getThemeButtonTextStyle(theme, 'accent')}>Update Password</Text>
               </Pressable>
 
               {isFirstLoginPasswordChange ? (
                 <Pressable
                   onPress={handleContinueToFitFlight}
-                  className="bg-white/10 py-4 rounded-xl items-center justify-center active:opacity-80"
+                  className="py-4 items-center justify-center active:opacity-80"
+                  style={getThemeButtonStyle(theme, 'secondary')}
                 >
-                  <Text className="text-white font-semibold">Continue to FitFlight</Text>
+                  <Text style={getThemeButtonTextStyle(theme, 'secondary')}>Continue to FitFlight</Text>
                 </Pressable>
               ) : (
                 <Pressable
                   onPress={() => router.replace('/login')}
-                  className="bg-white/10 py-4 rounded-xl items-center justify-center active:opacity-80"
+                  className="py-4 items-center justify-center active:opacity-80"
+                  style={getThemeButtonStyle(theme, 'secondary')}
                 >
-                  <Text className="text-white font-semibold">Back to Sign In</Text>
+                  <Text style={getThemeButtonTextStyle(theme, 'secondary')}>Back to Sign In</Text>
                 </Pressable>
               )}
+            </View>
+            </ThemeChrome>
             </Animated.View>
           </ScrollView>
         </KeyboardAvoidingView>

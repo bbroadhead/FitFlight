@@ -7,14 +7,16 @@ import { useRouter, Redirect } from 'expo-router';
 import { Shield, User, Mail, Lock, ChevronRight, Users, AlertCircle, Building2, Eye, EyeOff } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import { useAuthStore, useMemberStore, type AccountType, type Flight, type Member, type Squadron, type User as UserType, getDisplayName, SQUADRONS } from '@/lib/store';
+import { ThemeChrome } from '@/components/ThemeChrome';
+import { ThemeBackdrop } from '@/components/ThemeBackdrop';
+import { useAuthStore, useMemberStore, type AccountType, type Flight, type Member, type Squadron, type User as UserType, RANK_GROUPS, getDisplayName, SQUADRONS } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
+import { getThemeBodyStyle, getThemeButtonStyle, getThemeButtonTextStyle, getThemeCardStyle, getThemeControlStyle, getThemeHeadingStyle, getThemeInputContainerStyle, useAppTheme } from '@/lib/theme';
 import { clearUrlHashSession, getUserForAccessToken, readSessionFromUrlHash, requestPasswordReset, signInWithPassword, signUpWithPassword } from '@/lib/supabaseAuth';
 import { createRosterMember, ensureMemberRole, fetchRoleForEmail, fetchRosterMembers, sendAppNotification, updateRosterMember } from '@/lib/supabaseData';
 
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
-const RANKS = ['AB', 'Amn', 'A1C', 'SrA', 'SSgt', 'TSgt', 'MSgt', 'SMSgt', 'CMSgt'];
 const EMAIL_RATE_LIMIT_MESSAGE = "The server's hourly email limit has been reached. Please try again in 1 hour.";
 const DEMO_ACCOUNT_EMAIL = 'fitflight@us.af.mil';
 const DEMO_ACCOUNT_NAME = { firstName: 'Ima', lastName: 'Demo' };
@@ -185,6 +187,7 @@ async function sendPtlRequestNotifications(params: {
 }
 
 export default function LoginScreen() {
+  const theme = useAppTheme();
   const router = useRouter();
   const login = useAuthStore(s => s.login);
   const setSessionTokens = useAuthStore(s => s.setSessionTokens);
@@ -765,8 +768,8 @@ export default function LoginScreen() {
   // Show loading while checking auth
   if (!hasCheckedAuth) {
     return (
-      <View className="flex-1 bg-af-navy items-center justify-center">
-        <ActivityIndicator size="large" color="#4A90D9" />
+      <View className="flex-1 items-center justify-center" style={{ backgroundColor: theme.background }}>
+        <ActivityIndicator size="large" color={theme.accent} />
       </View>
     );
   }
@@ -774,11 +777,12 @@ export default function LoginScreen() {
   return (
     <View className="flex-1">
       <LinearGradient
-        colors={['#0A1628', '#00308F', '#1E4FAD']}
+        colors={theme.gradient}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
       />
+      <ThemeBackdrop />
 
       <SafeAreaView className="flex-1">
         <KeyboardAvoidingView
@@ -795,55 +799,70 @@ export default function LoginScreen() {
               entering={isStandaloneWeb ? undefined : FadeInDown.delay(100).springify()}
               className="items-center mb-8"
             >
-              <View className="w-20 h-20 bg-white/10 rounded-full items-center justify-center mb-4 border border-white/20 overflow-hidden">
+              <View
+                className="w-20 h-20 items-center justify-center mb-4 overflow-hidden"
+                style={{
+                  ...getThemeCardStyle(theme, 'feature'),
+                  width: 80,
+                  height: 80,
+                  borderRadius: theme.id === 'pixel' ? 12 : 40,
+                }}
+              >
                 <Image
                   source={require('../../assets/images/TotalFlight_Icon_Resized.png')}
                   style={{ width: '74%', height: '74%' }}
                   resizeMode="contain"
                 />
               </View>
-              <Text className="text-3xl font-bold text-white">FitFlight</Text>
-              <Text className="text-af-silver text-base mt-1">Squadron PT Tracker and Fitness Tool</Text>
+              <Text style={getThemeHeadingStyle(theme, 32)}>FitFlight</Text>
+              <Text style={getThemeBodyStyle(theme, 16)} className="mt-1 text-center">Squadron PT Tracker and Fitness Tool</Text>
             </Animated.View>
 
             {/* Form Card */}
             <Animated.View
               entering={isStandaloneWeb ? undefined : FadeInUp.delay(200).springify()}
-              className="bg-white/10 rounded-3xl p-6 border border-white/20"
             >
+              <ThemeChrome theme={theme} variant="feature">
+              <View className="p-6">
               {/* Toggle Login/Sign Up */}
-              <View className="flex-row bg-white/10 rounded-2xl p-1 mb-6">
+              <View className="flex-row p-1 mb-6" style={getThemeControlStyle(theme)}>
                 <Pressable
                   onPress={() => { setIsSignUp(false); setError(''); Haptics.selectionAsync(); }}
                   className={cn(
                     "flex-1 py-3 rounded-xl",
-                    !isSignUp && "bg-af-blue"
+                    !isSignUp && ""
                   )}
+                  style={!isSignUp ? getThemeButtonStyle(theme, 'accent') : undefined}
                 >
-                  <Text className={cn(
-                    "text-center font-semibold",
-                    !isSignUp ? "text-white" : "text-white/60"
-                  )}>Sign In</Text>
+                  <Text
+                    className="text-center"
+                    style={!isSignUp ? getThemeButtonTextStyle(theme, 'accent') : getThemeBodyStyle(theme, 15, theme.textSecondary)}
+                  >
+                    Sign In
+                  </Text>
                 </Pressable>
                 <Pressable
                   onPress={() => { setIsSignUp(true); setError(''); Haptics.selectionAsync(); }}
                   className={cn(
                     "flex-1 py-3 rounded-xl",
-                    isSignUp && "bg-af-blue"
+                    isSignUp && ""
                   )}
+                  style={isSignUp ? getThemeButtonStyle(theme, 'accent') : undefined}
                 >
-                  <Text className={cn(
-                    "text-center font-semibold",
-                    isSignUp ? "text-white" : "text-white/60"
-                  )}>Sign Up</Text>
+                  <Text
+                    className="text-center"
+                    style={isSignUp ? getThemeButtonTextStyle(theme, 'accent') : getThemeBodyStyle(theme, 15, theme.textSecondary)}
+                  >
+                    Sign Up
+                  </Text>
                 </Pressable>
               </View>
 
               {/* Error Message */}
               {error ? (
-                <View className="flex-row items-center bg-red-500/20 border border-red-500/50 rounded-xl px-4 py-3 mb-4">
+                <View className="flex-row items-center rounded-xl px-4 py-3 mb-4" style={{ backgroundColor: 'rgba(239,68,68,0.16)', borderWidth: theme.id === 'pixel' ? 2 : 1, borderColor: 'rgba(239,68,68,0.5)' }}>
                   <AlertCircle size={18} color="#EF4444" />
-                  <Text className="text-red-400 ml-2 flex-1">{error}</Text>
+                  <Text className="ml-2 flex-1" style={getThemeBodyStyle(theme, 14, '#FCA5A5')}>{error}</Text>
                 </View>
               ) : null}
 
@@ -857,7 +876,7 @@ export default function LoginScreen() {
                     }}
                     color={stayLoggedIn ? '#4A90D9' : undefined}
                   />
-                  <Text className="text-white/80 ml-3">Stay logged in</Text>
+                  <Text className="ml-3" style={getThemeBodyStyle(theme, 14, theme.textPrimary)}>Stay logged in</Text>
                 </View>
               </View>
 
@@ -865,59 +884,64 @@ export default function LoginScreen() {
                 <>
                   {/* First Name Input */}
                   <View className="mb-4">
-                    <Text className="text-white/60 text-sm mb-2 ml-1">First Name</Text>
-                    <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10">
-                      <User size={20} color="#C0C0C0" />
-                      <TextInput
-                        placeholder="First Name"
-                        placeholderTextColor="#ffffff40"
-                        value={firstName}
-                        onChangeText={setFirstName}
-                        className="flex-1 ml-3 text-white text-base"
-                      />
+                    <Text style={getThemeBodyStyle(theme, 13, theme.textSecondary)} className="mb-2 ml-1">First Name</Text>
+                    <View className="flex-row items-center px-4 py-3" style={getThemeInputContainerStyle(theme)}>
+                      <User size={20} color={theme.textSecondary} />
+                        <TextInput
+                          placeholder="First Name"
+                          placeholderTextColor="#ffffff40"
+                          value={firstName}
+                          onChangeText={setFirstName}
+                          onSubmitEditing={handleSubmit}
+                          className="flex-1 ml-3 text-white text-base"
+                        />
                     </View>
                   </View>
 
                   {/* Last Name Input */}
                   <View className="mb-4">
-                    <Text className="text-white/60 text-sm mb-2 ml-1">Last Name</Text>
-                    <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10">
-                      <User size={20} color="#C0C0C0" />
-                      <TextInput
-                        placeholder="Last Name"
-                        placeholderTextColor="#ffffff40"
-                        value={lastName}
-                        onChangeText={setLastName}
-                        className="flex-1 ml-3 text-white text-base"
-                      />
+                    <Text style={getThemeBodyStyle(theme, 13, theme.textSecondary)} className="mb-2 ml-1">Last Name</Text>
+                    <View className="flex-row items-center px-4 py-3" style={getThemeInputContainerStyle(theme)}>
+                      <User size={20} color={theme.textSecondary} />
+                        <TextInput
+                          placeholder="Last Name"
+                          placeholderTextColor="#ffffff40"
+                          value={lastName}
+                          onChangeText={setLastName}
+                          onSubmitEditing={handleSubmit}
+                          className="flex-1 ml-3 text-white text-base"
+                        />
                     </View>
                   </View>
 
                   {/* Rank Selection */}
                   <View className="mb-4">
-                    <Text className="text-white/60 text-sm mb-2 ml-1">Rank</Text>
+                    <Text style={getThemeBodyStyle(theme, 13, theme.textSecondary)} className="mb-2 ml-1">Rank</Text>
                     <ScrollView
                       horizontal
                       showsHorizontalScrollIndicator={false}
                       style={{ flexGrow: 0 }}
                     >
-                      <View className="flex-row space-x-2">
-                        {RANKS.map((rank) => (
-                          <Pressable
-                            key={rank}
-                            onPress={() => { setSelectedRank(rank); Haptics.selectionAsync(); }}
-                            className={cn(
-                              "px-4 py-2 rounded-lg border mr-2",
-                              selectedRank === rank
-                                ? "bg-af-accent border-af-accent"
-                                : "bg-white/5 border-white/10"
-                            )}
-                          >
-                            <Text className={cn(
-                              "text-sm font-medium",
-                              selectedRank === rank ? "text-white" : "text-white/70"
-                            )}>{rank}</Text>
-                          </Pressable>
+                      <View>
+                        {RANK_GROUPS.map((group, groupIndex) => (
+                          <View key={group.label} className={groupIndex > 0 ? 'mt-3' : ''}>
+                            <Text style={getThemeBodyStyle(theme, 11, theme.textMuted)} className="uppercase mb-2">{group.label}</Text>
+                            <View className="flex-row flex-wrap">
+                              {group.ranks.map((rank) => (
+                                <Pressable
+                                  key={rank}
+                                  onPress={() => { setSelectedRank(rank); Haptics.selectionAsync(); }}
+                                  className={cn(
+                                    "px-4 py-2 rounded-lg border mr-2 mb-2",
+                                    selectedRank === rank ? "" : ""
+                                  )}
+                                  style={selectedRank === rank ? getThemeButtonStyle(theme, 'accent') : getThemeControlStyle(theme)}
+                                >
+                                  <Text style={selectedRank === rank ? getThemeButtonTextStyle(theme, 'accent') : getThemeBodyStyle(theme, 13, theme.textPrimary)}>{rank}</Text>
+                                </Pressable>
+                              ))}
+                            </View>
+                          </View>
                         ))}
                       </View>
                     </ScrollView>
@@ -925,7 +949,7 @@ export default function LoginScreen() {
 
                   {/* Flight Selection */}
                   <View className="mb-4">
-                    <Text className="text-white/60 text-sm mb-2 ml-1">Flight</Text>
+                    <Text style={getThemeBodyStyle(theme, 13, theme.textSecondary)} className="mb-2 ml-1">Flight</Text>
                     <ScrollView
                       horizontal
                       showsHorizontalScrollIndicator={false}
@@ -938,15 +962,11 @@ export default function LoginScreen() {
                             onPress={() => { setSelectedFlight(flight); Haptics.selectionAsync(); }}
                             className={cn(
                               "px-4 py-2 rounded-lg border mr-2",
-                              selectedFlight === flight
-                                ? "bg-af-accent border-af-accent"
-                                : "bg-white/5 border-white/10"
+                              selectedFlight === flight ? "" : ""
                             )}
+                            style={selectedFlight === flight ? getThemeButtonStyle(theme, 'accent') : getThemeControlStyle(theme)}
                           >
-                            <Text className={cn(
-                              "text-sm font-medium",
-                              selectedFlight === flight ? "text-white" : "text-white/70"
-                            )}>{flight}</Text>
+                            <Text style={selectedFlight === flight ? getThemeButtonTextStyle(theme, 'accent') : getThemeBodyStyle(theme, 13, theme.textPrimary)}>{flight}</Text>
                           </Pressable>
                         ))}
                       </View>
@@ -955,9 +975,9 @@ export default function LoginScreen() {
 
                   {/* Squadron Selection */}
                   <View className="mb-4">
-                    <Text className="text-white/60 text-sm mb-2 ml-1">Squadron</Text>
-                    <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10">
-                      <Building2 size={20} color="#C0C0C0" />
+                    <Text style={getThemeBodyStyle(theme, 13, theme.textSecondary)} className="mb-2 ml-1">Squadron</Text>
+                    <View className="flex-row items-center px-4 py-3" style={getThemeInputContainerStyle(theme)}>
+                      <Building2 size={20} color={theme.textSecondary} />
                       <View className="flex-1 ml-3">
                         {SQUADRONS.map((squadron) => (
                           <Pressable
@@ -970,7 +990,7 @@ export default function LoginScreen() {
                           >
                             <Text className={cn(
                               "font-medium",
-                              selectedSquadron === squadron ? "text-white" : "text-white/70"
+                              selectedSquadron === squadron ? "text-white" : ""
                             )}>{squadron}</Text>
                           </Pressable>
                         ))}
@@ -993,7 +1013,7 @@ export default function LoginScreen() {
                           "font-medium",
                           wantsPTL ? "text-af-gold" : "text-white/70"
                         )}>Request PFL Status</Text>
-                        <Text className="text-white/40 text-xs">Requires approval from Owner/UFPM</Text>
+                        <Text style={getThemeBodyStyle(theme, 12, theme.textMuted)}>Requires approval from Owner/UFPM</Text>
                       </View>
                     </View>
                     <View className={cn(
@@ -1010,9 +1030,9 @@ export default function LoginScreen() {
 
               {/* Email Input */}
               <View className="mb-4">
-                <Text className="text-white/60 text-sm mb-2 ml-1">Email</Text>
-                <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10">
-                  <Mail size={20} color="#C0C0C0" />
+                <Text style={getThemeBodyStyle(theme, 13, theme.textSecondary)} className="mb-2 ml-1">Email</Text>
+                <View className="flex-row items-center px-4 py-3" style={getThemeInputContainerStyle(theme)}>
+                  <Mail size={20} color={theme.textSecondary} />
                   <TextInput
                     placeholder="you@us.af.mil"
                     placeholderTextColor="#ffffff40"
@@ -1020,25 +1040,27 @@ export default function LoginScreen() {
                     onChangeText={setEmail}
                     keyboardType="email-address"
                     autoCapitalize="none"
+                    onSubmitEditing={handleSubmit}
                     className="flex-1 ml-3 text-white text-base"
                   />
                 </View>
                 {isSignUp && (
-                  <Text className="text-white/40 text-xs mt-1 ml-1">Must be a @us.af.mil email</Text>
+                  <Text style={getThemeBodyStyle(theme, 12, theme.textMuted)} className="mt-1 ml-1">Must be a @us.af.mil email</Text>
                 )}
               </View>
 
               {/* Password Input */}
               <View className="mb-6">
-                <Text className="text-white/60 text-sm mb-2 ml-1">Password</Text>
-                <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10">
-                  <Lock size={20} color="#C0C0C0" />
+                <Text style={getThemeBodyStyle(theme, 13, theme.textSecondary)} className="mb-2 ml-1">Password</Text>
+                <View className="flex-row items-center px-4 py-3" style={getThemeInputContainerStyle(theme)}>
+                  <Lock size={20} color={theme.textSecondary} />
                   <TextInput
                     placeholder="••••••••"
                     placeholderTextColor="#ffffff40"
                     value={password}
                     onChangeText={setPassword}
                     secureTextEntry={!showPassword}
+                    onSubmitEditing={handleSubmit}
                     className="flex-1 ml-3 text-white text-base"
                   />
                   <Pressable
@@ -1047,9 +1069,10 @@ export default function LoginScreen() {
                       setShowPassword((current) => !current);
                     }}
                     hitSlop={10}
-                    className="ml-2 h-8 w-8 items-center justify-center rounded-full bg-white/5"
+                    className="ml-2 h-8 w-8 items-center justify-center rounded-full"
+                    style={getThemeControlStyle(theme)}
                   >
-                    {showPassword ? <EyeOff size={18} color="#C0C0C0" /> : <Eye size={18} color="#C0C0C0" />}
+                    {showPassword ? <EyeOff size={18} color={theme.textSecondary} /> : <Eye size={18} color={theme.textSecondary} />}
                   </Pressable>
                 </View>
               </View>
@@ -1057,12 +1080,13 @@ export default function LoginScreen() {
               {/* Submit Button */}
               <Pressable
                 onPress={handleSubmit}
-                className="bg-af-accent py-4 rounded-xl flex-row items-center justify-center active:opacity-80"
+                className="py-4 flex-row items-center justify-center active:opacity-80"
+                style={getThemeButtonStyle(theme, 'accent')}
               >
-                <Text className="text-white font-bold text-lg mr-2">
+                <Text style={{ ...getThemeButtonTextStyle(theme, 'accent'), fontSize: 18, marginRight: 8 }}>
                   {isSignUp ? 'Create Account' : 'Sign In'}
                 </Text>
-                <ChevronRight size={20} color="white" />
+                <ChevronRight size={20} color={theme.id === 'pixel' ? theme.textPrimary : '#08111B'} />
               </Pressable>
 
               {!isSignUp ? (
@@ -1076,9 +1100,11 @@ export default function LoginScreen() {
                   }}
                   className="mt-4 self-center"
                 >
-                  <Text className="text-af-silver font-medium">Forgot Password?</Text>
+                  <Text style={getThemeBodyStyle(theme, 14, theme.accent)} className="font-medium">Forgot Password?</Text>
                 </Pressable>
               ) : null}
+              </View>
+              </ThemeChrome>
             </Animated.View>
           </ScrollView>
         </KeyboardAvoidingView>
@@ -1086,30 +1112,34 @@ export default function LoginScreen() {
 
       <Modal visible={showVerificationModal} transparent animationType="fade">
         <View className="flex-1 bg-black/80 items-center justify-center p-6">
-          <View className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20">
-            <Text className="text-white text-xl font-bold mb-4">Verification Email Sent</Text>
-            <Text className="text-af-silver mb-6">
+          <ThemeChrome theme={theme} variant="feature">
+          <View className="p-6 w-full max-w-sm">
+            <Text style={getThemeHeadingStyle(theme, 22)} className="mb-4">Verification Email Sent</Text>
+            <Text style={getThemeBodyStyle(theme, 14)} className="mb-6">
               We sent a verification email to {email.toLowerCase()}. Open that email, use the confirmation link, and you will be returned to FitFlight with access to the app.
             </Text>
             <Pressable
               onPress={() => setShowVerificationModal(false)}
-              className="bg-af-accent py-3 rounded-xl"
+              className="py-3"
+              style={getThemeButtonStyle(theme, 'accent')}
             >
-              <Text className="text-white text-center font-semibold">OK</Text>
+              <Text className="text-center" style={getThemeButtonTextStyle(theme, 'accent')}>OK</Text>
             </Pressable>
           </View>
+          </ThemeChrome>
         </View>
       </Modal>
 
       <Modal visible={showForgotPasswordModal} transparent animationType="fade">
         <View className="flex-1 bg-black/80 items-center justify-center p-6">
-          <View className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20">
-            <Text className="text-white text-xl font-bold mb-4">Reset Password</Text>
-            <Text className="text-af-silver mb-4">
+          <ThemeChrome theme={theme} variant="feature">
+          <View className="p-6 w-full max-w-sm">
+            <Text style={getThemeHeadingStyle(theme, 22)} className="mb-4">Reset Password</Text>
+            <Text style={getThemeBodyStyle(theme, 14)} className="mb-4">
               Enter your email address and we will send you a link to reset your password.
             </Text>
-            <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10 mb-4">
-              <Mail size={20} color="#C0C0C0" />
+            <View className="flex-row items-center px-4 py-3 mb-4" style={getThemeInputContainerStyle(theme)}>
+              <Mail size={20} color={theme.textSecondary} />
               <TextInput
                 placeholder="you@us.af.mil"
                 placeholderTextColor="#ffffff40"
@@ -1122,7 +1152,7 @@ export default function LoginScreen() {
             </View>
             {resetMessage ? (
               <View className="bg-emerald-500/20 border border-emerald-400/40 rounded-xl px-4 py-3 mb-4">
-                <Text className="text-emerald-200">{resetMessage}</Text>
+                <Text style={getThemeBodyStyle(theme, 14, '#D1FAE5')}>{resetMessage}</Text>
               </View>
             ) : null}
             <View className="flex-row">
@@ -1132,18 +1162,21 @@ export default function LoginScreen() {
                   setResetMessage('');
                   setError('');
                 }}
-                className="flex-1 bg-white/10 py-3 rounded-xl mr-2"
+                className="flex-1 py-3 mr-2"
+                style={getThemeButtonStyle(theme, 'secondary')}
               >
-                <Text className="text-white text-center font-semibold">Cancel</Text>
+                <Text className="text-center" style={getThemeButtonTextStyle(theme, 'secondary')}>Cancel</Text>
               </Pressable>
               <Pressable
                 onPress={handleForgotPassword}
-                className="flex-1 bg-af-accent py-3 rounded-xl ml-2"
+                className="flex-1 py-3 ml-2"
+                style={getThemeButtonStyle(theme, 'accent')}
               >
-                <Text className="text-white text-center font-semibold">Send Link</Text>
+                <Text className="text-center" style={getThemeButtonTextStyle(theme, 'accent')}>Send Link</Text>
               </Pressable>
             </View>
           </View>
+          </ThemeChrome>
         </View>
       </Modal>
     </View>

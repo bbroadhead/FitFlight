@@ -8,6 +8,9 @@ import { ShieldAlert, QrCode, LogIn } from 'lucide-react-native';
 import { useAuthStore, useMemberStore, type AccountType, type Flight, type Member, type Squadron, type User as UserType } from '@/lib/store';
 import { ensureMemberRole, fetchRoleForEmail, fetchRosterMembers } from '@/lib/supabaseData';
 import { getUserForAccessToken } from '@/lib/supabaseAuth';
+import { ThemeBackdrop } from '@/components/ThemeBackdrop';
+import { ThemeChrome } from '@/components/ThemeChrome';
+import { getThemeBodyStyle, getThemeButtonStyle, getThemeButtonTextStyle, getThemeHeadingStyle, useAppTheme } from '@/lib/theme';
 
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '') ?? '';
 const DEMO_ACCOUNT_EMAIL = 'fitflight@us.af.mil';
@@ -82,9 +85,12 @@ function getNormalizedDemoIdentity(email: string, firstName?: string, lastName?:
 }
 
 export default function DemoLoginScreen() {
+  const theme = useAppTheme();
   const router = useRouter();
   const params = useLocalSearchParams<{ key?: string }>();
   const login = useAuthStore((state) => state.login);
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const hasCheckedAuth = useAuthStore((state) => state.hasCheckedAuth);
   const setSessionTokens = useAuthStore((state) => state.setSessionTokens);
   const addMember = useMemberStore((state) => state.addMember);
   const removeMember = useMemberStore((state) => state.removeMember);
@@ -112,16 +118,22 @@ export default function DemoLoginScreen() {
       return;
     }
 
+    if (!key) {
+      hasStartedRef.current = true;
+      if (hasCheckedAuth && isAuthenticated) {
+        router.replace('/');
+      } else {
+        router.replace('/login');
+      }
+      return;
+    }
+
     hasStartedRef.current = true;
     let isCancelled = false;
 
     const run = async () => {
       if (!SUPABASE_URL) {
         throw new Error('Supabase is not configured for demo login.');
-      }
-
-      if (!key) {
-        throw new Error('Missing demo access key.');
       }
 
       setStatusMessage('Checking demo access...');
@@ -284,41 +296,39 @@ export default function DemoLoginScreen() {
     return () => {
       isCancelled = true;
     };
-  }, [addMember, key, login, removeMember, router, setSessionTokens, syncMembersFromRoster, updateMember]);
+  }, [addMember, hasCheckedAuth, isAuthenticated, key, login, removeMember, router, setSessionTokens, syncMembersFromRoster, updateMember]);
 
   return (
-    <SafeAreaView className="flex-1 bg-af-navy">
-      <LinearGradient
-        colors={['#0A1628', '#00308F', '#1E4FAD']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
-      />
+    <SafeAreaView className="flex-1" style={{ backgroundColor: theme.background }}>
+      <ThemeBackdrop />
       <View className="flex-1 items-center justify-center px-6">
-        <View className="w-full max-w-md rounded-3xl border border-white/20 bg-white/10 p-8 items-center">
+        <ThemeChrome theme={theme} variant="feature" style={{ width: '100%', maxWidth: 420 }}>
+        <View className="p-8 items-center">
           {errorMessage ? (
-            <ShieldAlert size={40} color="#F59E0B" />
+            <ShieldAlert size={40} color={theme.accentAlt} />
           ) : (
-            <QrCode size={40} color="#4A90D9" />
+            <QrCode size={40} color={theme.accent} />
           )}
-          <Text className="mt-5 text-white text-2xl font-bold text-center">FitFlight Demo Access</Text>
-          <Text className="mt-3 text-af-silver text-center leading-6">
+          <Text style={[getThemeHeadingStyle(theme, 26), { marginTop: 20, textAlign: 'center' }]}>FitFlight Demo Access</Text>
+          <Text style={[getThemeBodyStyle(theme, 16), { marginTop: 12, textAlign: 'center', lineHeight: 24 }]}>
             {errorMessage ?? statusMessage}
           </Text>
           {errorMessage ? (
             <Pressable
               onPress={() => router.replace('/login')}
-              className="mt-6 flex-row items-center rounded-xl bg-af-accent px-5 py-3"
+              className="mt-6 flex-row items-center px-5 py-3"
+              style={getThemeButtonStyle(theme, 'accent')}
             >
               <LogIn size={18} color="#FFFFFF" />
-              <Text className="ml-2 text-white font-semibold">Go to Login</Text>
+              <Text style={[getThemeButtonTextStyle(theme, 'accent'), { marginLeft: 8 }]}>Go to Login</Text>
             </Pressable>
           ) : (
             <View className="mt-6">
-              <ActivityIndicator size="large" color="#4A90D9" />
+              <ActivityIndicator size="large" color={theme.accent} />
             </View>
           )}
         </View>
+        </ThemeChrome>
       </View>
     </SafeAreaView>
   );

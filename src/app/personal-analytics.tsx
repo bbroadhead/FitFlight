@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, Pressable, ScrollView } from 'react-native';
+import { View, Text, Pressable, ScrollView, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -9,6 +9,9 @@ import * as Haptics from 'expo-haptics';
 import Svg, { Circle, Line, Path, Polyline } from 'react-native-svg';
 import { useAuthStore, useMemberStore, getDisplayName } from '@/lib/store';
 import { formatMonthLabel, getAvailableMonthKeys, getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
+import { useAppTheme } from '@/lib/theme';
+import { PageContainer } from '@/components/PageContainer';
+import { ThemeBackdrop } from '@/components/ThemeBackdrop';
 
 const CHART_COLORS = ['#4A90D9', '#22C55E', '#A855F7', '#F59E0B', '#EF4444', '#14B8A6', '#EC4899', '#C084FC'];
 
@@ -40,6 +43,8 @@ function describeArc(cx: number, cy: number, radius: number, startAngle: number,
 }
 
 export default function PersonalAnalyticsScreen() {
+  const theme = useAppTheme();
+  const { width } = useWindowDimensions();
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
   const members = useMemberStore((state) => state.members);
@@ -63,6 +68,7 @@ export default function PersonalAnalyticsScreen() {
   const activeMonthKey = availableMonths.includes(selectedMonthKey)
     ? selectedMonthKey
     : availableMonths[0] ?? getMonthKey();
+  const contentMaxWidth = width >= 1440 ? 1240 : width >= 1180 ? 1120 : 980;
 
   const analytics = useMemo(() => {
     if (!member) {
@@ -151,13 +157,15 @@ export default function PersonalAnalyticsScreen() {
   return (
     <View className="flex-1">
       <LinearGradient
-        colors={['#0A1628', '#001F5C', '#0A1628']}
+        colors={theme.gradient}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
       />
+      <ThemeBackdrop />
 
       <SafeAreaView edges={['top']} className="flex-1">
+        <PageContainer maxWidth={contentMaxWidth}>
         <Animated.View entering={FadeInDown.delay(80).springify()} className="px-6 pt-4 pb-2 flex-row items-center">
           <Pressable
             onPress={() => {
@@ -173,8 +181,10 @@ export default function PersonalAnalyticsScreen() {
             <Text className="text-af-silver text-sm">{getDisplayName(user)}</Text>
           </View>
         </Animated.View>
+        </PageContainer>
 
-        <ScrollView className="flex-1 px-6" contentContainerStyle={{ paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+        <ScrollView className="flex-1" contentContainerStyle={{ paddingBottom: 40, alignItems: 'center' }} showsVerticalScrollIndicator={false}>
+          <PageContainer maxWidth={contentMaxWidth} className="px-6">
           <Animated.View entering={FadeInDown.delay(120).springify()} className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
             <View className="flex-row items-center justify-between mb-3">
               <Text className="text-white/60 text-xs uppercase tracking-wider">Month</Text>
@@ -216,7 +226,7 @@ export default function PersonalAnalyticsScreen() {
               <View className="items-center flex-1">
                 <TrendingUp size={20} color="#22C55E" />
                 <Text className="text-white font-bold text-lg mt-1">{analytics.averageWorkoutMinutes.toFixed(1)}</Text>
-                <Text className="text-af-silver text-xs">Avg Min</Text>
+                <Text className="text-af-silver text-xs">Avg. Min/Day</Text>
               </View>
             </View>
           </Animated.View>
@@ -283,6 +293,7 @@ export default function PersonalAnalyticsScreen() {
               ))
             )}
           </Animated.View>
+          </PageContainer>
         </ScrollView>
       </SafeAreaView>
     </View>

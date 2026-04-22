@@ -1,12 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, Pressable, ScrollView, ActivityIndicator } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import { View, Text, Pressable, ScrollView, ActivityIndicator, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { ArrowLeft, BarChart3, RefreshCw, Users, MonitorPlay, MousePointerClick, TimerReset } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { useAuthStore } from '@/lib/store';
 import { fetchGoogleAnalyticsUsage, type GoogleAnalyticsUsageReport } from '@/lib/supabaseData';
+import { PageContainer } from '@/components/PageContainer';
+import { ThemeBackdrop } from '@/components/ThemeBackdrop';
+import { ThemeChrome } from '@/components/ThemeChrome';
+import { getThemeBodyStyle, getThemeControlStyle, getThemeHeadingStyle, useAppTheme } from '@/lib/theme';
 
 function formatDuration(seconds: number) {
   const rounded = Math.max(0, Math.round(seconds));
@@ -24,7 +27,9 @@ function formatReportDate(dateKey: string) {
 }
 
 export default function AppUsageAnalyticsScreen() {
+  const theme = useAppTheme();
   const router = useRouter();
+  const { width } = useWindowDimensions();
   const accessToken = useAuthStore((state) => state.accessToken);
   const user = useAuthStore((state) => state.user);
 
@@ -33,6 +38,7 @@ export default function AppUsageAnalyticsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
+  const contentMaxWidth = width >= 1440 ? 1240 : width >= 1180 ? 1100 : 960;
 
   const canView = !!user && (
     user.accountType === 'fitflight_creator' ||
@@ -84,9 +90,10 @@ export default function AppUsageAnalyticsScreen() {
 
   if (!canView) {
     return (
-      <View className="flex-1 bg-af-navy items-center justify-center px-6">
-        <Text className="text-white text-xl font-bold text-center">Admin access required</Text>
-        <Text className="text-af-silver text-center mt-3">
+      <View className="flex-1 items-center justify-center px-6" style={{ backgroundColor: theme.background }}>
+        <ThemeBackdrop />
+        <Text style={[getThemeHeadingStyle(theme, 24), { textAlign: 'center' }]}>Admin access required</Text>
+        <Text style={[getThemeBodyStyle(theme, 15), { textAlign: 'center', marginTop: 12 }]}>
           Only Owner, UFPM, Demo Role, and Squadron Leadership can view app usage analytics.
         </Text>
       </View>
@@ -94,26 +101,22 @@ export default function AppUsageAnalyticsScreen() {
   }
 
   return (
-    <View className="flex-1">
-      <LinearGradient
-        colors={['#0A1628', '#001F5C', '#0A1628']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
-      />
+    <View className="flex-1" style={{ backgroundColor: theme.background }}>
+      <ThemeBackdrop />
 
       <SafeAreaView edges={['top']} className="flex-1">
         <View className="px-6 pt-4 pb-2 flex-row items-center justify-between">
           <View className="flex-row items-center flex-1 pr-4">
             <Pressable
               onPress={() => router.back()}
-              className="w-10 h-10 bg-white/10 rounded-full items-center justify-center mr-4"
+              className="w-10 h-10 rounded-full items-center justify-center mr-4"
+              style={getThemeControlStyle(theme)}
             >
-              <ArrowLeft size={20} color="#C0C0C0" />
+              <ArrowLeft size={20} color={theme.textSecondary} />
             </Pressable>
             <View className="flex-1">
-              <Text className="text-white text-2xl font-bold">App Usage Analytics</Text>
-              <Text className="text-af-silver text-sm mt-1">
+              <Text style={getThemeHeadingStyle(theme, 26)}>App Usage Analytics</Text>
+              <Text style={[getThemeBodyStyle(theme, 14), { marginTop: 4 }]}>
                 {report?.rangeLabel ?? 'Google Analytics overview'}
               </Text>
             </View>
@@ -125,21 +128,23 @@ export default function AppUsageAnalyticsScreen() {
               void loadReport(true);
             }}
             disabled={refreshing}
-            className="w-10 h-10 bg-white/10 rounded-full items-center justify-center"
+            className="w-10 h-10 rounded-full items-center justify-center"
+            style={getThemeControlStyle(theme)}
           >
-            <RefreshCw size={18} color={refreshing ? '#6B7280' : '#4A90D9'} />
+            <RefreshCw size={18} color={refreshing ? theme.textMuted : theme.accent} />
           </Pressable>
         </View>
 
         <ScrollView
-          className="flex-1 px-6"
-          contentContainerStyle={{ paddingBottom: 40 }}
+          className="flex-1"
+          contentContainerStyle={{ paddingBottom: 40, alignItems: 'center' }}
           showsVerticalScrollIndicator={false}
         >
+          <PageContainer maxWidth={contentMaxWidth} className="px-6">
           {loading && !report ? (
             <View className="mt-10 items-center justify-center">
-              <ActivityIndicator color="#4A90D9" />
-              <Text className="text-af-silver mt-3">Loading Google Analytics data...</Text>
+              <ActivityIndicator color={theme.accent} />
+              <Text style={[getThemeBodyStyle(theme, 14), { marginTop: 12 }]}>Loading Google Analytics data...</Text>
             </View>
           ) : null}
 
@@ -159,7 +164,8 @@ export default function AppUsageAnalyticsScreen() {
 
           {report ? (
             <>
-              <View className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
+              <ThemeChrome theme={theme} variant="feature" style={{ marginTop: 16 }}>
+              <View className="p-4">
                 <Text className="text-white font-semibold text-lg">Overview</Text>
                 <Text className="text-af-silver text-xs mt-1">
                   Property {report.propertyId}{report.measurementId ? ` | ${report.measurementId}` : ''}
@@ -212,8 +218,10 @@ export default function AppUsageAnalyticsScreen() {
                   </View>
                 </View>
               </View>
+              </ThemeChrome>
 
-              <View className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4">
+              <ThemeChrome theme={theme} style={{ marginTop: 24 }}>
+              <View className="p-4">
                 <Text className="text-white font-semibold text-lg">Tracked Events</Text>
                 <Text className="text-af-silver text-xs mt-1">
                   Counts for the custom FitFlight events tracked in GA4.
@@ -234,8 +242,10 @@ export default function AppUsageAnalyticsScreen() {
                   ))
                 )}
               </View>
+              </ThemeChrome>
 
-              <View className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4">
+              <ThemeChrome theme={theme} style={{ marginTop: 24 }}>
+              <View className="p-4">
                 <Text className="text-white font-semibold text-lg">Daily Activity</Text>
                 <Text className="text-af-silver text-xs mt-1">
                   Last 30 days of app traffic from Google Analytics.
@@ -257,8 +267,10 @@ export default function AppUsageAnalyticsScreen() {
                   ))
                 )}
               </View>
+              </ThemeChrome>
             </>
           ) : null}
+          </PageContainer>
         </ScrollView>
       </SafeAreaView>
     </View>

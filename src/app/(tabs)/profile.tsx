@@ -1,47 +1,56 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, View, Text, Pressable, ScrollView, TextInput, Modal, Image, Platform, Switch } from 'react-native';
+import { Alert, View, Text, Pressable, RefreshControl, ScrollView, TextInput, Modal, Image, Platform, useWindowDimensions } from 'react-native';
+import { BlurView } from 'expo-blur';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
-import { User, Shield, LogOut, LogIn, UserPlus, Trash2, Users, Activity, X, Check, Bell, Crown, Settings, Plus, Camera, FileText, Calendar, Building2, AlertTriangle, Upload, Dumbbell, ImageIcon, HelpCircle, Mail, ChevronDown, ChevronUp, Pencil, Search, Star, MessageSquare, Trophy } from 'lucide-react-native';
+import { User, Shield, LogOut, LogIn, UserPlus, Trash2, Users, Activity, X, Check, Bell, Crown, Settings, Plus, FileText, Calendar, Building2, AlertTriangle, Upload, Dumbbell, HelpCircle, Mail, ChevronDown, ChevronUp, Pencil, Search, Star, MessageSquare, Trophy, UserCheck } from 'lucide-react-native';
 import Animated, { FadeIn, FadeInDown, FadeInUp, SlideInDown } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import * as ImagePicker from 'expo-image-picker';
-import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { useRouter } from 'expo-router';
 import SmartSlider from '@/components/SmartSlider';
-import { useAuthStore, useMemberStore, type Flight, type Member, type AccountType, type Squadron, type IntegrationService, type WorkoutType, getDisplayName, canEditAttendance, canManagePTL, canManagePTPrograms, isAdmin, SQUADRONS, ALL_ACHIEVEMENTS } from '@/lib/store';
+import { useAuthStore, useMemberStore, formatFlightDisplay, type Flight, type Member, type AccountType, type Squadron, type IntegrationService, type WorkoutType, RANK_GROUPS, getDisplayName, canEditAttendance, canManagePTL, canManagePTPrograms, isAdmin, SQUADRONS, ALL_ACHIEVEMENTS } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { AchievementCelebration } from '@/components/AchievementCelebration';
 import { TrophyCase, CompactTrophyBadges } from '@/components/TrophyCase';
+import { PageContainer } from '@/components/PageContainer';
+import { ThemeBackdrop } from '@/components/ThemeBackdrop';
+import { ThemeChrome } from '@/components/ThemeChrome';
+import { TopStatusBar } from '@/components/TopStatusBar';
 import { TutorialTarget, useTutorialTour } from '@/contexts/TutorialTourContext';
 import { canUseStravaSync, disconnectStrava, getStravaSetupError, mapImportedWorkouts, startStravaConnect, syncStravaWorkouts } from '@/lib/strava';
 import { signOutFromSupabase } from '@/lib/supabaseAuth';
 import { buildTrophyStats, getRarestEarnedTrophies } from '@/lib/trophies';
 import { formatMonthLabel, getAvailableMonthKeys, getMemberEffectiveWorkouts, getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
+import { APP_THEMES, useAppTheme } from '@/lib/theme';
+import { getThemeBodyStyle, getThemeCardStyle, getThemeControlStyle, getThemeHeadingStyle } from '@/lib/theme';
 import {
   fetchAppNotifications,
   fetchApprovedManualWorkouts,
   fetchAttendanceSessions,
   fetchManualWorkoutProofImageMap,
   fetchManualWorkoutSubmissions,
+  fetchAdminAuditTrail,
   markAppNotificationRead,
   assignUFPMRole,
-  deleteStoredImage,
   createRosterMember,
   deleteRosterMember,
   ensureMemberRole,
   markManualWorkoutSubmissionRead,
   fetchSupportMessages,
   fetchSupportThreads,
+  fetchWeeklyAttendanceExcusals,
+  deleteSupportThread,
   markSupportMessagesRead,
-    reviewManualWorkoutSubmission,
+  reviewManualWorkoutSubmission,
     resetUserPasswordAsAdmin,
     sendSupportMessage,
   sendAppNotification,
+  logAdminAuditAction,
   setAttendanceStatus,
+  type AdminAuditAction,
   type AppNotification,
   type ManualWorkoutSubmission,
   type SupportMessage,
@@ -49,12 +58,12 @@ import {
   updateMemberRole,
   updateRosterProfileVisibility,
   updateRosterMember,
-  uploadProfileImage,
 } from '@/lib/supabaseData';
+import { createOfflineActionId, requestRegisteredSync, runOrQueueOfflineMutation } from '@/lib/appSync';
 
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
-const RANKS = ['AB', 'Amn', 'A1C', 'SrA', 'SSgt', 'TSgt', 'MSgt', 'SMSgt', 'CMSgt', 'Lt. Col.'];
 const OWNER_EMAIL = 'benjamin.broadhead.2@us.af.mil';
+const PROJECT_COORDINATOR_EMAIL = 'jacob.de_la_rosa@us.af.mil';
 const DEVELOPER_NAME = 'SSgt Benjamin Broadhead';
 const DEVELOPER_TITLE = 'Developer';
 const PROJECT_COORDINATOR_NAME = 'SSgt Jacob De La Rosa';
@@ -68,6 +77,56 @@ type SupportContact = {
   email: string;
   memberId: string | null;
 };
+
+function supportContactMatchesThread(
+  contact: SupportContact | null | undefined,
+  thread: Pick<SupportThreadSummary, 'recipientEmail' | 'recipientName'>
+) {
+  if (!contact) {
+    return false;
+  }
+
+  const contactEmail = contact.email.trim().toLowerCase();
+  const threadEmail = thread.recipientEmail.trim().toLowerCase();
+  const contactName = contact.name.trim().toLowerCase();
+  const threadName = thread.recipientName.trim().toLowerCase();
+
+  if (contactEmail && threadEmail && contactEmail !== threadEmail) {
+    return false;
+  }
+
+  if (contactName && threadName) {
+    return contactName === threadName;
+  }
+
+  return contactEmail === threadEmail;
+}
+
+function getSupportContactKeyForThread(
+  thread: Pick<SupportThreadSummary, 'recipientEmail' | 'recipientName'>,
+  contacts: SupportContact[]
+): SupportContact['key'] {
+  return contacts.find((contact) => supportContactMatchesThread(contact, thread))?.key ?? 'developer';
+}
+
+function formatAuditActionLabel(actionType: string) {
+  return actionType
+    .split('_')
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ');
+}
+
+function formatAuditDetailsPreview(details: Record<string, unknown>) {
+  const entries = Object.entries(details).filter(([, value]) => value !== null && value !== undefined && value !== '');
+  if (entries.length === 0) {
+    return '';
+  }
+
+  return entries
+    .slice(0, 3)
+    .map(([key, value]) => `${key.replace(/([A-Z])/g, ' $1').toLowerCase()}: ${String(value)}`)
+    .join(' · ');
+}
 
 const slugify = (value: string) =>
   value
@@ -85,6 +144,42 @@ type SupportNotificationItem = {
   kind: 'support';
 };
 
+function SettingsToggle({
+  value,
+  disabled,
+  onPress,
+}: {
+  value: boolean;
+  disabled?: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      style={{
+        width: 44,
+        height: 26,
+        borderRadius: 999,
+        backgroundColor: value ? '#4A90D9' : '#334155',
+        paddingHorizontal: 3,
+        justifyContent: 'center',
+        opacity: disabled ? 0.6 : 1,
+      }}
+    >
+      <View
+        style={{
+          width: 20,
+          height: 20,
+          borderRadius: 999,
+          backgroundColor: '#FFFFFF',
+          alignSelf: value ? 'flex-end' : 'flex-start',
+        }}
+      />
+    </Pressable>
+  );
+}
+
 type ManualWorkoutNotificationItem = {
   id: string;
   title: string;
@@ -97,13 +192,6 @@ type ManualWorkoutNotificationItem = {
 
 type BackendNotificationItem = AppNotification & {
   unread: boolean;
-};
-
-type PendingProfileImageCrop = {
-  uri: string;
-  width: number;
-  height: number;
-  mimeType?: string;
 };
 
 function RunningIcon({ size, color }: { size: number; color: string }) {
@@ -157,6 +245,8 @@ export default function ProfileScreen() {
   const user = useAuthStore(s => s.user);
   const logout = useAuthStore(s => s.logout);
   const accessToken = useAuthStore(s => s.accessToken);
+  const appTheme = useAuthStore(s => s.appTheme);
+  const setAppTheme = useAuthStore(s => s.setAppTheme);
   const members = useMemberStore(s => s.members);
   const addMember = useMemberStore(s => s.addMember);
   const removeMember = useMemberStore(s => s.removeMember);
@@ -169,26 +259,25 @@ export default function ProfileScreen() {
   const rejectPTL = useMemberStore(s => s.rejectPTL);
   const revokePTL = useMemberStore(s => s.revokePTL);
   const setUFPM = useMemberStore(s => s.setUFPM);
+  const themePalette = useAppTheme();
+  const modalBlurIntensity = 30;
+  const { width } = useWindowDimensions();
+  const contentMaxWidth = width >= 1440 ? 1280 : width >= 1180 ? 1180 : 1024;
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [showManageModal, setShowManageModal] = useState(false);
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showAuditTrailModal, setShowAuditTrailModal] = useState(false);
   const [showChangeRankModal, setShowChangeRankModal] = useState(false);
   const [showPTLRequestModal, setShowPTLRequestModal] = useState(false);
   const [showChangeSquadronModal, setShowChangeSquadronModal] = useState(false);
-  const [showProfilePictureModal, setShowProfilePictureModal] = useState(false);
   const [showDisconnectModal, setShowDisconnectModal] = useState(false);
   const [showDeveloperContact, setShowDeveloperContact] = useState(false);
   const [showDeveloperMessageModal, setShowDeveloperMessageModal] = useState(false);
   const [showSupportInboxModal, setShowSupportInboxModal] = useState(false);
-  const [activeSupportRecipientEmail, setActiveSupportRecipientEmail] = useState(OWNER_EMAIL);
+  const [activeSupportContactKey, setActiveSupportContactKey] = useState<SupportContact['key']>('developer');
   const [showInstallModal, setShowInstallModal] = useState(false);
-  const [isUpdatingProfilePicture, setIsUpdatingProfilePicture] = useState(false);
-  const [pendingProfileImageCrop, setPendingProfileImageCrop] = useState<PendingProfileImageCrop | null>(null);
-  const [profileCropZoom, setProfileCropZoom] = useState(1);
-  const [profileCropOffsetX, setProfileCropOffsetX] = useState(0);
-  const [profileCropOffsetY, setProfileCropOffsetY] = useState(0);
   const [showUFPMModal, setShowUFPMModal] = useState(false);
   const [memberPendingDeleteId, setMemberPendingDeleteId] = useState<string | null>(null);
   const [showUFPMConfirmModal, setShowUFPMConfirmModal] = useState(false);
@@ -201,6 +290,7 @@ export default function ProfileScreen() {
   const [expandedWorkoutImageUri, setExpandedWorkoutImageUri] = useState<string | null>(null);
   const [manualWorkoutProofMap, setManualWorkoutProofMap] = useState<Record<string, string>>({});
   const [selectedSummaryMonth, setSelectedSummaryMonth] = useState(getMonthKey());
+  const [isExcusedThisWeek, setIsExcusedThisWeek] = useState(false);
   const [integrationToDisconnect, setIntegrationToDisconnect] = useState<IntegrationService | null>(null);
   const [stravaBusyAction, setStravaBusyAction] = useState<'connect' | 'sync' | 'disconnect' | null>(null);
   const [stravaMessage, setStravaMessage] = useState<string | null>(null);
@@ -249,6 +339,10 @@ export default function ProfileScreen() {
   const [demoTrophyEarnedPreview, setDemoTrophyEarnedPreview] = useState(false);
   const [showDemoTrophyCelebration, setShowDemoTrophyCelebration] = useState(false);
   const [isUpdatingProfileSettings, setIsUpdatingProfileSettings] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [auditTrailEntries, setAuditTrailEntries] = useState<AdminAuditAction[]>([]);
+  const [auditTrailLoading, setAuditTrailLoading] = useState(false);
+  const [auditTrailError, setAuditTrailError] = useState<string | null>(null);
 
   const isAuthenticated = useAuthStore(s => s.isAuthenticated);
   const updateUser = useAuthStore(s => s.updateUser);
@@ -292,7 +386,7 @@ export default function ProfileScreen() {
     projectCoordinatorMember?.email ??
     (user?.firstName.trim().toLowerCase() === 'jacob' && user?.lastName.trim().toLowerCase() === 'de la rosa'
       ? user.email
-      : '');
+      : PROJECT_COORDINATOR_EMAIL);
   const supportContacts = useMemo<SupportContact[]>(
     () => [
       {
@@ -324,6 +418,7 @@ export default function ProfileScreen() {
   const canManageMembers = canManagePTPrograms(userAccountType);
   const canReviewManualWorkouts = canManagePTPrograms(userAccountType);
   const canResetUserPasswords = userAccountType === 'fitflight_creator' || userAccountType === 'ufpm' || userAccountType === 'demo';
+  const isOwnerUser = userAccountType === 'fitflight_creator' || user?.email?.toLowerCase() === OWNER_EMAIL;
   const isOwnerReviewer = user?.email?.toLowerCase() === OWNER_EMAIL;
   const canViewSupportInbox = user?.email
     ? supportContacts.some((contact) => contact.email.toLowerCase() === user.email.toLowerCase())
@@ -339,6 +434,29 @@ export default function ProfileScreen() {
   const normalizedUFPMSearch = ufpmSearchQuery.trim().toLowerCase();
   const normalizedResetPasswordSearch = resetPasswordSearchQuery.trim().toLowerCase();
   const memberSquadron = user?.squadron ?? 'Hawks';
+  const logAdminAction = async (params: {
+    actionType: string;
+    targetMember?: Member | null;
+    details?: Record<string, unknown>;
+  }) => {
+    if (!user || !accessToken || !hasAdminAccess) {
+      return;
+    }
+
+    await logAdminAuditAction({
+      actorMemberId: user.id,
+      actorEmail: user.email,
+      actorName: getDisplayName(user),
+      actorRole: user.accountType,
+      actionType: params.actionType,
+      targetMemberId: params.targetMember?.id ?? null,
+      targetEmail: params.targetMember?.email ?? null,
+      targetName: params.targetMember ? getDisplayName(params.targetMember) : null,
+      squadron: params.targetMember?.squadron ?? user.squadron,
+      details: params.details,
+      accessToken,
+    }).catch(() => undefined);
+  };
   const getAttendanceAliases = (memberId: string) => {
     const member = members.find((entry) => entry.id === memberId);
     if (!member) {
@@ -379,29 +497,29 @@ export default function ProfileScreen() {
   const isDesktop = isWeb && !isIos && !isAndroid;
   const isSafari = isIos && /safari/.test(userAgent) && !/crios|fxios|edgios/.test(userAgent);
   const activeSupportContact =
-    supportContacts.find((contact) => contact.email.toLowerCase() === activeSupportRecipientEmail.toLowerCase()) ??
+    supportContacts.find((contact) => contact.key === activeSupportContactKey) ??
     supportContacts[0] ??
     null;
   const supportThread = !canViewSupportInbox
-    ? supportThreads.find(
-        (thread) =>
-          thread.requesterEmail.toLowerCase() === user?.email?.toLowerCase() &&
-          thread.recipientEmail.toLowerCase() === (activeSupportContact?.email.toLowerCase() ?? '')
-      )
-    : null;
-  const developerSupportThread = supportThreads.find(
-    (thread) =>
-      thread.requesterEmail.toLowerCase() === user?.email?.toLowerCase() &&
-      thread.recipientEmail.toLowerCase() === OWNER_EMAIL
-  ) ?? null;
-  const coordinatorSupportThread =
-    activeSupportContact?.key === 'project_coordinator' || projectCoordinatorEmail
       ? supportThreads.find(
           (thread) =>
             thread.requesterEmail.toLowerCase() === user?.email?.toLowerCase() &&
-            thread.recipientEmail.toLowerCase() === projectCoordinatorEmail.toLowerCase()
-        ) ?? null
+            supportContactMatchesThread(activeSupportContact, thread)
+        )
       : null;
+  const developerSupportThread = supportThreads.find(
+      (thread) =>
+        thread.requesterEmail.toLowerCase() === user?.email?.toLowerCase() &&
+        supportContactMatchesThread(supportContacts.find((contact) => contact.key === 'developer') ?? null, thread)
+    ) ?? null;
+  const coordinatorSupportThread =
+    projectCoordinatorEmail
+        ? supportThreads.find(
+            (thread) =>
+              thread.requesterEmail.toLowerCase() === user?.email?.toLowerCase() &&
+              supportContactMatchesThread(supportContacts.find((contact) => contact.key === 'project_coordinator') ?? null, thread)
+          ) ?? null
+        : null;
   const unreadSupportCount = useMemo(
     () => supportThreads.reduce(
       (total, thread) => total + (canViewSupportInbox ? thread.unreadForOwner : thread.unreadForRequester),
@@ -443,30 +561,6 @@ export default function ProfileScreen() {
       })
       .sort((left, right) => `${left.date} ${left.time}`.localeCompare(`${right.date} ${right.time}`));
   }, [memberSquadron, scheduledSessions, user]);
-  const profileCropPreview = useMemo(() => {
-    if (!pendingProfileImageCrop) {
-      return null;
-    }
-
-    const frameSize = 240;
-    const baseScale = Math.max(
-      frameSize / pendingProfileImageCrop.width,
-      frameSize / pendingProfileImageCrop.height
-    );
-    const displayWidth = pendingProfileImageCrop.width * baseScale * profileCropZoom;
-    const displayHeight = pendingProfileImageCrop.height * baseScale * profileCropZoom;
-    const maxTranslateX = Math.max(0, (displayWidth - frameSize) / 2);
-    const maxTranslateY = Math.max(0, (displayHeight - frameSize) / 2);
-
-    return {
-      frameSize,
-      displayWidth,
-      displayHeight,
-      translateX: -profileCropOffsetX * maxTranslateX,
-      translateY: -profileCropOffsetY * maxTranslateY,
-    };
-  }, [pendingProfileImageCrop, profileCropOffsetX, profileCropOffsetY, profileCropZoom]);
-
   const filteredMembers = useMemo(() => {
     const sortedMembers = members
       .filter((member) => member.squadron === memberSquadron)
@@ -544,12 +638,12 @@ export default function ProfileScreen() {
       setSupportThreads(nextThreads);
 
       if (!canViewSupportInbox) {
-        const ownThread =
-          nextThreads.find(
-            (thread) =>
-              thread.requesterEmail.toLowerCase() === user.email.toLowerCase() &&
-              thread.recipientEmail.toLowerCase() === (activeSupportContact?.email.toLowerCase() ?? OWNER_EMAIL)
-          ) ?? null;
+          const ownThread =
+            nextThreads.find(
+              (thread) =>
+                thread.requesterEmail.toLowerCase() === user.email.toLowerCase() &&
+                supportContactMatchesThread(activeSupportContact, thread)
+            ) ?? null;
         setActiveSupportThreadId(ownThread?.id ?? null);
         if (ownThread && !supportSubject.trim()) {
           setSupportSubject(ownThread.subject);
@@ -652,6 +746,42 @@ export default function ProfileScreen() {
     }
   };
 
+  const loadAuditTrail = async () => {
+    if (!isOwnerUser || !accessToken) {
+      setAuditTrailEntries([]);
+      return;
+    }
+
+    setAuditTrailLoading(true);
+    setAuditTrailError(null);
+    try {
+      const entries = await fetchAdminAuditTrail(accessToken, { limit: 200 });
+      setAuditTrailEntries(entries);
+    } catch (error) {
+      setAuditTrailError(error instanceof Error ? error.message : 'Unable to load the admin audit trail.');
+    } finally {
+      setAuditTrailLoading(false);
+    }
+  };
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await requestRegisteredSync('global');
+      const refreshTasks: Promise<unknown>[] = [
+        loadSupportThreads(),
+        loadManualWorkoutSubmissions(),
+        loadAppNotifications(),
+      ];
+      if (showAuditTrailModal && isOwnerUser) {
+        refreshTasks.push(loadAuditTrail());
+      }
+      await Promise.all(refreshTasks);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   useEffect(() => {
     if (!user?.email || !accessToken) {
       setSupportThreads([]);
@@ -671,7 +801,7 @@ export default function ProfileScreen() {
     }, 90000);
 
     return () => clearInterval(pollId);
-  }, [accessToken, activeSupportContact?.email, canViewSupportInbox, isFocused, user?.email]);
+  }, [accessToken, activeSupportContact, canViewSupportInbox, isFocused, user?.email]);
 
   useEffect(() => {
     if (!user?.id || !accessToken) {
@@ -711,6 +841,14 @@ export default function ProfileScreen() {
 
     return () => clearInterval(pollId);
   }, [accessToken, isFocused, user?.email]);
+
+  useEffect(() => {
+    if (!showAuditTrailModal || !isOwnerUser || !accessToken) {
+      return;
+    }
+
+    void loadAuditTrail();
+  }, [accessToken, isOwnerUser, showAuditTrailModal]);
 
   useEffect(() => {
     if (!activeSupportThreadId || !showDeveloperMessageModal && !showSupportInboxModal) {
@@ -815,12 +953,30 @@ export default function ProfileScreen() {
         await updateMemberRole(newMember.email, newMember.accountType, accessToken).catch(() => undefined);
 
         updateMember(editingMemberId, newMember);
+        await logAdminAction({
+          actionType: 'update_member',
+          targetMember: newMember,
+          details: {
+            previousEmail: previousMember.email,
+            nextEmail: newMember.email,
+            flight: newMember.flight,
+            accountType: newMember.accountType,
+          },
+        });
       } else {
         await createRosterMember(newMember, accessToken);
         await ensureMemberRole(newMember.email, newMember.accountType, accessToken).catch(() => undefined);
         await updateMemberRole(newMember.email, newMember.accountType, accessToken).catch(() => undefined);
 
         addMember(newMember);
+        await logAdminAction({
+          actionType: 'create_member',
+          targetMember: newMember,
+          details: {
+            flight: newMember.flight,
+            accountType: newMember.accountType,
+          },
+        });
       }
 
       setShowAddModal(false);
@@ -850,6 +1006,10 @@ export default function ProfileScreen() {
       await deleteRosterMember(memberToRemove, accessToken);
 
       removeMember(id);
+      await logAdminAction({
+        actionType: 'delete_member',
+        targetMember: memberToRemove,
+      });
     };
 
     run().catch((error) => {
@@ -920,6 +1080,11 @@ export default function ProfileScreen() {
           targetEmail: selectedResetPasswordMember.email,
           newPassword: adminResetPasswordValue,
           accessToken,
+        });
+
+        await logAdminAction({
+          actionType: 'reset_user_password',
+          targetMember: selectedResetPasswordMember,
         });
 
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -998,6 +1163,10 @@ export default function ProfileScreen() {
       await ensureMemberRole(selectedMember.email, selectedMember.accountType, accessToken).catch(() => undefined);
       await assignUFPMRole(selectedMember.email, accessToken);
       setUFPM(selectedUFPMMemberId);
+      await logAdminAction({
+        actionType: 'assign_ufpm',
+        targetMember: selectedMember,
+      });
 
       if (isCurrentUserGainingUFPM) {
         updateUser({ accountType: 'ufpm' });
@@ -1044,6 +1213,11 @@ export default function ProfileScreen() {
       } else {
         rejectPTL(memberId);
       }
+
+      await logAdminAction({
+        actionType: approve ? 'approve_pfl' : 'reject_pfl',
+        targetMember: member,
+      });
 
       const pendingRequest = appNotifications.find(
         (notification) =>
@@ -1101,6 +1275,10 @@ export default function ProfileScreen() {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
       await updateMemberRole(member.email, 'standard', accessToken).catch(() => undefined);
       revokePTL(memberId);
+      await logAdminAction({
+        actionType: 'revoke_pfl',
+        targetMember: member,
+      });
       await sendAppNotification({
         senderMemberId: user.id,
         senderEmail: user.email,
@@ -1113,6 +1291,43 @@ export default function ProfileScreen() {
         message: 'Your PFL access was removed.',
         actionType: 'open_account',
         actionTargetId: member.id,
+        accessToken,
+      }).catch(() => undefined);
+    };
+
+    void run();
+  };
+
+  const handleAssignPTL = (memberId: string) => {
+    const run = async () => {
+      const member = members.find((candidate) => candidate.id === memberId);
+      if (!member || !user || !accessToken) {
+        return;
+      }
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      await updateMemberRole(member.email, 'ptl', accessToken).catch(() => undefined);
+      approvePTL(memberId);
+      await logAdminAction({
+        actionType: 'assign_pfl',
+        targetMember: member,
+      });
+      await sendAppNotification({
+        senderMemberId: user.id,
+        senderEmail: user.email,
+        senderName: getDisplayName(user),
+        recipientEmail: member.email,
+        recipientMemberId: member.id,
+        squadron: member.squadron,
+        type: 'ptl_request_result',
+        title: 'PFL access assigned',
+        message: 'You were assigned PFL access in FitFlight.',
+        actionType: 'open_account',
+        actionTargetId: member.id,
+        actionPayload: {
+          approved: true,
+          assignedDirectly: true,
+        },
         accessToken,
       }).catch(() => undefined);
     };
@@ -1153,41 +1368,6 @@ export default function ProfileScreen() {
 
     setShowChangeSquadronModal(false);
   };
-
-  const persistProfilePicture = async (profilePicture?: string) => {
-    if (!user) {
-      return;
-    }
-
-    const resolvedMember = resolveMemberForUser(user);
-    if (!resolvedMember) {
-      updateUser({ profilePicture });
-      return;
-    }
-
-    const previousProfilePicture = resolvedMember.profilePicture;
-
-    const updatedMember: Member = {
-      ...resolvedMember,
-      profilePicture,
-    };
-
-    if (accessToken) {
-      await updateRosterMember(resolvedMember, updatedMember, accessToken);
-    }
-
-      updateMember(resolvedMember.id, { profilePicture });
-      updateUser({ profilePicture });
-
-      const nextStorageValue = profilePicture?.trim();
-      const previousStorageValue = previousProfilePicture?.trim();
-      if (previousStorageValue && previousStorageValue !== nextStorageValue) {
-        await deleteStoredImage({
-          imageReference: previousProfilePicture,
-          accessToken: accessToken ?? undefined,
-        }).catch(() => undefined);
-      }
-    };
 
   const persistProfileVisibilitySettings = async (
     updates: Pick<Member, 'showWorkoutHistoryOnProfile' | 'showWorkoutUploadsOnProfile' | 'showPFRARecordsOnProfile'>
@@ -1259,168 +1439,6 @@ export default function ProfileScreen() {
     } finally {
       setIsUpdatingProfileSettings(false);
     }
-  };
-
-  const beginProfileImageCrop = (asset: ImagePicker.ImagePickerAsset) => {
-    if (!asset.uri || !asset.width || !asset.height) {
-      Alert.alert('Unable to use image', 'This image could not be prepared for cropping.');
-      return;
-    }
-
-    setPendingProfileImageCrop({
-      uri: asset.uri,
-      width: asset.width,
-      height: asset.height,
-      mimeType: asset.mimeType ?? undefined,
-    });
-    setProfileCropZoom(1);
-    setProfileCropOffsetX(0);
-    setProfileCropOffsetY(0);
-    setShowProfilePictureModal(false);
-  };
-
-  const cancelProfileImageCrop = () => {
-    setPendingProfileImageCrop(null);
-    setProfileCropZoom(1);
-    setProfileCropOffsetX(0);
-    setProfileCropOffsetY(0);
-    setShowProfilePictureModal(true);
-  };
-
-  const confirmProfileImageCrop = async () => {
-    if (!pendingProfileImageCrop || !user) {
-      return;
-    }
-
-    try {
-      setIsUpdatingProfilePicture(true);
-      setMemberActionError('');
-
-      const baseCropSize = Math.min(pendingProfileImageCrop.width, pendingProfileImageCrop.height);
-      const cropSize = baseCropSize / profileCropZoom;
-      const maxOriginXDelta = Math.max(0, (pendingProfileImageCrop.width - cropSize) / 2);
-      const maxOriginYDelta = Math.max(0, (pendingProfileImageCrop.height - cropSize) / 2);
-      const originX = Math.round(Math.max(
-        0,
-        Math.min(
-          pendingProfileImageCrop.width - cropSize,
-          (pendingProfileImageCrop.width - cropSize) / 2 + profileCropOffsetX * maxOriginXDelta
-        )
-      ));
-      const originY = Math.round(Math.max(
-        0,
-        Math.min(
-          pendingProfileImageCrop.height - cropSize,
-          (pendingProfileImageCrop.height - cropSize) / 2 + profileCropOffsetY * maxOriginYDelta
-        )
-      ));
-      const normalizedCropSize = Math.max(1, Math.round(cropSize));
-      const prefersTransparentOutput = ['image/png', 'image/webp', 'image/gif'].includes(
-        pendingProfileImageCrop.mimeType?.toLowerCase() ?? ''
-      );
-      const outputFormat = prefersTransparentOutput ? SaveFormat.PNG : SaveFormat.JPEG;
-      const outputMimeType = prefersTransparentOutput ? 'image/png' : 'image/jpeg';
-
-      const croppedImage = await manipulateAsync(
-        pendingProfileImageCrop.uri,
-        [
-          {
-            crop: {
-              originX,
-              originY,
-              width: normalizedCropSize,
-              height: normalizedCropSize,
-            },
-          },
-          { resize: { width: 512, height: 512 } },
-        ],
-        {
-          compress: prefersTransparentOutput ? 1 : 0.82,
-          format: outputFormat,
-        }
-      );
-
-      const imageUri = await uploadProfileImage({
-        memberId: user.id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        useFirstInitial:
-          members.filter(
-            (member) =>
-              member.lastName.trim().toLowerCase() === user.lastName.trim().toLowerCase()
-          ).length > 1,
-        localUri: croppedImage.uri,
-        mimeType: outputMimeType,
-        accessToken: accessToken ?? undefined,
-      });
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      await persistProfilePicture(imageUri);
-
-      setPendingProfileImageCrop(null);
-      setProfileCropZoom(1);
-      setProfileCropOffsetX(0);
-      setProfileCropOffsetY(0);
-      setShowProfilePictureModal(false);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to update profile picture.';
-      setMemberActionError(message);
-      Alert.alert('Unable to update profile picture', message);
-    } finally {
-      setIsUpdatingProfilePicture(false);
-    }
-  };
-
-  const pickProfilePicture = async () => {
-    try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        quality: 0.8,
-      });
-
-      if (!result.canceled && result.assets[0] && user) {
-        beginProfileImageCrop(result.assets[0]);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to update profile picture.';
-      setMemberActionError(message);
-      Alert.alert('Unable to update profile picture', message);
-    }
-  };
-
-  const takeProfilePhoto = async () => {
-    const permission = await ImagePicker.requestCameraPermissionsAsync();
-    if (!permission.granted) return;
-
-    try {
-      const result = await ImagePicker.launchCameraAsync({
-        quality: 0.8,
-      });
-
-      if (!result.canceled && result.assets[0] && user) {
-        beginProfileImageCrop(result.assets[0]);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to update profile picture.';
-      setMemberActionError(message);
-      Alert.alert('Unable to update profile picture', message);
-    }
-  };
-
-  const removeProfilePicture = () => {
-    if (!user) return;
-
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    const run = async () => {
-        try {
-          await persistProfilePicture(undefined);
-          setShowProfilePictureModal(false);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Unable to remove profile picture.';
-          setMemberActionError(message);
-          Alert.alert('Unable to remove profile picture', message);
-        }
-      };
-    void run();
   };
 
   // Connected integrations
@@ -1504,7 +1522,7 @@ export default function ProfileScreen() {
                 memberId: user.id,
                 createdBy: user.id,
                 isAttending: true,
-                source: 'workout',
+                source: 'strava',
                 accessToken: accessToken ?? undefined,
               }).catch(() => undefined)
             )
@@ -1588,31 +1606,36 @@ export default function ProfileScreen() {
     setShowDeveloperContact(current => !current);
   };
 
-  const handleOpenSupportMessages = (contactEmail: string) => {
+  const handleOpenSupportMessages = (contactKey: SupportContact['key']) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setSupportError(null);
+    const contact = supportContacts.find((entry) => entry.key === contactKey) ?? null;
+    if (!contact) {
+      return;
+    }
     setDismissedNotificationKeys((current) => {
       const next = new Set(current);
       supportNotifications
         .filter((notification) => {
           const thread = supportThreads.find((entry) => entry.id === notification.threadId);
-          return thread?.recipientEmail.toLowerCase() === contactEmail.toLowerCase();
+          return thread ? supportContactMatchesThread(contact, thread) : false;
         })
         .forEach((notification) => next.add(notification.id));
       return Array.from(next);
     });
-    setActiveSupportRecipientEmail(contactEmail);
+    setActiveSupportContactKey(contact.key);
     const nextThread =
       supportThreads.find(
         (thread) =>
           thread.requesterEmail.toLowerCase() === user?.email?.toLowerCase() &&
-          thread.recipientEmail.toLowerCase() === contactEmail.toLowerCase()
+          supportContactMatchesThread(contact, thread)
       ) ?? null;
     if (nextThread?.subject) {
       setSupportSubject(nextThread.subject);
     } else {
       setSupportSubject('');
     }
+    setSupportBody('');
     setActiveSupportThreadId(nextThread?.id ?? null);
     if (nextThread?.id) {
       void loadSupportConversation(nextThread.id, { markRead: true });
@@ -1631,8 +1654,9 @@ export default function ProfileScreen() {
       const nextThread = supportThreads.find((thread) => thread.id === nextThreadId);
       if (nextThread) {
         setSupportSubject(nextThread.subject);
-        setActiveSupportRecipientEmail(nextThread.recipientEmail);
+        setActiveSupportContactKey(getSupportContactKeyForThread(nextThread, supportContacts));
       }
+      setSupportBody('');
       void loadSupportConversation(nextThreadId, { markRead: true });
     }
     setShowSupportInboxModal(true);
@@ -1644,9 +1668,71 @@ export default function ProfileScreen() {
     const nextThread = supportThreads.find((thread) => thread.id === threadId);
     if (nextThread) {
       setSupportSubject(nextThread.subject);
-      setActiveSupportRecipientEmail(nextThread.recipientEmail);
+      setActiveSupportContactKey(getSupportContactKeyForThread(nextThread, supportContacts));
     }
+    setSupportBody('');
     void loadSupportConversation(threadId, { markRead: true });
+  };
+
+  const handleDeleteSupportThread = (threadId: string) => {
+    if (!accessToken) {
+      return;
+    }
+
+    const thread = supportThreads.find((entry) => entry.id === threadId);
+    if (!thread) {
+      return;
+    }
+
+    const canDeleteThread = canViewSupportInbox || thread.requesterEmail.toLowerCase() === user?.email?.toLowerCase();
+    if (!canDeleteThread) {
+      return;
+    }
+
+    const runDelete = async () => {
+      try {
+        await deleteSupportThread({ threadId, accessToken });
+        setSupportThreads((current) => current.filter((entry) => entry.id !== threadId));
+        if (activeSupportThreadId === threadId) {
+          const fallbackThread = supportThreads.find((entry) => entry.id !== threadId) ?? null;
+          setActiveSupportThreadId(fallbackThread?.id ?? null);
+          setActiveSupportMessages([]);
+          setSupportBody('');
+          setSupportSubject(fallbackThread?.subject ?? '');
+          if (fallbackThread) {
+            setActiveSupportContactKey(getSupportContactKeyForThread(fallbackThread, supportContacts));
+          }
+        }
+        setSupportError(null);
+        Alert.alert('Conversation deleted', 'This support conversation was removed from FitFlight.');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unable to delete this conversation.';
+        setSupportError(message);
+        Alert.alert('Unable to delete conversation', message);
+      }
+    };
+
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      if (window.confirm('Delete this conversation and all of its messages from FitFlight?')) {
+        void runDelete();
+      }
+      return;
+    }
+
+    Alert.alert(
+      'Delete conversation?',
+      'This will permanently remove the conversation and its messages from FitFlight.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            void runDelete();
+          },
+        },
+      ]
+    );
   };
 
   const handleOpenSupportNotification = (threadId: string) => {
@@ -1663,7 +1749,7 @@ export default function ProfileScreen() {
     }
 
     if (nextThread) {
-      setActiveSupportRecipientEmail(nextThread.recipientEmail);
+      setActiveSupportContactKey(getSupportContactKeyForThread(nextThread, supportContacts));
     }
     setShowNotificationsModal(false);
     setShowDeveloperMessageModal(true);
@@ -1812,7 +1898,7 @@ export default function ProfileScreen() {
 
   const handleSendSupportMessage = () => {
     const run = async () => {
-      if (!user || !accessToken) {
+      if (!user) {
         setSupportError('You must be signed in to message the FitFlight team.');
         return;
       }
@@ -1833,28 +1919,108 @@ export default function ProfileScreen() {
       const requesterEmail = threadOwner?.requesterEmail ?? user.email;
       const requesterName = threadOwner?.requesterName ?? getDisplayName(user);
       const requesterSquadron = threadOwner?.requesterSquadron ?? user.squadron;
-
-      const result = await sendSupportMessage({
+      const trimmedSubject = supportSubject.trim();
+      const trimmedBody = supportBody.trim();
+      const optimisticThreadId = threadOwner?.id ?? createOfflineActionId('support-thread');
+      const optimisticMessage: SupportMessage = {
+        id: createOfflineActionId('support-message'),
+        threadId: optimisticThreadId,
+        senderMemberId: user.id,
+        senderEmail: user.email,
+        senderName: getDisplayName(user),
+        subject: trimmedSubject,
+        body: trimmedBody,
+        isFromOwner: canViewSupportInbox,
+        createdAt: new Date().toISOString(),
+        readByOwner: canViewSupportInbox,
+        readByRequester: !canViewSupportInbox,
+      };
+      const optimisticThread: SupportThreadSummary = threadOwner ?? {
+        id: optimisticThreadId,
         requesterMemberId,
         requesterEmail,
         requesterName,
         requesterSquadron,
-        recipientMemberId: threadOwner?.recipientMemberId ?? activeSupportContact?.memberId ?? null,
-        recipientEmail: threadOwner?.recipientEmail ?? activeSupportContact?.email ?? OWNER_EMAIL,
-        recipientName: threadOwner?.recipientName ?? activeSupportContact?.name ?? DEVELOPER_NAME,
-        senderMemberId: user.id,
-        senderEmail: user.email,
-        senderName: getDisplayName(user),
-        subject: supportSubject.trim(),
-        body: supportBody.trim(),
-        isFromOwner: canViewSupportInbox,
-        accessToken,
+        recipientMemberId: activeSupportContact?.memberId ?? null,
+        recipientEmail: activeSupportContact?.email ?? OWNER_EMAIL,
+        recipientName: activeSupportContact?.name ?? DEVELOPER_NAME,
+        subject: trimmedSubject,
+        createdAt: optimisticMessage.createdAt,
+        updatedAt: optimisticMessage.createdAt,
+        latestMessagePreview: trimmedBody,
+        messageCount: 0,
+        unreadForOwner: 0,
+        unreadForRequester: 0,
+      };
+
+      const result = await runOrQueueOfflineMutation({
+        action: {
+          id: createOfflineActionId('support-message'),
+          type: 'send_support_message',
+          createdAt: optimisticMessage.createdAt,
+          payload: {
+            requesterMemberId,
+            requesterEmail,
+            requesterName,
+            requesterSquadron,
+            recipientMemberId: threadOwner?.recipientMemberId ?? activeSupportContact?.memberId ?? null,
+            recipientEmail: threadOwner?.recipientEmail ?? activeSupportContact?.email ?? OWNER_EMAIL,
+            recipientName: threadOwner?.recipientName ?? activeSupportContact?.name ?? DEVELOPER_NAME,
+            senderMemberId: user.id,
+            senderEmail: user.email,
+            senderName: getDisplayName(user),
+            subject: trimmedSubject,
+            body: trimmedBody,
+            isFromOwner: canViewSupportInbox,
+          },
+        },
+        execute: async () => {
+          if (!accessToken) {
+            throw new Error('You must be signed in to message the FitFlight team.');
+          }
+          return sendSupportMessage({
+            requesterMemberId,
+            requesterEmail,
+            requesterName,
+            requesterSquadron,
+            recipientMemberId: threadOwner?.recipientMemberId ?? activeSupportContact?.memberId ?? null,
+            recipientEmail: threadOwner?.recipientEmail ?? activeSupportContact?.email ?? OWNER_EMAIL,
+            recipientName: threadOwner?.recipientName ?? activeSupportContact?.name ?? DEVELOPER_NAME,
+            senderMemberId: user.id,
+            senderEmail: user.email,
+            senderName: getDisplayName(user),
+            subject: trimmedSubject,
+            body: trimmedBody,
+            isFromOwner: canViewSupportInbox,
+            accessToken,
+          });
+        },
+        onQueued: () => {
+          setSupportThreads((current) => {
+            const exists = current.some((thread) => thread.id === optimisticThread.id);
+            const nextThread = {
+              ...optimisticThread,
+              messageCount: (threadOwner?.messageCount ?? 0) + 1,
+              updatedAt: optimisticMessage.createdAt,
+              latestMessagePreview: trimmedBody,
+            };
+            return exists
+              ? current.map((thread) => (thread.id === optimisticThread.id ? nextThread : thread))
+              : [nextThread, ...current];
+          });
+          setActiveSupportThreadId(optimisticThread.id);
+          setActiveSupportMessages((current) => [...current, optimisticMessage]);
+        },
       });
 
       setSupportBody('');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      await loadSupportThreads();
-      await loadSupportConversation(result.threadId, { markRead: true });
+      if (result.queued) {
+        Alert.alert('Saved offline', 'Your message will send when FitFlight reconnects.');
+      } else if (result.result) {
+        await loadSupportThreads();
+        await loadSupportConversation(result.result.threadId, { markRead: true });
+      }
     };
 
     run().catch((error) => {
@@ -1929,6 +2095,36 @@ export default function ProfileScreen() {
         : 0,
     };
   }, [monthlyUserSummary]);
+
+  useEffect(() => {
+    if (!accessToken || !user?.id || !user?.squadron) {
+      setIsExcusedThisWeek(false);
+      return;
+    }
+
+    const weekStart = new Date();
+    weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
+    const weekKey = weekStart.toISOString().split('T')[0];
+    let isCancelled = false;
+
+    void fetchWeeklyAttendanceExcusals({
+      weekStart: weekKey,
+      squadron: user.squadron,
+      accessToken,
+    }).then((entries) => {
+      if (!isCancelled) {
+        setIsExcusedThisWeek(entries.some((entry) => entry.memberId === user.id));
+      }
+    }).catch(() => {
+      if (!isCancelled) {
+        setIsExcusedThisWeek(false);
+      }
+    });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [accessToken, user?.id, user?.squadron]);
   const trophyStats = useMemo(
     () => buildTrophyStats(
       ALL_ACHIEVEMENTS,
@@ -2156,18 +2352,23 @@ export default function ProfileScreen() {
   return (
     <View className="flex-1">
       <LinearGradient
-        colors={['#0A1628', '#001F5C', '#0A1628']}
+        colors={themePalette.gradient}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
       />
+      <ThemeBackdrop />
 
       <SafeAreaView edges={['top']} className="flex-1">
+        <TopStatusBar title="Account" subtitle={`${user?.squadron ?? 'Hawks'} Squadron`} />
         <ScrollView
           ref={scrollViewRef}
           className="flex-1"
-          contentContainerStyle={{ paddingBottom: 120 }}
+          contentContainerStyle={{ paddingBottom: 120, alignItems: 'center' }}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} tintColor={themePalette.accent} />
+          }
           scrollEventThrottle={16}
           onScroll={() => {
             if (currentTargetId?.startsWith('account-')) {
@@ -2175,14 +2376,15 @@ export default function ProfileScreen() {
             }
           }}
         >
+          <PageContainer maxWidth={contentMaxWidth}>
           {/* Header */}
           <Animated.View
             entering={FadeInDown.delay(100).springify()}
             className="px-6 pt-4 pb-2 flex-row items-center justify-between"
           >
             <View>
-              <Text className="text-white text-2xl font-bold">Account</Text>
-              <Text className="text-af-silver text-sm mt-1">Manage your account</Text>
+              <Text style={getThemeHeadingStyle(themePalette, 28)}>Account</Text>
+              <Text style={[getThemeBodyStyle(themePalette, 14), { marginTop: 4 }]}>Manage your account</Text>
             </View>
 
             {isAuthenticated && (
@@ -2192,15 +2394,17 @@ export default function ProfileScreen() {
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                     setShowSettingsModal(true);
                   }}
-                  className="w-10 h-10 bg-white/10 rounded-full items-center justify-center mr-3"
+                  className="w-10 h-10 rounded-full items-center justify-center mr-3"
+                  style={getThemeControlStyle(themePalette)}
                 >
-                  <Settings size={20} color="#C0C0C0" />
+                  <Settings size={20} color={themePalette.textSecondary} />
                 </Pressable>
                 <Pressable
                   onPress={handleOpenNotificationsModal}
-                  className="relative w-10 h-10 bg-white/10 rounded-full items-center justify-center"
+                  className="relative w-10 h-10 rounded-full items-center justify-center"
+                  style={getThemeControlStyle(themePalette)}
                 >
-                  <Bell size={20} color="#C0C0C0" />
+                  <Bell size={20} color={themePalette.textSecondary} />
                   {totalUnreadCount > 0 && (
                     <View className="absolute -top-1 -right-1 w-5 h-5 bg-af-danger rounded-full items-center justify-center">
                       <Text className="text-white text-xs font-bold">{totalUnreadCount}</Text>
@@ -2220,36 +2424,19 @@ export default function ProfileScreen() {
           >
             <Animated.View
               entering={FadeInDown.delay(150).springify()}
-              className="mx-6 mt-4 p-6 bg-white/10 rounded-3xl border border-white/20"
+              className="mx-6 mt-4"
             >
+            <ThemeChrome theme={themePalette} variant="feature">
+            <View className="p-6">
             <View className="flex-row items-center">
-              <Pressable
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  setShowProfilePictureModal(true);
-                }}
-                className="relative"
-              >
-                {user?.profilePicture ? (
-                  <Image
-                    source={{ uri: user.profilePicture }}
-                    className="w-16 h-16 rounded-full mr-4"
-                  />
+              <View className="w-16 h-16 bg-af-accent/30 rounded-full items-center justify-center mr-4">
+                {userAccountType === 'fitflight_creator' ? (
+                  <Crown size={32} color="#A855F7" />
                 ) : (
-                  <View className="w-16 h-16 bg-af-accent/30 rounded-full items-center justify-center mr-4">
-                    {userAccountType === 'fitflight_creator' ? (
-                      <Crown size={32} color="#A855F7" />
-                    ) : (
-                      <User size={32} color="#4A90D9" />
-                    )}
-                  </View>
+                  <User size={32} color="#4A90D9" />
                 )}
-                {/* Camera overlay badge */}
-                <View className="absolute bottom-0 right-3 w-6 h-6 bg-af-accent rounded-full items-center justify-center border-2 border-af-navy">
-                  <Camera size={12} color="white" />
-                </View>
-              </Pressable>
-                  <View className="flex-1 items-center">
+              </View>
+              <View className="flex-1 items-center">
                     <Text className="text-white text-xl font-bold text-center">{userDisplayName}</Text>
                   <View className="mt-2 items-center">
                     <CompactTrophyBadges trophies={rarestTrophies} overflowCount={trophyOverflowCount} />
@@ -2275,7 +2462,7 @@ export default function ProfileScreen() {
                       {getAccountTypeLabel(userAccountType)}
                     </Text>
                   </View>
-                    <Text className="text-af-silver text-sm">{user?.flight} Flight</Text>
+          <Text className="text-af-silver text-sm">{user?.flight ? formatFlightDisplay(user.flight) : ''}</Text>
                   </View>
                 </View>
             </View>
@@ -2303,14 +2490,32 @@ export default function ProfileScreen() {
                 </View>
               </Pressable>
             ) : null}
+            </View>
+            </ThemeChrome>
             </Animated.View>
           </TutorialTarget>
 
           {/* Stats Card */}
+          {isExcusedThisWeek ? (
+            <Animated.View
+              entering={FadeInDown.delay(185).springify()}
+              className="mx-6 mt-4"
+            >
+              <ThemeChrome theme={themePalette}>
+              <View className="p-4">
+              <Text className="text-sm font-semibold text-white">Weekly workout requirement excused</Text>
+              <Text className="mt-1 text-xs text-af-silver">You are excused from the 5 workouts this week requirement for the current attendance week.</Text>
+              </View>
+              </ThemeChrome>
+            </Animated.View>
+          ) : null}
+
           <Animated.View
             entering={FadeInDown.delay(200).springify()}
-            className="mx-6 mt-4 p-4 bg-white/5 rounded-2xl border border-white/10"
+            className="mx-6 mt-4"
           >
+            <ThemeChrome theme={themePalette}>
+            <View className="p-4">
             <View className="flex-row items-center justify-between mb-3">
               <Text className="text-white/60 text-xs uppercase tracking-wider">Your Monthly Summary</Text>
               <Text className="text-af-silver text-xs">{formatMonthLabel(summaryMonth)}</Text>
@@ -2379,6 +2584,8 @@ export default function ProfileScreen() {
                 <Text className="text-white font-semibold mt-1">{latestMonthlyPFRA?.overallScore ?? 'N/A'}</Text>
               </View>
             </View>
+            </View>
+            </ThemeChrome>
           </Animated.View>
 
           <Animated.View
@@ -2390,8 +2597,9 @@ export default function ProfileScreen() {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                 router.push('/personal-analytics');
               }}
-              className="rounded-2xl border border-white/10 bg-white/5 p-4"
             >
+              <ThemeChrome theme={themePalette}>
+              <View className="p-4">
               <View className="flex-row items-center justify-between mb-3">
                 <Text className="text-white/60 text-xs uppercase tracking-wider">Personal Analytics</Text>
                 <Text className="text-af-silver text-xs">Open</Text>
@@ -2415,6 +2623,8 @@ export default function ProfileScreen() {
                   <Text className="text-af-silver text-xs">Avg Min</Text>
                 </View>
               </View>
+              </View>
+              </ThemeChrome>
             </Pressable>
           </Animated.View>
 
@@ -2428,7 +2638,8 @@ export default function ProfileScreen() {
               entering={FadeInDown.delay(210).springify()}
               className="mx-6 mt-4"
             >
-              <View className="rounded-2xl border border-white/10 bg-white/5 p-4">
+              <ThemeChrome theme={themePalette}>
+              <View className="p-4">
                 <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">History</Text>
                 <View className="flex-row flex-wrap" style={{ gap: 12 }}>
                     <Pressable
@@ -2469,6 +2680,7 @@ export default function ProfileScreen() {
                     </Pressable>
                   </View>
                 </View>
+              </ThemeChrome>
             </Animated.View>
           </TutorialTarget>
 
@@ -2760,6 +2972,22 @@ export default function ProfileScreen() {
                 </Pressable>
               )}
 
+              {isOwnerUser && (
+                <Pressable
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setShowAuditTrailModal(true);
+                  }}
+                  className="flex-row items-center bg-white/5 border border-white/10 rounded-xl p-4 mb-3"
+                >
+                  <FileText size={24} color="#C0C0C0" />
+                  <View className="ml-3 flex-1">
+                    <Text className="text-white font-semibold">Admin Action Audit Trail</Text>
+                    <Text className="text-af-silver text-xs">Owner-only log of member and role management actions</Text>
+                  </View>
+                </Pressable>
+              )}
+
               {userAccountType === 'fitflight_creator' && (
                 <Pressable
                   onPress={() => {
@@ -2891,7 +3119,7 @@ export default function ProfileScreen() {
                    <Text className="text-af-silver text-sm mt-1 italic">{DEVELOPER_TITLE}</Text>
                   <Text className="text-af-silver mt-1">{OWNER_EMAIL}</Text>
                   <Pressable
-                    onPress={() => handleOpenSupportMessages(OWNER_EMAIL)}
+                    onPress={() => handleOpenSupportMessages('developer')}
                     className="flex-row items-center bg-af-accent/10 border border-af-accent/30 rounded-xl p-4 mt-4"
                   >
                     <MessageSquare size={22} color="#4A90D9" />
@@ -2910,7 +3138,7 @@ export default function ProfileScreen() {
                       <Text className="text-af-silver text-sm mt-1 italic">{PROJECT_COORDINATOR_TITLE}</Text>
                     <Text className="text-af-silver mt-1">{projectCoordinatorEmail || 'Email unavailable'}</Text>
                     <Pressable
-                      onPress={() => projectCoordinatorEmail && handleOpenSupportMessages(projectCoordinatorEmail)}
+                      onPress={() => projectCoordinatorEmail && handleOpenSupportMessages('project_coordinator')}
                       disabled={!projectCoordinatorEmail}
                       className={cn(
                         "flex-row items-center border rounded-xl p-4 mt-4",
@@ -2961,94 +3189,105 @@ export default function ProfileScreen() {
               </Pressable>
             )}
           </Animated.View>
+          </PageContainer>
         </ScrollView>
       </SafeAreaView>
 
       {/* Add Member Modal */}
       <Modal visible={showAddModal} transparent animationType="slide">
-        <View className="flex-1 bg-black/80 justify-end">
-          <View className="bg-af-navy rounded-t-3xl p-6 pb-12">
+        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View entering={SlideInDown.duration(260)}
+            style={[
+              getThemeCardStyle(themePalette, 'feature'),
+              {
+                borderTopLeftRadius: 24,
+                borderTopRightRadius: 24,
+                maxHeight: '84%',
+                overflow: 'hidden',
+              },
+            ]}
+          >
+            <BlurView intensity={modalBlurIntensity} tint="dark" style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }} />
+            <View style={{ backgroundColor: 'rgba(8, 14, 24, 0.34)', padding: 24, paddingBottom: 48 }}>
             <View className="flex-row items-center justify-between mb-6">
-              <Text className="text-white text-xl font-bold">{editingMemberId ? 'Edit Member' : 'Add Member'}</Text>
+              <Text style={getThemeHeadingStyle(themePalette, 22)}>{editingMemberId ? 'Edit Member' : 'Add Member'}</Text>
               <Pressable
                 onPress={() => { setShowAddModal(false); resetForm(); }}
-                className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+                className="w-8 h-8 rounded-full items-center justify-center"
+                style={getThemeControlStyle(themePalette)}
               >
-                <X size={20} color="#C0C0C0" />
+                <X size={20} color={themePalette.textSecondary} />
               </Pressable>
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false}>
               {/* First Name */}
               <View className="mb-4">
-                <Text className="text-white/60 text-sm mb-2">First Name</Text>
-                <TextInput
-                  value={newMemberFirstName}
-                  onChangeText={setNewMemberFirstName}
-                  placeholder="Enter first name"
-                  placeholderTextColor="#ffffff40"
-                  className="bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10"
-                />
+                <Text style={getThemeBodyStyle(themePalette, 13, themePalette.textSecondary)} className="mb-2">First Name</Text>
+                <View style={getThemeControlStyle(themePalette)}>
+                  <TextInput
+                    value={newMemberFirstName}
+                    onChangeText={setNewMemberFirstName}
+                    placeholder="Enter first name"
+                    placeholderTextColor="#ffffff40"
+                    className="px-4 py-3"
+                    style={{ color: themePalette.textPrimary }}
+                  />
+                </View>
               </View>
 
               {/* Last Name */}
               <View className="mb-4">
-                <Text className="text-white/60 text-sm mb-2">Last Name</Text>
-                <TextInput
-                  value={newMemberLastName}
-                  onChangeText={setNewMemberLastName}
-                  placeholder="Enter last name"
-                  placeholderTextColor="#ffffff40"
-                  className="bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10"
-                />
+                <Text style={getThemeBodyStyle(themePalette, 13, themePalette.textSecondary)} className="mb-2">Last Name</Text>
+                <View style={getThemeControlStyle(themePalette)}>
+                  <TextInput
+                    value={newMemberLastName}
+                    onChangeText={setNewMemberLastName}
+                    placeholder="Enter last name"
+                    placeholderTextColor="#ffffff40"
+                    className="px-4 py-3"
+                    style={{ color: themePalette.textPrimary }}
+                  />
+                </View>
               </View>
 
               {/* Rank */}
               <View className="mb-4">
-                <Text className="text-white/60 text-sm mb-2">Rank</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }}>
-                  <View className="flex-row">
-                    {RANKS.map((rank) => (
-                      <Pressable
-                        key={rank}
-                        onPress={() => setNewMemberRank(rank)}
-                        className={cn(
-                          "px-4 py-2 rounded-lg mr-2 border",
-                          newMemberRank === rank
-                            ? "bg-af-accent border-af-accent"
-                            : "bg-white/5 border-white/10"
-                        )}
-                      >
-                        <Text className={cn(
-                          "text-sm",
-                          newMemberRank === rank ? "text-white" : "text-white/60"
-                        )}>{rank}</Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                </ScrollView>
+                <Text style={getThemeBodyStyle(themePalette, 13, themePalette.textSecondary)} className="mb-2">Rank</Text>
+                <View>
+                  {RANK_GROUPS.map((group, groupIndex) => (
+                    <View key={group.label} className={groupIndex > 0 ? 'mt-3' : ''}>
+                      <Text style={getThemeBodyStyle(themePalette, 12, themePalette.textMuted)} className="uppercase mb-2">{group.label}</Text>
+                      <View className="flex-row flex-wrap">
+                        {group.ranks.map((rank) => (
+                          <Pressable
+                            key={rank}
+                            onPress={() => setNewMemberRank(rank)}
+                            className="px-4 py-2 rounded-lg mr-2 mb-2 border"
+                            style={newMemberRank === rank ? getThemeControlStyle(themePalette, true) : getThemeControlStyle(themePalette)}
+                          >
+                            <Text style={getThemeBodyStyle(themePalette, 13, newMemberRank === rank ? themePalette.textPrimary : themePalette.textSecondary)}>{rank}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                    </View>
+                  ))}
+                </View>
               </View>
 
               {/* Flight */}
               <View className="mb-4">
-                <Text className="text-white/60 text-sm mb-2">Flight</Text>
+                <Text style={getThemeBodyStyle(themePalette, 13, themePalette.textSecondary)} className="mb-2">Flight</Text>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }}>
                   <View className="flex-row">
                     {FLIGHTS.map((flight) => (
                       <Pressable
                         key={flight}
                         onPress={() => setNewMemberFlight(flight)}
-                        className={cn(
-                          "px-4 py-2 rounded-lg mr-2 border",
-                          newMemberFlight === flight
-                            ? "bg-af-accent border-af-accent"
-                            : "bg-white/5 border-white/10"
-                        )}
+                        className="px-4 py-2 rounded-lg mr-2 border"
+                        style={newMemberFlight === flight ? getThemeControlStyle(themePalette, true) : getThemeControlStyle(themePalette)}
                       >
-                        <Text className={cn(
-                          "text-sm",
-                          newMemberFlight === flight ? "text-white" : "text-white/60"
-                        )}>{flight}</Text>
+                        <Text style={getThemeBodyStyle(themePalette, 13, newMemberFlight === flight ? themePalette.textPrimary : themePalette.textSecondary)}>{flight}</Text>
                       </Pressable>
                     ))}
                   </View>
@@ -3057,15 +3296,18 @@ export default function ProfileScreen() {
 
               {/* Email */}
               <View className="mb-4">
-                <Text className="text-white/60 text-sm mb-2">Email</Text>
-                <TextInput
-                  value={newMemberEmail}
-                  onChangeText={setNewMemberEmail}
-                  placeholder="name@us.af.mil"
-                  placeholderTextColor="#ffffff40"
-                  autoCapitalize="none"
-                  className="bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10"
-                />
+                <Text style={getThemeBodyStyle(themePalette, 13, themePalette.textSecondary)} className="mb-2">Email</Text>
+                <View style={getThemeControlStyle(themePalette)}>
+                  <TextInput
+                    value={newMemberEmail}
+                    onChangeText={setNewMemberEmail}
+                    placeholder="name@us.af.mil"
+                    placeholderTextColor="#ffffff40"
+                    autoCapitalize="none"
+                    className="px-4 py-3"
+                    style={{ color: themePalette.textPrimary }}
+                  />
+                </View>
               </View>
 
               {isOwnerReviewer && editingMemberId ? (
@@ -3110,26 +3352,30 @@ export default function ProfileScreen() {
                 </View>
               ) : null}
 
-              <Text className="text-white/40 text-xs mb-4">
+              <Text style={getThemeBodyStyle(themePalette, 12, themePalette.textMuted)} className="mb-4">
                 This updates the shared roster used by FitFlight and keeps attendance/account binding aligned.
               </Text>
 
               {/* Save Button */}
               <Pressable
                 onPress={handleSaveMember}
-                className="bg-af-accent py-4 rounded-xl mt-2"
+                className="py-4 rounded-xl mt-2"
+                style={getThemeControlStyle(themePalette, true)}
               >
-                <Text className="text-white font-bold text-center">{editingMemberId ? 'Save Changes' : 'Add Member'}</Text>
+                <Text style={[getThemeBodyStyle(themePalette, 15, themePalette.textPrimary), { fontWeight: '700', textAlign: 'center' }]}>{editingMemberId ? 'Save Changes' : 'Add Member'}</Text>
               </Pressable>
             </ScrollView>
-          </View>
-        </View>
+            </View>
+          </Animated.View>
+        </Animated.View>
       </Modal>
 
       {/* Manage Members Modal */}
       <Modal visible={showManageModal} transparent animationType="slide">
-        <View className="flex-1 bg-black/80 justify-end">
-          <View className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[80%]">
+        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View entering={SlideInDown.duration(260)} className="rounded-t-3xl max-h-[80%]" style={{ overflow: 'hidden' }}>
+            <BlurView intensity={modalBlurIntensity} tint="dark" style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }} />
+            <View className="bg-af-navy/70 rounded-t-3xl p-6 pb-12">
             <View className="flex-row items-center justify-between mb-6">
               <Text className="text-white text-xl font-bold">Manage Members</Text>
               <Pressable
@@ -3201,7 +3447,7 @@ export default function ProfileScreen() {
                         <Text className="text-af-silver text-xs mt-1">{member.email}</Text>
                         <View className="flex-row items-center mt-3">
                           <View className="bg-white/10 rounded-full px-2 py-1 mr-2">
-                            <Text className="text-af-silver text-xs">{member.flight} Flight</Text>
+                                <Text className="text-af-silver text-xs">{formatFlightDisplay(member.flight)}</Text>
                           </View>
                           <View className={cn("px-2 py-1 rounded-full", memberColors.bg)}>
                             <Text className={cn("text-xs", memberColors.text)}>
@@ -3238,6 +3484,16 @@ export default function ProfileScreen() {
                         </Pressable>
                       </View>
                     )}
+                    {!isPTL && canManage && !isOwner && member.accountType !== 'ufpm' && (
+                      <View className="mt-3 pt-3 border-t border-white/10">
+                        <Pressable
+                          onPress={() => handleAssignPTL(member.id)}
+                          className="self-start bg-af-accent/20 px-3 py-2 rounded-full"
+                        >
+                          <Text className="text-af-accent text-xs font-semibold">Assign PFL</Text>
+                        </Pressable>
+                      </View>
+                    )}
                   </View>
                 );
               })}
@@ -3251,8 +3507,9 @@ export default function ProfileScreen() {
                 </View>
               )}
             </ScrollView>
-          </View>
-        </View>
+            </View>
+          </Animated.View>
+        </Animated.View>
       </Modal>
 
       <Modal visible={Boolean(memberPendingDelete)} transparent animationType="fade">
@@ -3305,8 +3562,10 @@ export default function ProfileScreen() {
       </Modal>
 
       <Modal visible={showUFPMModal} transparent animationType="slide">
-        <View className="flex-1 bg-black/80 justify-end">
-          <View className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[80%]">
+        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View entering={SlideInDown.duration(260)} className="rounded-t-3xl max-h-[80%]" style={{ overflow: 'hidden' }}>
+            <BlurView intensity={modalBlurIntensity} tint="dark" style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }} />
+            <View className="bg-af-navy/70 rounded-t-3xl p-6 pb-12">
             <View className="flex-row items-center justify-between mb-6">
               <Text className="text-white text-xl font-bold">Select UFPM</Text>
               <Pressable
@@ -3347,7 +3606,7 @@ export default function ProfileScreen() {
                   <Text className="text-af-silver text-xs mt-1">{member.email}</Text>
                   <View className="flex-row items-center mt-3">
                     <View className="bg-white/10 rounded-full px-2 py-1 mr-2">
-                      <Text className="text-af-silver text-xs">{member.flight} Flight</Text>
+                                <Text className="text-af-silver text-xs">{formatFlightDisplay(member.flight)}</Text>
                     </View>
                     {member.accountType === 'ufpm' && (
                       <View className="bg-af-gold/20 rounded-full px-2 py-1">
@@ -3358,13 +3617,16 @@ export default function ProfileScreen() {
                 </Pressable>
               ))}
             </ScrollView>
-          </View>
-        </View>
+            </View>
+          </Animated.View>
+        </Animated.View>
       </Modal>
 
       <Modal visible={showResetUserPasswordModal} transparent animationType="slide">
-        <View className="flex-1 bg-black/80 justify-end">
-          <View className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[85%]">
+        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View entering={SlideInDown.duration(260)} className="rounded-t-3xl max-h-[85%]" style={{ overflow: 'hidden' }}>
+            <BlurView intensity={modalBlurIntensity} tint="dark" style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }} />
+            <View className="bg-af-navy/70 rounded-t-3xl p-6 pb-12">
             <View className="flex-row items-center justify-between mb-6">
               <Text className="text-white text-xl font-bold">Reset User Password</Text>
               <Pressable
@@ -3477,8 +3739,9 @@ export default function ProfileScreen() {
                 </View>
               )}
             </ScrollView>
-          </View>
-        </View>
+            </View>
+          </Animated.View>
+        </Animated.View>
       </Modal>
 
       <Modal visible={showUFPMConfirmModal} transparent animationType="fade">
@@ -3601,26 +3864,38 @@ export default function ProfileScreen() {
       </Modal>
 
       <Modal visible={showDeveloperMessageModal} transparent animationType="slide">
-        <View className="flex-1 bg-black/80 justify-end">
-          <View className="bg-af-navy rounded-t-3xl p-6 pb-10 max-h-[88%]">
+        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View entering={SlideInDown.duration(260)}>
+          <ThemeChrome theme={themePalette} variant="feature" blurIntensity={modalBlurIntensity} style={{ borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '88%' }}>
+          <View className="p-6 pb-10">
             <View className="flex-row items-start justify-between mb-4">
               <View className="flex-1 pr-4">
-                <Text className="text-white text-xl font-bold">Message the FitFlight Team</Text>
-                <Text className="text-af-silver text-sm mt-1">
+                <Text style={getThemeHeadingStyle(themePalette, 22)}>Message the FitFlight Team</Text>
+                <Text style={[getThemeBodyStyle(themePalette, 14, themePalette.textSecondary), { marginTop: 4 }]}>
                   {activeSupportContact?.key === 'project_coordinator'
-                    ? 'Message the project coordinator in-app.'
+                    ? 'Direct message with the Project Coordinator.'
                     : activeSupportContact
-                      ? `Message the ${activeSupportContact.title.toLowerCase()} in-app.`
+                      ? `Direct message with the ${activeSupportContact.title}.`
                       : 'Send a support message without leaving the app.'}
                 </Text>
               </View>
               <Pressable
                 onPress={() => setShowDeveloperMessageModal(false)}
-                className="mt-1 w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+                className="w-8 h-8 rounded-full items-center justify-center"
+                style={getThemeControlStyle(themePalette)}
               >
-                <X size={20} color="#C0C0C0" />
+                <X size={20} color={themePalette.textSecondary} />
               </Pressable>
             </View>
+
+            {activeSupportThreadId ? (
+              <Pressable
+                onPress={() => handleDeleteSupportThread(activeSupportThreadId)}
+                className="mb-4 self-start rounded-full border border-af-danger/40 bg-af-danger/10 px-3 py-2"
+              >
+                <Text className="text-af-danger text-xs font-semibold">Delete Conversation</Text>
+              </Pressable>
+            ) : null}
 
             <View className="bg-white/5 border border-white/10 rounded-xl p-4 mb-4">
               <Text className="text-af-silver text-xs uppercase tracking-wider mb-2">Subject</Text>
@@ -3695,30 +3970,36 @@ export default function ProfileScreen() {
               disabled={supportSending}
               className={cn(
                 "mt-4 rounded-xl py-4 items-center justify-center",
-                supportSending ? "bg-white/10" : "bg-af-accent"
+                supportSending ? "opacity-60" : ""
               )}
+              style={supportSending ? getThemeControlStyle(themePalette) : { backgroundColor: themePalette.accent }}
             >
               <Text className={cn("font-semibold", supportSending ? "text-white/50" : "text-white")}>
                 {supportSending ? 'Sending...' : 'Send Message'}
               </Text>
             </Pressable>
           </View>
-        </View>
+          </ThemeChrome>
+          </Animated.View>
+        </Animated.View>
       </Modal>
 
       <Modal visible={showSupportInboxModal} transparent animationType="slide">
-        <View className="flex-1 bg-black/80 justify-end">
-          <View className="bg-af-navy rounded-t-3xl p-6 pb-10 max-h-[90%]">
+        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View entering={SlideInDown.duration(260)}>
+          <ThemeChrome theme={themePalette} variant="feature" blurIntensity={modalBlurIntensity} style={{ borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '90%' }}>
+          <View className="p-6 pb-10">
             <View className="flex-row items-center justify-between mb-4">
               <View>
-                <Text className="text-white text-xl font-bold">Support Inbox</Text>
-                <Text className="text-af-silver text-sm mt-1">FitFlight team message center</Text>
+                <Text style={getThemeHeadingStyle(themePalette, 22)}>Support Inbox</Text>
+                <Text style={[getThemeBodyStyle(themePalette, 14, themePalette.textSecondary), { marginTop: 4 }]}>FitFlight team message center</Text>
               </View>
               <Pressable
                 onPress={() => setShowSupportInboxModal(false)}
-                className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+                className="w-8 h-8 rounded-full items-center justify-center"
+                style={getThemeControlStyle(themePalette)}
               >
-                <X size={20} color="#C0C0C0" />
+                <X size={20} color={themePalette.textSecondary} />
               </Pressable>
             </View>
 
@@ -3731,9 +4012,8 @@ export default function ProfileScreen() {
                     <Text className="text-af-silver text-center py-8">No support messages yet</Text>
                   ) : (
                     supportThreads.map((thread) => (
-                      <Pressable
+                      <View
                         key={thread.id}
-                        onPress={() => handleSelectSupportThread(thread.id)}
                         className={cn(
                           "rounded-2xl p-4 mb-3 border",
                           thread.id === activeSupportThreadId
@@ -3741,10 +4021,11 @@ export default function ProfileScreen() {
                             : "bg-white/5 border-white/10"
                         )}
                       >
+                        <Pressable onPress={() => handleSelectSupportThread(thread.id)}>
                         <View className="flex-row items-start justify-between">
                           <View className="flex-1">
-                            <Text className="text-white font-semibold" numberOfLines={1}>{thread.requesterName}</Text>
-                            <Text className="text-af-silver text-xs mt-1" numberOfLines={1}>{thread.subject}</Text>
+                        <Text className="text-white font-semibold" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72}>{thread.requesterName}</Text>
+                        <Text className="text-af-silver text-xs mt-1" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72}>{thread.subject}</Text>
                           </View>
                           {thread.unreadForOwner > 0 ? (
                             <View className="bg-af-danger rounded-full px-2 py-1 ml-2">
@@ -3753,7 +4034,14 @@ export default function ProfileScreen() {
                           ) : null}
                         </View>
                         <Text className="text-af-silver text-xs mt-2" numberOfLines={2}>{thread.latestMessagePreview}</Text>
-                      </Pressable>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => handleDeleteSupportThread(thread.id)}
+                          className="mt-3 self-start rounded-full border border-af-danger/40 bg-af-danger/10 px-3 py-1.5"
+                        >
+                          <Text className="text-af-danger text-xs font-semibold">Delete</Text>
+                        </Pressable>
+                      </View>
                     ))
                   )}
                 </ScrollView>
@@ -3848,20 +4136,25 @@ export default function ProfileScreen() {
               </View>
             </View>
           </View>
-        </View>
+          </ThemeChrome>
+          </Animated.View>
+        </Animated.View>
       </Modal>
 
       {/* Notifications Modal */}
       <Modal visible={showNotificationsModal} transparent animationType="none">
         <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
-          <Animated.View entering={SlideInDown.duration(260)} className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[80%]">
+          <Animated.View entering={SlideInDown.duration(260)}>
+            <ThemeChrome theme={themePalette} variant="feature" blurIntensity={modalBlurIntensity} style={{ borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '80%' }}>
+            <View className="p-6 pb-12">
             <View className="flex-row items-center justify-between mb-6">
-              <Text className="text-white text-xl font-bold">Notifications</Text>
+              <Text style={getThemeHeadingStyle(themePalette, 22)}>Notifications</Text>
               <Pressable
                 onPress={() => setShowNotificationsModal(false)}
-                className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+                className="w-8 h-8 rounded-full items-center justify-center"
+                style={getThemeControlStyle(themePalette)}
               >
-                <X size={20} color="#C0C0C0" />
+                <X size={20} color={themePalette.textSecondary} />
               </Pressable>
             </View>
 
@@ -3925,6 +4218,8 @@ export default function ProfileScreen() {
                 </>
               )}
             </ScrollView>
+            </View>
+            </ThemeChrome>
             </Animated.View>
         </Animated.View>
       </Modal>
@@ -3945,7 +4240,7 @@ export default function ProfileScreen() {
                 <>
                   <View className="bg-white/5 rounded-xl p-4 mb-4">
                     <Text className="text-white font-semibold text-lg">{requesterDisplayName}</Text>
-                    <Text className="text-af-silver">{requestingMember.flight} Flight</Text>
+                    <Text className="text-af-silver">{formatFlightDisplay(requestingMember.flight)}</Text>
                     <Text className="text-af-silver text-sm">{requestingMember.email}</Text>
                   </View>
 
@@ -3984,19 +4279,108 @@ export default function ProfileScreen() {
         </View>
       </Modal>
 
+      <Modal visible={showAuditTrailModal} transparent animationType="fade">
+        <View className="flex-1 bg-black/80 items-center justify-center p-6">
+          <ThemeChrome
+            theme={themePalette}
+            variant="feature"
+            blurIntensity={modalBlurIntensity + 8}
+            style={{ width: '100%', maxWidth: 760, maxHeight: '86%', borderRadius: 24 }}
+          >
+            <View className="p-6">
+              <View className="flex-row items-center justify-between mb-4">
+                <View className="flex-1 pr-4">
+                  <Text style={getThemeHeadingStyle(themePalette, 22)}>Admin Action Audit Trail</Text>
+                  <Text style={[getThemeBodyStyle(themePalette, 14, themePalette.textSecondary), { marginTop: 4 }]}>
+                    Owner-only history of roster, role, and security-related admin changes.
+                  </Text>
+                </View>
+                <Pressable
+                  onPress={() => setShowAuditTrailModal(false)}
+                  className="w-8 h-8 rounded-full items-center justify-center"
+                  style={getThemeControlStyle(themePalette)}
+                >
+                  <X size={20} color={themePalette.textSecondary} />
+                </Pressable>
+              </View>
+
+              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 16 }}>
+                {auditTrailLoading ? (
+                  <Text style={getThemeBodyStyle(themePalette, 14, themePalette.textSecondary)}>Loading audit trail...</Text>
+                ) : auditTrailError ? (
+                  <Text className="text-af-danger">{auditTrailError}</Text>
+                ) : auditTrailEntries.length === 0 ? (
+                  <Text style={getThemeBodyStyle(themePalette, 14, themePalette.textSecondary)}>No admin actions logged yet.</Text>
+                ) : (
+                  auditTrailEntries.map((entry) => (
+                    <ThemeChrome key={entry.id} theme={themePalette} variant="alt" style={{ marginBottom: 12 }}>
+                      <View className="p-4">
+                        <View className="flex-row items-start justify-between">
+                          <View className="flex-1 pr-3">
+                            <Text style={getThemeHeadingStyle(themePalette, 16)}>{formatAuditActionLabel(entry.actionType)}</Text>
+                            <Text style={[getThemeBodyStyle(themePalette, 13, themePalette.textSecondary), { marginTop: 4 }]}>
+                              {entry.actorName} · {new Date(entry.createdAt).toLocaleString([], {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                hour12: false,
+                                year: 'numeric',
+                                month: 'short',
+                                day: '2-digit',
+                              })}
+                            </Text>
+                          </View>
+                          <View className="rounded-full border px-3 py-1" style={{ borderColor: `${themePalette.accent}55`, backgroundColor: `${themePalette.accent}18` }}>
+                            <Text style={getThemeBodyStyle(themePalette, 11, themePalette.accent)}>{entry.actorRole}</Text>
+                          </View>
+                        </View>
+                        {entry.targetName || entry.targetEmail ? (
+                          <Text style={[getThemeBodyStyle(themePalette, 13, themePalette.textPrimary), { marginTop: 10 }]}>
+                            Target: {entry.targetName ?? entry.targetEmail}
+                          </Text>
+                        ) : null}
+                        {formatAuditDetailsPreview(entry.details) ? (
+                          <Text style={[getThemeBodyStyle(themePalette, 12, themePalette.textSecondary), { marginTop: 8 }]}>
+                            {formatAuditDetailsPreview(entry.details)}
+                          </Text>
+                        ) : null}
+                      </View>
+                    </ThemeChrome>
+                  ))
+                )}
+              </ScrollView>
+            </View>
+          </ThemeChrome>
+        </View>
+      </Modal>
+
       <Modal visible={showSettingsModal} transparent animationType="fade">
         <View className="flex-1 bg-black/80 items-center justify-center p-6">
-          <View className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20" style={{ maxHeight: '88%' }}>
+          <View
+            style={[
+              getThemeCardStyle(themePalette, 'feature'),
+              {
+                width: '100%',
+                maxWidth: 384,
+                maxHeight: '88%',
+                alignSelf: 'center',
+                padding: 24,
+                overflow: 'hidden',
+              },
+            ]}
+          >
+            <BlurView intensity={modalBlurIntensity} tint="dark" style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }} />
+            <View style={{ backgroundColor: 'rgba(8, 14, 24, 0.28)', position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }} />
             <View className="flex-row items-center justify-between mb-4">
               <View className="flex-1 pr-4">
-                <Text className="text-white text-xl font-bold">Settings</Text>
-                <Text className="text-af-silver text-sm mt-1">Account and app preferences.</Text>
+                <Text style={getThemeHeadingStyle(themePalette, 22)}>Settings</Text>
+                <Text style={[getThemeBodyStyle(themePalette, 14, themePalette.textSecondary), { marginTop: 4 }]}>Account and app preferences.</Text>
               </View>
               <Pressable
                 onPress={() => setShowSettingsModal(false)}
-                className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+                className="w-8 h-8 rounded-full items-center justify-center"
+                style={getThemeControlStyle(themePalette)}
               >
-                <X size={20} color="#C0C0C0" />
+                <X size={20} color={themePalette.textSecondary} />
               </Pressable>
             </View>
 
@@ -4028,7 +4412,7 @@ export default function ProfileScreen() {
                   setSelectedSquadron(user?.squadron ?? 'Hawks');
                   setShowChangeSquadronModal(true);
                 }}
-                className="flex-row items-center rounded-xl border border-white/20 bg-white/10 p-4"
+                className="mt-3 flex-row items-center rounded-xl border border-white/20 bg-white/10 p-4"
               >
                 <Building2 size={20} color="#C0C0C0" />
                 <View className="ml-3 flex-1">
@@ -4062,16 +4446,13 @@ export default function ProfileScreen() {
                     <Text className="text-white font-semibold">Show Workout History on Profile</Text>
                     <Text className="text-af-silver text-xs mt-1">Let other users open your Workout History when viewing your Profile.</Text>
                   </View>
-                  <Switch
+                  <SettingsToggle
                     value={profileVisibilitySettings.workoutHistory}
                     disabled={isUpdatingProfileSettings}
-                    onValueChange={(value) => {
+                    onPress={() => {
                       Haptics.selectionAsync();
-                      void persistProfileVisibilitySettings({ showWorkoutHistoryOnProfile: value });
+                      void persistProfileVisibilitySettings({ showWorkoutHistoryOnProfile: !profileVisibilitySettings.workoutHistory });
                     }}
-                    trackColor={{ false: '#334155', true: '#4A90D9' }}
-                    thumbColor="#FFFFFF"
-                    ios_backgroundColor="#334155"
                   />
                 </View>
 
@@ -4082,16 +4463,13 @@ export default function ProfileScreen() {
                     <Text className="text-white font-semibold">Show Workout Uploads on Profile</Text>
                     <Text className="text-af-silver text-xs mt-1">Let other users view your uploaded workout section on your Profile.</Text>
                   </View>
-                  <Switch
+                  <SettingsToggle
                     value={profileVisibilitySettings.workoutUploads}
                     disabled={isUpdatingProfileSettings}
-                    onValueChange={(value) => {
+                    onPress={() => {
                       Haptics.selectionAsync();
-                      void persistProfileVisibilitySettings({ showWorkoutUploadsOnProfile: value });
+                      void persistProfileVisibilitySettings({ showWorkoutUploadsOnProfile: !profileVisibilitySettings.workoutUploads });
                     }}
-                    trackColor={{ false: '#334155', true: '#4A90D9' }}
-                    thumbColor="#FFFFFF"
-                    ios_backgroundColor="#334155"
                   />
                 </View>
 
@@ -4102,17 +4480,57 @@ export default function ProfileScreen() {
                     <Text className="text-white font-semibold">Show PFRA Records on Profile</Text>
                     <Text className="text-af-silver text-xs mt-1">Let other users view your PFRA section and PFRA History on your Profile.</Text>
                   </View>
-                  <Switch
+                  <SettingsToggle
                     value={profileVisibilitySettings.pfraRecords}
                     disabled={isUpdatingProfileSettings}
-                    onValueChange={(value) => {
+                    onPress={() => {
                       Haptics.selectionAsync();
-                      void persistProfileVisibilitySettings({ showPFRARecordsOnProfile: value });
+                      void persistProfileVisibilitySettings({ showPFRARecordsOnProfile: !profileVisibilitySettings.pfraRecords });
                     }}
-                    trackColor={{ false: '#334155', true: '#4A90D9' }}
-                    thumbColor="#FFFFFF"
-                    ios_backgroundColor="#334155"
                   />
+                </View>
+              </View>
+
+              <View className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
+                <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">Theme</Text>
+                <Text className="text-af-silver text-xs mb-3">Choose how FitFlight looks on this device.</Text>
+                <View className="flex-row flex-wrap" style={{ gap: 10 }}>
+                  {Object.values(APP_THEMES).map((theme) => {
+                    const isSelected = appTheme === theme.id;
+                    return (
+                      <Pressable
+                        key={theme.id}
+                        onPress={() => {
+                          Haptics.selectionAsync();
+                          setAppTheme(theme.id);
+                        }}
+                        className={cn(
+                          "w-[48%] rounded-2xl border p-3",
+                          isSelected ? "border-af-accent bg-af-accent/10" : "border-white/10 bg-black/10"
+                        )}
+                      >
+                        <View className="mb-2 flex-row" style={{ gap: 6 }}>
+                          {theme.gradient.map((color) => (
+                            <View key={`${theme.id}-${color}`} style={{ backgroundColor: color, width: 18, height: 18, borderRadius: 999 }} />
+                          ))}
+                        </View>
+                        <Text className="text-white font-semibold">{theme.label}</Text>
+                        <Text className="mt-1 text-xs text-af-silver">
+                          {theme.id === 'default'
+                            ? 'Current FitFlight look'
+                            : theme.id === 'dark'
+                              ? 'Low-glare dark shell'
+                              : theme.id === 'pixel'
+                                ? 'Retro arcade-inspired'
+                                : theme.id === 'cyber'
+                                  ? 'Neon tactical glow'
+                                  : theme.id === 'space'
+                                    ? 'Deep-space contrast'
+                                    : 'Soft floral glow'}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
                 </View>
               </View>
             </ScrollView>
@@ -4137,28 +4555,33 @@ export default function ProfileScreen() {
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 4 }}>
-              <View className="flex-row flex-wrap" style={{ gap: 10 }}>
-                {RANKS.map((rank) => {
-                  const isSelected = selectedRank === rank;
-                  return (
-                    <Pressable
-                      key={rank}
-                      onPress={() => {
-                        Haptics.selectionAsync();
-                        setSelectedRank(rank);
-                      }}
-                      className={cn(
-                        "rounded-full border px-4 py-2",
-                        isSelected ? "border-af-accent bg-af-accent/20" : "border-white/10 bg-white/5"
-                      )}
-                    >
-                      <Text className={cn("font-semibold", isSelected ? "text-af-accent" : "text-white")}>
-                        {rank}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
+              {RANK_GROUPS.map((group, groupIndex) => (
+                <View key={group.label} className={groupIndex > 0 ? 'mt-4' : ''}>
+                  <Text className="text-af-silver text-xs uppercase tracking-[0.4px] mb-2">{group.label}</Text>
+                  <View className="flex-row flex-wrap" style={{ gap: 10 }}>
+                    {group.ranks.map((rank) => {
+                      const isSelected = selectedRank === rank;
+                      return (
+                        <Pressable
+                          key={rank}
+                          onPress={() => {
+                            Haptics.selectionAsync();
+                            setSelectedRank(rank);
+                          }}
+                          className={cn(
+                            "rounded-full border px-4 py-2",
+                            isSelected ? "border-af-accent bg-af-accent/20" : "border-white/10 bg-white/5"
+                          )}
+                        >
+                          <Text className={cn("font-semibold", isSelected ? "text-af-accent" : "text-white")}>
+                            {rank}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+              ))}
             </ScrollView>
 
             <View className="flex-row mt-6">
@@ -4261,227 +4684,6 @@ export default function ProfileScreen() {
           </View>
         </View>
       </Modal>
-
-      {/* Profile Picture Modal */}
-        <Modal visible={showProfilePictureModal} transparent animationType="fade">
-          <View className="flex-1 bg-black/80 items-center justify-center p-6">
-            <View className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20">
-            <View className="flex-row items-center justify-between mb-6">
-              <Text className="text-white text-xl font-bold">Profile Picture</Text>
-              <Pressable
-                onPress={() => setShowProfilePictureModal(false)}
-                className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
-              >
-                <X size={20} color="#C0C0C0" />
-              </Pressable>
-            </View>
-
-            {/* Current Profile Picture Preview */}
-            <View className="items-center mb-6">
-              {user?.profilePicture ? (
-                <Image
-                  source={{ uri: user.profilePicture }}
-                  className="w-32 h-32 rounded-full"
-                />
-              ) : (
-                <View className="w-32 h-32 bg-af-accent/30 rounded-full items-center justify-center">
-                  {userAccountType === 'fitflight_creator' ? (
-                    <Crown size={64} color="#A855F7" />
-                  ) : (
-                    <User size={64} color="#4A90D9" />
-                  )}
-                </View>
-              )}
-            </View>
-
-            {isUpdatingProfilePicture && (
-              <View className="mb-4 rounded-xl border border-af-accent/30 bg-af-accent/10 px-4 py-3">
-                <Text className="text-af-silver text-sm">Uploading image...</Text>
-              </View>
-            )}
-
-            {/* Action Buttons */}
-            <Pressable
-              onPress={takeProfilePhoto}
-              disabled={isUpdatingProfilePicture}
-              className={cn(
-                "flex-row items-center rounded-xl p-4 mb-3",
-                isUpdatingProfilePicture
-                  ? "bg-white/5 border border-white/10 opacity-60"
-                  : "bg-af-accent/20 border border-af-accent/50"
-              )}
-            >
-              <Camera size={24} color="#4A90D9" />
-              <Text className="text-white font-semibold ml-3">Take Photo</Text>
-            </Pressable>
-
-            <Pressable
-              onPress={pickProfilePicture}
-              disabled={isUpdatingProfilePicture}
-              className={cn(
-                "flex-row items-center rounded-xl p-4 mb-3",
-                isUpdatingProfilePicture
-                  ? "bg-white/5 border border-white/10 opacity-60"
-                  : "bg-white/5 border border-white/10"
-              )}
-            >
-              <ImageIcon size={24} color="#C0C0C0" />
-              <Text className="text-white font-semibold ml-3">Choose from Gallery</Text>
-            </Pressable>
-
-            {user?.profilePicture && (
-              <Pressable
-                onPress={removeProfilePicture}
-                disabled={isUpdatingProfilePicture}
-                className={cn(
-                  "flex-row items-center rounded-xl p-4",
-                  isUpdatingProfilePicture
-                    ? "bg-white/5 border border-white/10 opacity-60"
-                    : "bg-af-danger/20 border border-af-danger/50"
-                )}
-              >
-                <Trash2 size={24} color="#EF4444" />
-                <Text className="text-af-danger font-semibold ml-3">Remove Photo</Text>
-              </Pressable>
-            )}
-            </View>
-          </View>
-        </Modal>
-
-        <Modal visible={!!pendingProfileImageCrop} transparent animationType="fade">
-          <View className="flex-1 bg-black/85 items-center justify-center p-6">
-            <View className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20">
-              <View className="flex-row items-center justify-between mb-4">
-                <View>
-                  <Text className="text-white text-xl font-bold">Crop Profile Picture</Text>
-                  <Text className="text-af-silver text-sm mt-1">Adjust the image before uploading it to FitFlight.</Text>
-                </View>
-                <Pressable
-                  onPress={cancelProfileImageCrop}
-                  disabled={isUpdatingProfilePicture}
-                  className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
-                >
-                  <X size={20} color="#C0C0C0" />
-                </Pressable>
-              </View>
-
-              {profileCropPreview && pendingProfileImageCrop ? (
-                <View className="items-center mb-5">
-                  <View
-                    style={{
-                      width: profileCropPreview.frameSize,
-                      height: profileCropPreview.frameSize,
-                      borderRadius: 999,
-                      overflow: 'hidden',
-                      borderWidth: 2,
-                      borderColor: '#4A90D9',
-                      backgroundColor: 'rgba(255,255,255,0.05)',
-                    }}
-                  >
-                    <Image
-                      source={{ uri: pendingProfileImageCrop.uri }}
-                      style={{
-                        width: profileCropPreview.displayWidth,
-                        height: profileCropPreview.displayHeight,
-                        transform: [
-                          { translateX: profileCropPreview.translateX },
-                          { translateY: profileCropPreview.translateY },
-                        ],
-                      }}
-                      resizeMode="cover"
-                    />
-                  </View>
-                </View>
-              ) : null}
-
-              <View className="mb-4">
-                <View className="flex-row items-center justify-between mb-2">
-                  <Text className="text-white font-semibold">Zoom</Text>
-                  <Text className="text-af-silver text-xs">{profileCropZoom.toFixed(2)}x</Text>
-                </View>
-                <SmartSlider
-                  value={profileCropZoom}
-                  minimumValue={1}
-                  maximumValue={3}
-                  step={0.01}
-                  minimumTrackTintColor="#4A90D9"
-                  maximumTrackTintColor="rgba(255,255,255,0.18)"
-                  thumbTintColor="#4A90D9"
-                  onValueChange={setProfileCropZoom}
-                />
-              </View>
-
-              <View className="mb-4">
-                <View className="flex-row items-center justify-between mb-2">
-                  <Text className="text-white font-semibold">Horizontal Position</Text>
-                  <Text className="text-af-silver text-xs">
-                    {profileCropOffsetX > 0 ? 'Right' : profileCropOffsetX < 0 ? 'Left' : 'Centered'}
-                  </Text>
-                </View>
-                <SmartSlider
-                  value={profileCropOffsetX}
-                  minimumValue={-1}
-                  maximumValue={1}
-                  step={0.01}
-                  minimumTrackTintColor="#4A90D9"
-                  maximumTrackTintColor="rgba(255,255,255,0.18)"
-                  thumbTintColor="#4A90D9"
-                  onValueChange={setProfileCropOffsetX}
-                />
-              </View>
-
-              <View className="mb-6">
-                <View className="flex-row items-center justify-between mb-2">
-                  <Text className="text-white font-semibold">Vertical Position</Text>
-                  <Text className="text-af-silver text-xs">
-                    {profileCropOffsetY > 0 ? 'Down' : profileCropOffsetY < 0 ? 'Up' : 'Centered'}
-                  </Text>
-                </View>
-                <SmartSlider
-                  value={profileCropOffsetY}
-                  minimumValue={-1}
-                  maximumValue={1}
-                  step={0.01}
-                  minimumTrackTintColor="#4A90D9"
-                  maximumTrackTintColor="rgba(255,255,255,0.18)"
-                  thumbTintColor="#4A90D9"
-                  onValueChange={setProfileCropOffsetY}
-                />
-              </View>
-
-              {isUpdatingProfilePicture && (
-                <View className="mb-4 rounded-xl border border-af-accent/30 bg-af-accent/10 px-4 py-3">
-                  <Text className="text-af-silver text-sm">Uploading cropped image...</Text>
-                </View>
-              )}
-
-              <View className="flex-row">
-                <Pressable
-                  onPress={cancelProfileImageCrop}
-                  disabled={isUpdatingProfilePicture}
-                  className={cn(
-                    "flex-1 rounded-xl border px-4 py-3 mr-3 items-center",
-                    isUpdatingProfilePicture ? "border-white/10 bg-white/5 opacity-60" : "border-white/10 bg-white/5"
-                  )}
-                >
-                  <Text className="text-white font-semibold">Cancel</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => {
-                    void confirmProfileImageCrop();
-                  }}
-                  disabled={isUpdatingProfilePicture}
-                  className={cn(
-                    "flex-1 rounded-xl px-4 py-3 items-center",
-                    isUpdatingProfilePicture ? "bg-af-accent/40 opacity-70" : "bg-af-accent"
-                  )}
-                >
-                  <Text className="text-white font-semibold">Crop & Upload</Text>
-                </Pressable>
-              </View>
-            </View>
-          </View>
-        </Modal>
 
         <Modal visible={showWorkoutReviewModal} transparent animationType="fade">
         <View className="flex-1 bg-black/80 items-center justify-center p-6">

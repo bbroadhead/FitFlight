@@ -1,22 +1,29 @@
 import React, { useState, useMemo } from 'react';
-import { View, Text, Pressable, ScrollView } from 'react-native';
+import { View, Text, Pressable, ScrollView, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { ChevronLeft, Building2, Users, Trophy, Timer, MapPin, Dumbbell, TrendingUp, FileText } from 'lucide-react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import { useAuthStore, useMemberStore, type Squadron, SQUADRONS, getDisplayName } from '@/lib/store';
+import { useAuthStore, useMemberStore, formatFlightDisplay, type Squadron, SQUADRONS, getDisplayName } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { getMemberMonthSummary } from '@/lib/monthlyStats';
+import { PageContainer } from '@/components/PageContainer';
+import { ThemeBackdrop } from '@/components/ThemeBackdrop';
+import { ThemeChrome } from '@/components/ThemeChrome';
+import { getThemeBodyStyle, getThemeControlStyle, getThemeHeadingStyle, useAppTheme } from '@/lib/theme';
 
 export default function CrossSquadronScreen() {
+  const theme = useAppTheme();
   const router = useRouter();
+  const { width } = useWindowDimensions();
   const user = useAuthStore(s => s.user);
   const members = useMemberStore(s => s.members);
   const ptSessions = useMemberStore(s => s.ptSessions);
   const [selectedSquadron, setSelectedSquadron] = useState<Squadron | null>(null);
   const currentMonthKey = new Date().toISOString().slice(0, 7);
+  const contentMaxWidth = width >= 1440 ? 1240 : width >= 1180 ? 1100 : 960;
 
   // Get stats for each squadron - must be before conditional return
   const squadronStats = useMemo(() => {
@@ -54,20 +61,16 @@ export default function CrossSquadronScreen() {
   // Redirect if not fitflight_creator
   if (user?.accountType !== 'fitflight_creator') {
     return (
-      <View className="flex-1 bg-af-navy items-center justify-center">
-        <Text className="text-white">Access Denied</Text>
+      <View className="flex-1 items-center justify-center" style={{ backgroundColor: theme.background }}>
+        <ThemeBackdrop />
+        <Text style={getThemeHeadingStyle(theme, 22)}>Access Denied</Text>
       </View>
     );
   }
 
   return (
-    <View className="flex-1">
-      <LinearGradient
-        colors={['#0A1628', '#001F5C', '#0A1628']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
-      />
+    <View className="flex-1" style={{ backgroundColor: theme.background }}>
+      <ThemeBackdrop />
 
       <SafeAreaView edges={['top']} className="flex-1">
         {/* Header */}
@@ -80,21 +83,23 @@ export default function CrossSquadronScreen() {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
               router.back();
             }}
-            className="w-10 h-10 bg-white/10 rounded-full items-center justify-center mr-4"
+            className="w-10 h-10 rounded-full items-center justify-center mr-4"
+            style={getThemeControlStyle(theme)}
           >
-            <ChevronLeft size={24} color="#C0C0C0" />
+            <ChevronLeft size={24} color={theme.textSecondary} />
           </Pressable>
           <View>
-            <Text className="text-white text-xl font-bold">Cross-Squadron View</Text>
-            <Text className="text-af-silver text-sm">FitFlight Creator Access</Text>
+            <Text style={getThemeHeadingStyle(theme, 24)}>Cross-Squadron View</Text>
+            <Text style={getThemeBodyStyle(theme, 14)}>FitFlight Creator Access</Text>
           </View>
         </Animated.View>
 
         <ScrollView
-          className="flex-1 px-6"
-          contentContainerStyle={{ paddingBottom: 40 }}
+          className="flex-1"
+          contentContainerStyle={{ paddingBottom: 40, alignItems: 'center' }}
           showsVerticalScrollIndicator={false}
         >
+          <PageContainer maxWidth={contentMaxWidth} className="px-6">
           {/* Squadron Selection */}
           <Animated.View
             entering={FadeInDown.delay(150).springify()}
@@ -108,34 +113,31 @@ export default function CrossSquadronScreen() {
                   setSelectedSquadron(stats.squadron);
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                 }}
-                className={cn(
-                  "mb-3 p-4 rounded-2xl border",
-                  selectedSquadron === stats.squadron
-                    ? "bg-af-gold/20 border-af-gold/50"
-                    : "bg-white/5 border-white/10"
-                )}
+                className="mb-3"
               >
+              <ThemeChrome theme={theme} variant={selectedSquadron === stats.squadron ? 'feature' : 'default'}>
+              <View className="p-4">
                 <View className="flex-row items-center justify-between">
                   <View className="flex-row items-center">
                     <Building2
                       size={24}
-                      color={selectedSquadron === stats.squadron ? "#FFD700" : "#C0C0C0"}
+                      color={selectedSquadron === stats.squadron ? theme.accentAlt : theme.textSecondary}
                     />
                     <View className="ml-3">
                       <Text className={cn(
                         "font-bold text-lg",
-                        selectedSquadron === stats.squadron ? "text-af-gold" : "text-white"
+                        ""
                       )}>
                         {stats.squadron}
                       </Text>
-                      <Text className="text-af-silver text-sm">
+                      <Text className="text-sm" style={getThemeBodyStyle(theme, 14)}>
                         {stats.memberCount} members
                       </Text>
                     </View>
                   </View>
                   {stats.squadron === user?.squadron && (
-                    <View className="bg-af-accent/20 px-3 py-1 rounded-full">
-                      <Text className="text-af-accent text-xs font-semibold">Your Squadron</Text>
+                    <View className="px-3 py-1 rounded-full" style={getThemeControlStyle(theme, true)}>
+                      <Text className="text-xs font-semibold" style={{ color: theme.accent }}>Your Squadron</Text>
                     </View>
                   )}
                 </View>
@@ -143,18 +145,20 @@ export default function CrossSquadronScreen() {
                 {/* Quick Stats */}
                 <View className="flex-row mt-3 pt-3 border-t border-white/10">
                   <View className="flex-1 items-center">
-                    <Text className="text-white font-bold">{(stats.totalMinutes / 60).toFixed(2)}h</Text>
-                    <Text className="text-af-silver text-xs">Exercise</Text>
+                    <Text className="font-bold" style={{ color: theme.textPrimary }}>{(stats.totalMinutes / 60).toFixed(2)}h</Text>
+                    <Text className="text-xs" style={getThemeBodyStyle(theme, 12)}>Exercise</Text>
                   </View>
                   <View className="flex-1 items-center">
-                    <Text className="text-white font-bold">{stats.totalDistance.toFixed(2)}mi</Text>
-                    <Text className="text-af-silver text-xs">Distance</Text>
+                    <Text className="font-bold" style={{ color: theme.textPrimary }}>{stats.totalDistance.toFixed(2)}mi</Text>
+                    <Text className="text-xs" style={getThemeBodyStyle(theme, 12)}>Distance</Text>
                   </View>
                   <View className="flex-1 items-center">
-                    <Text className="text-white font-bold">{stats.totalWorkouts}</Text>
-                    <Text className="text-af-silver text-xs">Workouts</Text>
+                    <Text className="font-bold" style={{ color: theme.textPrimary }}>{stats.totalWorkouts}</Text>
+                    <Text className="text-xs" style={getThemeBodyStyle(theme, 12)}>Workouts</Text>
                   </View>
                 </View>
+              </View>
+              </ThemeChrome>
               </Pressable>
             ))}
           </Animated.View>
@@ -170,7 +174,8 @@ export default function CrossSquadronScreen() {
               </Text>
 
               {/* Stats Card */}
-              <View className="bg-white/5 rounded-2xl border border-white/10 p-4 mb-4">
+              <ThemeChrome theme={theme} style={{ marginBottom: 16 }}>
+              <View className="p-4">
                 <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">
                   Squadron Totals
                 </Text>
@@ -200,9 +205,11 @@ export default function CrossSquadronScreen() {
                   </View>
                 </View>
               </View>
+              </ThemeChrome>
 
               {/* Top Performers */}
-              <View className="bg-white/5 rounded-2xl border border-white/10 p-4 mb-4">
+              <ThemeChrome theme={theme} style={{ marginBottom: 16 }}>
+              <View className="p-4">
                 <View className="flex-row items-center mb-3">
                   <Trophy size={20} color="#FFD700" />
                   <Text className="text-white font-semibold ml-2">Top Performers</Text>
@@ -229,7 +236,7 @@ export default function CrossSquadronScreen() {
                       <Text className="text-white font-medium">
                         {getDisplayName(performer)}
                       </Text>
-                      <Text className="text-af-silver text-xs">{performer.flight} Flight</Text>
+                      <Text className="text-af-silver text-xs">{formatFlightDisplay(performer.flight)}</Text>
                     </View>
                     <Text className="text-af-accent font-bold">
                       {performer.totalScore.toLocaleString()} pts
@@ -237,6 +244,7 @@ export default function CrossSquadronScreen() {
                   </View>
                 ))}
               </View>
+              </ThemeChrome>
 
               {/* View Full Analytics Button */}
               <Pressable
@@ -252,6 +260,7 @@ export default function CrossSquadronScreen() {
               </Pressable>
             </Animated.View>
           )}
+          </PageContainer>
         </ScrollView>
       </SafeAreaView>
     </View>

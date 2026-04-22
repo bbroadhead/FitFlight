@@ -14,7 +14,7 @@ create table if not exists public.pt_session_attendees (
   attendance_source text not null default 'manual',
   created_at timestamptz not null default now(),
   primary key (session_id, member_id),
-  constraint pt_session_attendees_attendance_source_check check (attendance_source in ('manual', 'workout'))
+  constraint pt_session_attendees_attendance_source_check check (attendance_source in ('manual', 'workout', 'strava', 'pfra'))
 );
 
 alter table public.pt_session_attendees
@@ -24,7 +24,7 @@ alter table public.pt_session_attendees
   drop constraint if exists pt_session_attendees_attendance_source_check;
 
 alter table public.pt_session_attendees
-  add constraint pt_session_attendees_attendance_source_check check (attendance_source in ('manual', 'workout'));
+  add constraint pt_session_attendees_attendance_source_check check (attendance_source in ('manual', 'workout', 'strava', 'pfra'));
 
 alter table public.pt_sessions enable row level security;
 alter table public.pt_session_attendees enable row level security;

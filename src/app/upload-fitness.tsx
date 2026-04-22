@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, Pressable, ScrollView, TextInput, Modal } from 'react-native';
+import { View, Text, Pressable, ScrollView, TextInput, Modal, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -10,6 +10,7 @@ import { cn } from '@/lib/cn';
 import { useAuthStore, useMemberStore, getDisplayName, type FitnessAssessment } from '@/lib/store';
 import { type Gender } from '@/lib/pfraScoring2026';
 import { savePFRARecord } from '@/lib/supabaseData';
+import { PageContainer } from '@/components/PageContainer';
 
 type CardioTest = 'run_2mile' | 'hamr_20m' | 'walk_2k';
 type StrengthTest = 'pushups' | 'hand_release_pushups';
@@ -30,6 +31,7 @@ function ExemptToggle({ checked, onPress }: { checked: boolean; onPress: () => v
 
 export default function UploadFitnessTrackerScreen() {
   const router = useRouter();
+  const { width } = useWindowDimensions();
   const user = useAuthStore((s) => s.user);
   const accessToken = useAuthStore((s) => s.accessToken);
   const members = useMemberStore((s) => s.members);
@@ -58,6 +60,7 @@ export default function UploadFitnessTrackerScreen() {
   const [coreScore, setCoreScore] = useState('');
   const [coreValue, setCoreValue] = useState('');
   const [coreExempt, setCoreExempt] = useState(false);
+  const contentMaxWidth = width >= 1440 ? 1120 : width >= 1180 ? 980 : 860;
 
   const currentMember = user ? members.find((m) => m.id === user.id) : null;
   const previousAssessment = currentMember?.fitnessAssessments[currentMember.fitnessAssessments.length - 1];
@@ -157,6 +160,7 @@ export default function UploadFitnessTrackerScreen() {
       />
 
       <SafeAreaView edges={['top']} className="flex-1">
+        <PageContainer maxWidth={contentMaxWidth}>
         <Animated.View entering={FadeInDown.delay(100).springify()} className="px-6 pt-4 pb-2 flex-row items-center">
           <Pressable
             onPress={() => {
@@ -169,8 +173,10 @@ export default function UploadFitnessTrackerScreen() {
           </Pressable>
           <Text className="text-white text-xl font-bold">Add Manual PFRA</Text>
         </Animated.View>
+        </PageContainer>
 
-        <ScrollView className="flex-1 px-6" contentContainerStyle={{ paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+        <ScrollView className="flex-1" contentContainerStyle={{ paddingBottom: 40, alignItems: 'center' }} showsVerticalScrollIndicator={false}>
+          <PageContainer maxWidth={contentMaxWidth} className="px-6">
           {previousAssessment && (
             <Animated.View entering={FadeInDown.delay(125).springify()} className="mt-4 p-4 bg-white/5 rounded-2xl border border-white/10">
               <Text className="text-white/60 text-sm mb-3">Previous PFRA ({previousAssessment.date})</Text>
@@ -343,6 +349,7 @@ export default function UploadFitnessTrackerScreen() {
               <Text className={cn("text-center font-bold", canSubmit ? "text-white" : "text-white/40")}>Review PFRA</Text>
             </Pressable>
           </Animated.View>
+          </PageContainer>
         </ScrollView>
       </SafeAreaView>
 

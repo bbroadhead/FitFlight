@@ -1,4 +1,19 @@
-import type { AccountType, FitnessAssessment, Flight, Member, PTSession, ScheduledPTKind, ScheduledPTScope, ScheduledPTSession, SharedWorkout, Squadron, WorkoutType } from '@/lib/store';
+import type {
+  AccountType,
+  AttendanceSource,
+  FitnessAssessment,
+  Flight,
+  Member,
+  PFRAAccountabilityStatus,
+  PFRARecordType,
+  PTSession,
+  ScheduledPTKind,
+  ScheduledPTScope,
+  ScheduledPTSession,
+  SharedWorkout,
+  Squadron,
+  WorkoutType,
+} from '@/lib/store';
 import { getValidAccessToken } from '@/lib/supabaseAuth';
 import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
@@ -38,7 +53,15 @@ type AttendanceSessionRow = {
 type AttendanceAttendeeRow = {
   session_id: string;
   member_id: string;
-  attendance_source?: 'manual' | 'workout' | null;
+  attendance_source?: AttendanceSource | null;
+};
+type WeeklyAttendanceExcusalRow = {
+  week_start: string;
+  member_id: string;
+  squadron: Squadron;
+  excused_by_member_id: string;
+  created_at: string;
+  updated_at: string;
 };
 type ScheduledPTSessionRow = {
   id: string;
@@ -58,6 +81,8 @@ type PFRARecordRow = {
   squadron: Squadron;
   recorded_by_member_id: string | null;
   recorded_by_name: string | null;
+  record_type?: PFRARecordType | null;
+  batch_id?: string | null;
   assessment_date: string;
   overall_score: number;
   is_private: boolean;
@@ -79,6 +104,34 @@ type PFRARecordRow = {
   waist_inches: number | null;
   waist_exempt: boolean;
   created_at: string;
+  updated_at?: string | null;
+};
+type PFRABatchRow = {
+  id: string;
+  squadron: Squadron;
+  record_type: Exclude<PFRARecordType, 'self'>;
+  assessment_date: string;
+  selected_flights: Flight[] | null;
+  created_by_member_id: string;
+  created_by_name: string;
+  created_at: string;
+  updated_at: string;
+};
+type PFRABatchMemberRow = {
+  id: number;
+  batch_id: string;
+  member_id: string;
+  member_email: string;
+  member_name: string;
+  flight: Flight;
+  accountability_status: PFRAAccountabilityStatus;
+  age_years?: number | null;
+  gender?: 'male' | 'female' | null;
+  height_inches?: number | null;
+  pfra_record_id: string | null;
+  overall_score: number | null;
+  created_at: string;
+  updated_at: string;
 };
 type AppNotificationRow = {
   id: string;
@@ -261,6 +314,28 @@ export type AppNotification = {
   createdAt: string;
 };
 
+export type AdminAuditAction = {
+  id: string;
+  actorMemberId: string | null;
+  actorEmail: string;
+  actorName: string;
+  actorRole: string;
+  actionType: string;
+  targetMemberId: string | null;
+  targetEmail: string | null;
+  targetName: string | null;
+  squadron: Squadron | null;
+  details: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type DashboardLayoutPreference = {
+  email: string;
+  order: string[];
+  lockedExpandedCardIds: string[];
+  updatedAt: string;
+};
+
 export type MemberTrophyRecord = {
   id: string;
   memberId: string | null;
@@ -271,7 +346,49 @@ export type MemberTrophyRecord = {
   awardedByMemberId: string | null;
   isActive: boolean;
   celebrationShownAt: string | null;
+  celebrationStatusKnown: boolean;
   revokedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PFRABatchSummary = {
+  id: string;
+  squadron: Squadron;
+  recordType: Exclude<PFRARecordType, 'self'>;
+  assessmentDate: string;
+  selectedFlights: Flight[];
+  createdByMemberId: string;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+  counts: Record<PFRAAccountabilityStatus, number>;
+  completedCount: number;
+  expectedCount: number;
+  completionRate: number;
+};
+
+export type PFRABatchMemberEntry = {
+  id: number;
+  batchId: string;
+  memberId: string;
+  memberEmail: string;
+  memberName: string;
+  flight: Flight;
+  accountabilityStatus: PFRAAccountabilityStatus;
+  ageYears: number | null;
+  gender: 'male' | 'female' | null;
+  heightInches: number | null;
+  pfraRecordId: string | null;
+  overallScore: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+export type WeeklyAttendanceExcusal = {
+  weekStart: string;
+  memberId: string;
+  squadron: Squadron;
+  excusedByMemberId: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -316,6 +433,25 @@ function getManualWorkoutWriteErrorMessage(payload: unknown, fallbackMessage: st
     : rawMessage;
 }
 
+function normalizeAttendanceSource(source?: string | null): AttendanceSource {
+  if (source === 'workout' || source === 'strava' || source === 'pfra') {
+    return source;
+  }
+
+  return 'manual';
+}
+
+function normalizeWeeklyAttendanceExcusalRow(row: WeeklyAttendanceExcusalRow): WeeklyAttendanceExcusal {
+  return {
+    weekStart: row.week_start,
+    memberId: row.member_id,
+    squadron: row.squadron,
+    excusedByMemberId: row.excused_by_member_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 type RosterPasswordStatus = {
   mustChangePassword: boolean;
   hasLoggedIntoApp: boolean;
@@ -349,6 +485,22 @@ const RANK_MAP: Record<string, string> = {
   msgt: 'MSgt',
   smsgt: 'SMSgt',
   cmsgt: 'CMSgt',
+  '2nd lt': '2nd Lt.',
+  '2d lt': '2nd Lt.',
+  '1st lt': '1st Lt.',
+  capt: 'Capt.',
+  cpt: 'Capt.',
+  maj: 'Maj.',
+  'lt. col.': 'Lt. Col.',
+  'lt col': 'Lt. Col.',
+  col: 'Col.',
+  'brig. gen.': 'Brig. Gen.',
+  'brig gen': 'Brig. Gen.',
+  'maj. gen.': 'Maj. Gen.',
+  'maj gen': 'Maj. Gen.',
+  'lt. gen.': 'Lt. Gen.',
+  'lt gen': 'Lt. Gen.',
+  gen: 'Gen.',
 };
 
 const RANK_TO_ROSTER: Record<string, string> = {
@@ -361,6 +513,16 @@ const RANK_TO_ROSTER: Record<string, string> = {
   MSgt: 'MSG',
   SMSgt: 'SMS',
   CMSgt: 'CMS',
+  '2nd Lt.': '2ND LT',
+  '1st Lt.': '1ST LT',
+  'Capt.': 'CAPT',
+  'Maj.': 'MAJ',
+  'Lt. Col.': 'LT COL',
+  'Col.': 'COL',
+  'Brig. Gen.': 'BRIG GEN',
+  'Maj. Gen.': 'MAJ GEN',
+  'Lt. Gen.': 'LT GEN',
+  'Gen.': 'GEN',
 };
 
 const FLIGHT_TO_ROSTER: Record<Flight, string> = {
@@ -712,6 +874,9 @@ function normalizePFRARecordRow(row: PFRARecordRow): FitnessAssessment {
     id: row.id,
     date: row.assessment_date,
     overallScore: row.overall_score,
+    recordType: row.record_type ?? 'self',
+    batchId: row.batch_id ?? undefined,
+    accountabilityStatus: 'completed',
     isPrivate: row.is_private,
     loggedByMemberId: row.recorded_by_member_id ?? undefined,
     loggedByName: row.recorded_by_name ?? undefined,
@@ -753,6 +918,61 @@ function normalizePFRARecordRow(row: PFRARecordRow): FitnessAssessment {
   };
 }
 
+function normalizePFRABatchMemberRow(row: PFRABatchMemberRow): PFRABatchMemberEntry {
+  return {
+    id: row.id,
+    batchId: row.batch_id,
+    memberId: row.member_id,
+    memberEmail: row.member_email,
+    memberName: row.member_name,
+    flight: row.flight,
+    accountabilityStatus: row.accountability_status,
+    ageYears: row.age_years ?? null,
+    gender: row.gender ?? null,
+    heightInches: row.height_inches ?? null,
+    pfraRecordId: row.pfra_record_id,
+    overallScore: row.overall_score,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function normalizePFRABatchRow(
+  row: PFRABatchRow,
+  batchMembers: PFRABatchMemberEntry[] = []
+): PFRABatchSummary {
+  const counts: Record<PFRAAccountabilityStatus, number> = {
+    completed: 0,
+    pending: 0,
+    absent: 0,
+    excused: 0,
+    postponed: 0,
+  };
+
+  batchMembers.forEach((member) => {
+    counts[member.accountabilityStatus] += 1;
+  });
+
+  const expectedCount = batchMembers.length;
+  const completedCount = counts.completed;
+
+  return {
+    id: row.id,
+    squadron: row.squadron,
+    recordType: row.record_type,
+    assessmentDate: row.assessment_date,
+    selectedFlights: row.selected_flights ?? [],
+    createdByMemberId: row.created_by_member_id,
+    createdByName: row.created_by_name,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    counts,
+    completedCount,
+    expectedCount,
+    completionRate: expectedCount > 0 ? completedCount / expectedCount : 0,
+  };
+}
+
 function normalizeAppNotificationRow(row: AppNotificationRow): AppNotification {
   return {
     id: row.id,
@@ -774,6 +994,7 @@ function normalizeAppNotificationRow(row: AppNotificationRow): AppNotification {
 }
 
 function normalizeMemberTrophyRow(row: MemberTrophyRow): MemberTrophyRecord {
+  const celebrationStatusKnown = Object.prototype.hasOwnProperty.call(row, 'celebration_shown_at');
   return {
     id: row.id,
     memberId: row.member_id,
@@ -784,6 +1005,7 @@ function normalizeMemberTrophyRow(row: MemberTrophyRow): MemberTrophyRecord {
     awardedByMemberId: row.awarded_by_member_id,
     isActive: row.is_active,
     celebrationShownAt: row.celebration_shown_at,
+    celebrationStatusKnown,
     revokedAt: row.revoked_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -1273,14 +1495,14 @@ export async function fetchAttendanceSessions(accessToken?: string) {
   }
 
     const attendeeMap = new Map<string, string[]>();
-    const attendeeSourceMap = new Map<string, Record<string, 'manual' | 'workout'>>();
+    const attendeeSourceMap = new Map<string, Record<string, AttendanceSource>>();
     (attendeesPayload as AttendanceAttendeeRow[]).forEach((attendee) => {
       const current = attendeeMap.get(attendee.session_id) ?? [];
       current.push(attendee.member_id);
       attendeeMap.set(attendee.session_id, current);
 
       const currentSources = attendeeSourceMap.get(attendee.session_id) ?? {};
-      currentSources[attendee.member_id] = attendee.attendance_source === 'workout' ? 'workout' : 'manual';
+      currentSources[attendee.member_id] = normalizeAttendanceSource(attendee.attendance_source);
       attendeeSourceMap.set(attendee.session_id, currentSources);
     });
 
@@ -1413,15 +1635,22 @@ export async function deleteScheduledPTSession(id: string, accessToken?: string)
   }
 }
 
-export async function fetchPFRARecords(accessToken?: string, squadron?: Squadron) {
+export async function fetchPFRARecords(
+  accessToken?: string,
+  squadron?: Squadron,
+  options?: { recordType?: PFRARecordType | 'all' }
+) {
   const query = new URLSearchParams();
   query.set(
     'select',
-    'id,member_id,member_email,squadron,recorded_by_member_id,recorded_by_name,assessment_date,overall_score,is_private,cardio_score,cardio_time,cardio_laps,cardio_test,cardio_exempt,strength_score,strength_reps,strength_test,strength_exempt,core_score,core_reps,core_time,core_test,core_exempt,waist_score,waist_inches,waist_exempt,created_at'
+    'id,member_id,member_email,squadron,recorded_by_member_id,recorded_by_name,record_type,batch_id,assessment_date,overall_score,is_private,cardio_score,cardio_time,cardio_laps,cardio_test,cardio_exempt,strength_score,strength_reps,strength_test,strength_exempt,core_score,core_reps,core_time,core_test,core_exempt,waist_score,waist_inches,waist_exempt,created_at,updated_at'
   );
   query.set('order', 'assessment_date.desc,created_at.desc');
   if (squadron) {
     query.set('squadron', `eq.${squadron}`);
+  }
+  if (options?.recordType && options.recordType !== 'all') {
+    query.set('record_type', `eq.${options.recordType}`);
   }
 
   const response = await fetch(`${SUPABASE_URL}/rest/v1/pfra_records?${query.toString()}`, {
@@ -1481,6 +1710,8 @@ export async function savePFRARecord(params: {
       squadron: params.squadron,
       recorded_by_member_id: params.recordedByMemberId ?? params.assessment.loggedByMemberId ?? null,
       recorded_by_name: params.recordedByName ?? params.assessment.loggedByName ?? null,
+      record_type: params.assessment.recordType ?? 'self',
+      batch_id: params.assessment.batchId ?? null,
       assessment_date: params.assessment.date,
       overall_score: params.assessment.overallScore,
       is_private: params.assessment.isPrivate,
@@ -1514,6 +1745,234 @@ export async function savePFRARecord(params: {
   }
 
   return normalizePFRARecordRow((payload as PFRARecordRow[])[0]);
+}
+
+export async function fetchPFRABatches(accessToken?: string, squadron?: Squadron) {
+  const [batchResponse, memberResponse] = await Promise.all([
+    fetch(`${SUPABASE_URL}/rest/v1/pfra_batches?select=id,squadron,record_type,assessment_date,selected_flights,created_by_member_id,created_by_name,created_at,updated_at${squadron ? `&squadron=eq.${encodeURIComponent(squadron)}` : ''}&order=assessment_date.desc,created_at.desc`, {
+      method: 'GET',
+      headers: await getHeaders(accessToken),
+    }),
+    fetch(`${SUPABASE_URL}/rest/v1/pfra_batch_members?select=id,batch_id,member_id,member_email,member_name,flight,accountability_status,age_years,gender,height_inches,pfra_record_id,overall_score,created_at,updated_at&order=created_at.asc`, {
+      method: 'GET',
+      headers: await getHeaders(accessToken),
+    }),
+  ]);
+
+  const [batchPayload, memberPayload] = await Promise.all([
+    batchResponse.json().catch(() => []),
+    memberResponse.json().catch(() => []),
+  ]);
+
+  if (!batchResponse.ok) {
+    const message =
+      typeof (batchPayload as { message?: unknown }).message === 'string'
+        ? (batchPayload as { message: string }).message
+        : 'Unable to load PFRA batches.';
+    throw new Error(message);
+  }
+
+  if (!memberResponse.ok) {
+    const message =
+      typeof (memberPayload as { message?: unknown }).message === 'string'
+        ? (memberPayload as { message: string }).message
+        : 'Unable to load PFRA accountability rows.';
+    throw new Error(message);
+  }
+
+  const membersByBatchId = new Map<string, PFRABatchMemberEntry[]>();
+  (memberPayload as PFRABatchMemberRow[]).forEach((row) => {
+    const current = membersByBatchId.get(row.batch_id) ?? [];
+    current.push(normalizePFRABatchMemberRow(row));
+    membersByBatchId.set(row.batch_id, current);
+  });
+
+  return (batchPayload as PFRABatchRow[]).map((row) =>
+    normalizePFRABatchRow(row, membersByBatchId.get(row.id) ?? [])
+  );
+}
+
+export async function fetchPFRAAccountabilitySummaries(accessToken?: string, squadron?: Squadron) {
+  return fetchPFRABatches(accessToken, squadron);
+}
+
+export async function fetchPFRABatchMembers(batchId: string, accessToken?: string) {
+  const query = new URLSearchParams();
+  query.set('select', 'id,batch_id,member_id,member_email,member_name,flight,accountability_status,age_years,gender,height_inches,pfra_record_id,overall_score,created_at,updated_at');
+  query.set('batch_id', `eq.${batchId}`);
+  query.set('order', 'member_name.asc');
+
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/pfra_batch_members?${query.toString()}`, {
+    method: 'GET',
+    headers: await getHeaders(accessToken),
+  });
+
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to load PFRA batch members.';
+    throw new Error(message);
+  }
+
+  return (payload as PFRABatchMemberRow[]).map(normalizePFRABatchMemberRow);
+}
+
+export async function fetchPFRABatchById(batchId: string, accessToken?: string) {
+  const [batchResponse, memberEntries] = await Promise.all([
+    fetch(`${SUPABASE_URL}/rest/v1/pfra_batches?select=id,squadron,record_type,assessment_date,selected_flights,created_by_member_id,created_by_name,created_at,updated_at&id=eq.${encodeURIComponent(batchId)}&limit=1`, {
+      method: 'GET',
+      headers: await getHeaders(accessToken),
+    }),
+    fetchPFRABatchMembers(batchId, accessToken),
+  ]);
+
+  const payload = await batchResponse.json().catch(() => []);
+  if (!batchResponse.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to load that PFRA batch.';
+    throw new Error(message);
+  }
+
+  const row = (payload as PFRABatchRow[])[0];
+  return row ? normalizePFRABatchRow(row, memberEntries) : null;
+}
+
+export async function createPFRABatch(params: {
+  batchId: string;
+  squadron: Squadron;
+  recordType: Exclude<PFRARecordType, 'self'>;
+  assessmentDate: string;
+  selectedFlights: Flight[];
+  createdByMemberId: string;
+  createdByName: string;
+  accessToken?: string;
+}) {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/pfra_batches`, {
+    method: 'POST',
+    headers: {
+      ...(await getHeaders(params.accessToken)),
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify({
+      id: params.batchId,
+      squadron: params.squadron,
+      record_type: params.recordType,
+      assessment_date: params.assessmentDate,
+      selected_flights: params.selectedFlights,
+      created_by_member_id: params.createdByMemberId,
+      created_by_name: params.createdByName,
+    }),
+  });
+
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to create PFRA batch.';
+    throw new Error(message);
+  }
+
+  const row = (payload as PFRABatchRow[])[0];
+  return row ? normalizePFRABatchRow(row) : null;
+}
+
+export async function bulkSavePFRAResults(params: {
+  batchId: string;
+  squadron: Squadron;
+  recordType: Exclude<PFRARecordType, 'self'>;
+  assessmentDate: string;
+  selectedFlights: Flight[];
+  createdByMemberId: string;
+  createdByName: string;
+  rows: Array<{
+    recordId: string;
+    memberId: string;
+    memberEmail: string;
+    memberName: string;
+    flight: Flight;
+    accountabilityStatus: PFRAAccountabilityStatus;
+    ageYears?: number;
+    gender?: 'male' | 'female';
+    heightInches?: number;
+    overallScore: number;
+    isPrivate?: boolean;
+    components: FitnessAssessment['components'];
+  }>;
+  accessToken?: string;
+}) {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/bulk_save_pfra_batch`, {
+    method: 'POST',
+    headers: {
+      ...(await getHeaders(params.accessToken)),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      p_batch_id: params.batchId,
+      p_squadron: params.squadron,
+      p_record_type: params.recordType,
+      p_assessment_date: params.assessmentDate,
+      p_selected_flights: params.selectedFlights,
+      p_created_by_member_id: params.createdByMemberId,
+      p_created_by_name: params.createdByName,
+      p_rows: params.rows.map((row) => ({
+        record_id: row.recordId,
+        member_id: row.memberId,
+        member_email: row.memberEmail.toLowerCase(),
+        member_name: row.memberName,
+        flight: row.flight,
+        accountability_status: row.accountabilityStatus,
+        age_years: row.ageYears ?? null,
+        gender: row.gender ?? null,
+        height_inches: row.heightInches ?? null,
+        overall_score: row.overallScore,
+        is_private: row.isPrivate ?? false,
+        cardio_score: row.components.cardio.score,
+        cardio_time: row.components.cardio.time ?? null,
+        cardio_laps: row.components.cardio.laps ?? null,
+        cardio_test: row.components.cardio.test ?? null,
+        cardio_exempt: row.components.cardio.exempt ?? false,
+        strength_score: row.components.pushups.score,
+        strength_reps: row.components.pushups.reps,
+        strength_test: row.components.pushups.test ?? null,
+        strength_exempt: row.components.pushups.exempt ?? false,
+        core_score: row.components.situps.score,
+        core_reps: row.components.situps.reps,
+        core_time: row.components.situps.time ?? null,
+        core_test: row.components.situps.test ?? null,
+        core_exempt: row.components.situps.exempt ?? false,
+        waist_score: row.components.waist?.score ?? null,
+        waist_inches: row.components.waist?.inches ?? null,
+        waist_exempt: row.components.waist?.exempt ?? false,
+      })),
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown; error?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : typeof (payload as { message?: unknown; error?: unknown }).error === 'string'
+          ? (payload as { error: string }).error
+          : 'Unable to bulk save PFRA results.';
+    throw new Error(message);
+  }
+
+  return payload as {
+    batch_id: string;
+    row_count: number;
+    completed_count: number;
+    absent_count: number;
+    excused_count: number;
+    pending_count: number;
+    postponed_count: number;
+  };
 }
 
 export async function fetchAppNotifications(params: {
@@ -1594,6 +2053,229 @@ export async function sendAppNotification(params: {
   }
 
   return normalizeAppNotificationRow((payload as AppNotificationRow[])[0]);
+}
+
+export async function logAdminAuditAction(params: {
+  actorMemberId?: string | null;
+  actorEmail: string;
+  actorName: string;
+  actorRole: string;
+  actionType: string;
+  targetMemberId?: string | null;
+  targetEmail?: string | null;
+  targetName?: string | null;
+  squadron?: Squadron | null;
+  details?: Record<string, unknown>;
+  accessToken?: string;
+}) {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/admin_action_audit`, {
+    method: 'POST',
+    headers: {
+      ...(await getHeaders(params.accessToken)),
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify({
+      id: createSupportId('admin-audit'),
+      actor_member_id: params.actorMemberId ?? null,
+      actor_email: params.actorEmail.toLowerCase(),
+      actor_name: params.actorName,
+      actor_role: params.actorRole,
+      action_type: params.actionType,
+      target_member_id: params.targetMemberId ?? null,
+      target_email: params.targetEmail?.toLowerCase() ?? null,
+      target_name: params.targetName ?? null,
+      squadron: params.squadron ?? null,
+      details: params.details ?? {},
+    }),
+  });
+
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to log admin audit action.';
+    throw new Error(message);
+  }
+
+  const row = (payload as Array<{
+    id: string;
+    actor_member_id: string | null;
+    actor_email: string;
+    actor_name: string;
+    actor_role: string;
+    action_type: string;
+    target_member_id: string | null;
+    target_email: string | null;
+    target_name: string | null;
+    squadron: Squadron | null;
+    details: Record<string, unknown> | null;
+    created_at: string;
+  }>)[0];
+
+  return row
+    ? {
+        id: row.id,
+        actorMemberId: row.actor_member_id,
+        actorEmail: row.actor_email,
+        actorName: row.actor_name,
+        actorRole: row.actor_role,
+        actionType: row.action_type,
+        targetMemberId: row.target_member_id,
+        targetEmail: row.target_email,
+        targetName: row.target_name,
+        squadron: row.squadron,
+        details: row.details ?? {},
+        createdAt: row.created_at,
+      }
+    : null;
+}
+
+export async function fetchAdminAuditTrail(accessToken?: string, options?: { limit?: number }) {
+  const query = new URLSearchParams();
+  query.set(
+    'select',
+    'id,actor_member_id,actor_email,actor_name,actor_role,action_type,target_member_id,target_email,target_name,squadron,details,created_at'
+  );
+  query.set('order', 'created_at.desc');
+  query.set('limit', String(options?.limit ?? 150));
+
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/admin_action_audit?${query.toString()}`, {
+    method: 'GET',
+    headers: await getHeaders(accessToken),
+  });
+
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to load admin audit trail.';
+    throw new Error(message);
+  }
+
+  return (payload as Array<{
+    id: string;
+    actor_member_id: string | null;
+    actor_email: string;
+    actor_name: string;
+    actor_role: string;
+    action_type: string;
+    target_member_id: string | null;
+    target_email: string | null;
+    target_name: string | null;
+    squadron: Squadron | null;
+    details: Record<string, unknown> | null;
+    created_at: string;
+  }>).map((row) => ({
+    id: row.id,
+    actorMemberId: row.actor_member_id,
+    actorEmail: row.actor_email,
+    actorName: row.actor_name,
+    actorRole: row.actor_role,
+    actionType: row.action_type,
+    targetMemberId: row.target_member_id,
+    targetEmail: row.target_email,
+    targetName: row.target_name,
+    squadron: row.squadron,
+    details: row.details ?? {},
+    createdAt: row.created_at,
+  }));
+}
+
+export async function fetchDashboardLayoutPreference(email: string, accessToken?: string) {
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/user_dashboard_layouts?select=email,layout_order,locked_expanded_card,locked_expanded_cards,updated_at&email=eq.${encodeURIComponent(email.toLowerCase())}&limit=1`,
+    {
+      method: 'GET',
+      headers: await getHeaders(accessToken),
+    }
+  );
+
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to load dashboard layout preference.';
+    throw new Error(message);
+  }
+
+  const row = (payload as Array<{
+    email: string;
+    layout_order: string[] | null;
+    locked_expanded_card?: string | null;
+    locked_expanded_cards?: string[] | null;
+    updated_at: string;
+  }>)[0];
+  if (!row) {
+    return null;
+  }
+
+  const lockedExpandedCardIds = Array.isArray(row.locked_expanded_cards)
+    ? row.locked_expanded_cards.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    : typeof row.locked_expanded_card === 'string' && row.locked_expanded_card.trim().length > 0
+      ? [row.locked_expanded_card]
+      : [];
+
+    return {
+      email: row.email,
+      order: Array.isArray(row.layout_order) ? row.layout_order : [],
+      lockedExpandedCardIds,
+      updatedAt: row.updated_at,
+    } satisfies DashboardLayoutPreference;
+  }
+
+export async function saveDashboardLayoutPreference(params: {
+  email: string;
+  order: string[];
+  lockedExpandedCardIds?: string[];
+  accessToken?: string;
+}) {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/user_dashboard_layouts?on_conflict=email`, {
+    method: 'POST',
+    headers: {
+      ...(await getHeaders(params.accessToken)),
+      'Content-Type': 'application/json',
+      Prefer: 'resolution=merge-duplicates,return=representation',
+    },
+        body: JSON.stringify({
+          email: params.email.toLowerCase(),
+          layout_order: params.order,
+        locked_expanded_card: params.lockedExpandedCardIds?.[0] ?? null,
+        locked_expanded_cards: params.lockedExpandedCardIds ?? [],
+          updated_at: new Date().toISOString(),
+        }),
+    });
+
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to save dashboard layout preference.';
+    throw new Error(message);
+  }
+
+  const row = (payload as Array<{
+    email: string;
+    layout_order: string[] | null;
+    locked_expanded_card?: string | null;
+    locked_expanded_cards?: string[] | null;
+    updated_at: string;
+  }>)[0];
+  const lockedExpandedCardIds = Array.isArray(row?.locked_expanded_cards)
+    ? row.locked_expanded_cards.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    : typeof row?.locked_expanded_card === 'string' && row.locked_expanded_card.trim().length > 0
+      ? [row.locked_expanded_card]
+      : (params.lockedExpandedCardIds ?? []);
+  return {
+    email: row?.email ?? params.email.toLowerCase(),
+    order: Array.isArray(row?.layout_order) ? row.layout_order : params.order,
+    lockedExpandedCardIds,
+    updatedAt: row?.updated_at ?? new Date().toISOString(),
+  } satisfies DashboardLayoutPreference;
 }
 
 export async function markAppNotificationRead(id: string, accessToken?: string) {
@@ -1869,7 +2551,7 @@ export async function setAttendanceStatus(params: {
   memberId: string;
   createdBy: string;
   isAttending: boolean;
-  source?: 'manual' | 'workout';
+  source?: AttendanceSource;
   accessToken?: string;
 }) {
   const session = await ensureAttendanceSession(params);
@@ -1885,7 +2567,7 @@ export async function setAttendanceStatus(params: {
         body: JSON.stringify({
           session_id: session.id,
           member_id: params.memberId,
-          attendance_source: params.source === 'workout' ? 'workout' : 'manual',
+          attendance_source: normalizeAttendanceSource(params.source),
         }),
       });
 
@@ -1954,6 +2636,97 @@ export async function setAttendanceStatus(params: {
   }
 
   return fetchAttendanceSessions(params.accessToken);
+}
+
+export async function fetchWeeklyAttendanceExcusals(params: {
+  weekStart: string;
+  squadron: Squadron;
+  accessToken?: string;
+}) {
+  const query = new URLSearchParams();
+  query.set('select', 'week_start,member_id,squadron,excused_by_member_id,created_at,updated_at');
+  query.set('week_start', `eq.${params.weekStart}`);
+  query.set('squadron', `eq.${params.squadron}`);
+  query.set('order', 'created_at.asc');
+
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/attendance_weekly_excusals?${query.toString()}`, {
+    method: 'GET',
+    headers: await getHeaders(params.accessToken),
+  });
+
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to load weekly attendance excusals.';
+    throw new Error(message);
+  }
+
+  return (payload as WeeklyAttendanceExcusalRow[]).map(normalizeWeeklyAttendanceExcusalRow);
+}
+
+export async function setWeeklyAttendanceExcusal(params: {
+  weekStart: string;
+  squadron: Squadron;
+  memberId: string;
+  excusedByMemberId: string;
+  isExcused: boolean;
+  accessToken?: string;
+}) {
+  if (params.isExcused) {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/attendance_weekly_excusals`, {
+      method: 'POST',
+      headers: {
+        ...(await getHeaders(params.accessToken)),
+        'Content-Type': 'application/json',
+        Prefer: 'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify({
+        week_start: params.weekStart,
+        member_id: params.memberId,
+        squadron: params.squadron,
+        excused_by_member_id: params.excusedByMemberId,
+      }),
+    });
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      const message =
+        typeof (payload as { message?: unknown }).message === 'string'
+          ? (payload as { message: string }).message
+          : 'Unable to save weekly attendance excusal.';
+      throw new Error(message);
+    }
+  } else {
+    const query = new URLSearchParams();
+    query.set('week_start', `eq.${params.weekStart}`);
+    query.set('member_id', `eq.${params.memberId}`);
+    query.set('squadron', `eq.${params.squadron}`);
+
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/attendance_weekly_excusals?${query.toString()}`, {
+      method: 'DELETE',
+      headers: {
+        ...(await getHeaders(params.accessToken)),
+        Prefer: 'return=minimal',
+      },
+    });
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      const message =
+        typeof (payload as { message?: unknown }).message === 'string'
+          ? (payload as { message: string }).message
+          : 'Unable to remove weekly attendance excusal.';
+      throw new Error(message);
+    }
+  }
+
+  return fetchWeeklyAttendanceExcusals({
+    weekStart: params.weekStart,
+    squadron: params.squadron,
+    accessToken: params.accessToken,
+  });
 }
 
 export async function createRosterMember(member: Member, accessToken?: string) {
@@ -2497,6 +3270,45 @@ export async function markSupportMessagesRead(params: {
       typeof (payload as { message?: unknown }).message === 'string'
         ? (payload as { message: string }).message
         : 'Unable to mark support messages as read.';
+    throw new Error(message);
+  }
+}
+
+export async function deleteSupportThread(params: {
+  threadId: string;
+  accessToken?: string;
+}) {
+  const messageResponse = await fetch(`${SUPABASE_URL}/rest/v1/support_messages?thread_id=eq.${encodeURIComponent(params.threadId)}`, {
+    method: 'DELETE',
+    headers: {
+      ...(await getHeaders(params.accessToken)),
+      Prefer: 'return=minimal',
+    },
+  });
+
+  if (!messageResponse.ok) {
+    const payload = await messageResponse.json().catch(() => ({}));
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to delete support messages.';
+    throw new Error(message);
+  }
+
+  const threadResponse = await fetch(`${SUPABASE_URL}/rest/v1/support_threads?id=eq.${encodeURIComponent(params.threadId)}`, {
+    method: 'DELETE',
+    headers: {
+      ...(await getHeaders(params.accessToken)),
+      Prefer: 'return=minimal',
+    },
+  });
+
+  if (!threadResponse.ok) {
+    const payload = await threadResponse.json().catch(() => ({}));
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to delete the support conversation.';
     throw new Error(message);
   }
 }

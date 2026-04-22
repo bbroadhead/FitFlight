@@ -11,9 +11,20 @@ export type WorkoutType = 'Running' | 'Walking' | 'Cycling' | 'Strength' | 'HIIT
 export type IntegrationService = 'apple_health' | 'strava' | 'garmin';
 export type ScheduledPTScope = 'squadron' | 'flight' | 'personal';
 export type ScheduledPTKind = 'pt' | 'pfra_mock' | 'pfra_diagnostic' | 'pfra_official';
+export type PFRARecordType = 'self' | 'mock' | 'diagnostic' | 'official';
+export type PFRAAccountabilityStatus = 'completed' | 'pending' | 'absent' | 'excused' | 'postponed';
+export type AttendanceSource = 'manual' | 'workout' | 'strava' | 'pfra';
+export type AppTheme = 'default' | 'dark' | 'pixel' | 'cyber' | 'space' | 'flowery';
 
 export const SQUADRONS: Squadron[] = ['Hawks', 'Tigers'];
 export const WORKOUT_TYPES: WorkoutType[] = ['Running', 'Walking', 'Cycling', 'Strength', 'HIIT', 'Swimming', 'Sports', 'Cardio', 'Flexibility', 'Other'];
+export const ENLISTED_RANKS = ['AB', 'Amn', 'A1C', 'SrA', 'SSgt', 'TSgt', 'MSgt', 'SMSgt', 'CMSgt'] as const;
+export const OFFICER_RANKS = ['2nd Lt.', '1st Lt.', 'Capt.', 'Maj.', 'Lt. Col.', 'Col.', 'Brig. Gen.', 'Maj. Gen.', 'Lt. Gen.', 'Gen.'] as const;
+export const ALL_RANKS = [...ENLISTED_RANKS, ...OFFICER_RANKS] as const;
+export const RANK_GROUPS = [
+  { label: 'Enlisted', ranks: [...ENLISTED_RANKS] },
+  { label: 'Officer', ranks: [...OFFICER_RANKS] },
+] as const;
 
 const DISPLAY_RANK_MAP: Record<string, string> = {
   AB: 'AB',
@@ -30,10 +41,28 @@ const DISPLAY_RANK_MAP: Record<string, string> = {
   SMSGT: 'SMSgt',
   CMS: 'CMSgt',
   CMSGT: 'CMSgt',
+  '2DLT': '2nd Lt.',
+  '2D LT': '2nd Lt.',
+  '2NDLT': '2nd Lt.',
+  '2ND LT': '2nd Lt.',
+  '1LT': '1st Lt.',
+  '1STLT': '1st Lt.',
+  '1ST LT': '1st Lt.',
+  CAPT: 'Capt.',
+  CPT: 'Capt.',
+  MAJ: 'Maj.',
   LTC: 'Lt. Col.',
   LTCOL: 'Lt. Col.',
   LTCOLEL: 'Lt. Col.',
   'LT COL': 'Lt. Col.',
+  COL: 'Col.',
+  'BRIG GEN': 'Brig. Gen.',
+  BRIGGEN: 'Brig. Gen.',
+  'MAJ GEN': 'Maj. Gen.',
+  MAJGEN: 'Maj. Gen.',
+  'LT GEN': 'Lt. Gen.',
+  LTGEN: 'Lt. Gen.',
+  GEN: 'Gen.',
 };
 
 // Shared Workout Submission (community workouts)
@@ -67,6 +96,9 @@ export interface FitnessAssessment {
   id: string;
   date: string; // ISO date string
   overallScore: number;
+  recordType?: PFRARecordType;
+  batchId?: string;
+  accountabilityStatus?: PFRAAccountabilityStatus;
   components: {
     cardio: { score: number; time?: string; laps?: number; test?: string; exempt?: boolean };
     pushups: { score: number; reps: number; test?: string; exempt?: boolean };
@@ -169,7 +201,7 @@ export interface PTSession {
   flight: Flight;
   squadron: Squadron;
   attendees: string[];
-  attendeeSources?: Record<string, 'manual' | 'workout'>;
+  attendeeSources?: Record<string, AttendanceSource>;
   createdBy: string;
 }
 
@@ -195,17 +227,31 @@ export interface User {
   mustChangePassword?: boolean;
   hasLoggedIntoApp?: boolean;
   keepAwakeEnabled?: boolean;
+  appTheme?: AppTheme;
 }
+
+export const formatPersonName = (value: string) =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/\b([a-z])/g, (match) => match.toUpperCase());
 
 // Helper to get display name
 export const getDisplayName = (user: { rank: string; firstName: string; lastName: string }) => {
-  return `${formatRankDisplay(user.rank)} ${user.firstName} ${user.lastName}`;
+  return `${formatRankDisplay(user.rank)} ${formatPersonName(user.firstName)} ${formatPersonName(user.lastName)}`;
+};
+
+export const getShortDisplayName = (user: { rank: string; lastName: string }) => {
+  return `${formatRankDisplay(user.rank)} ${formatPersonName(user.lastName)}`;
 };
 
 export const formatRankDisplay = (rank: string) => {
   const normalized = rank.trim().replace(/\./g, '').toUpperCase();
   return DISPLAY_RANK_MAP[normalized] ?? rank.trim();
 };
+
+export const formatFlightDisplay = (flight: string) =>
+  flight.trim().replace(/\s+flight$/i, '');
 
 // Helper to calculate required PT sessions based on fitness score
 export const calculateRequiredPTSessions = (score: number): number => {
@@ -410,12 +456,14 @@ interface AuthState {
   accessToken: string | null;
   refreshToken: string | null;
   keepAwakeEnabled: boolean;
+  appTheme: AppTheme;
   seenAchievementCelebrations: Record<string, string[]>;
   login: (user: User, options?: { rememberSession?: boolean }) => void;
   setSessionTokens: (tokens: { accessToken: string | null; refreshToken: string | null }) => void;
   logout: () => void;
   updateUser: (updates: Partial<User>) => void;
   setKeepAwakeEnabled: (enabled: boolean) => void;
+  setAppTheme: (theme: AppTheme) => void;
   setHasCheckedAuth: (checked: boolean) => void;
   markAchievementCelebrationSeen: (userEmail: string, achievementId: string) => void;
 }
@@ -716,18 +764,20 @@ export const useAuthStore = create<AuthState>()(
       user: null,
       isAuthenticated: false,
       hasCheckedAuth: false,
-      rememberSession: false,
-      accessToken: null,
-      refreshToken: null,
-      keepAwakeEnabled: true,
-      seenAchievementCelebrations: {},
-      login: (user, options) => set({
-        user,
-        isAuthenticated: true,
-        hasCheckedAuth: true,
-        rememberSession: options?.rememberSession ?? false,
-        keepAwakeEnabled: user.keepAwakeEnabled ?? true,
-      }),
+        rememberSession: false,
+        accessToken: null,
+        refreshToken: null,
+        keepAwakeEnabled: true,
+        appTheme: 'default',
+        seenAchievementCelebrations: {},
+        login: (user, options) => set({
+          user,
+          isAuthenticated: true,
+          hasCheckedAuth: true,
+          rememberSession: options?.rememberSession ?? false,
+          keepAwakeEnabled: user.keepAwakeEnabled ?? true,
+          appTheme: user.appTheme ?? 'default',
+        }),
       setSessionTokens: (tokens) => set({
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
@@ -739,16 +789,21 @@ export const useAuthStore = create<AuthState>()(
         accessToken: null,
         refreshToken: null,
       }),
-      updateUser: (updates) => set((state) => ({
-        user: state.user ? { ...state.user, ...updates } : null,
-        keepAwakeEnabled:
-          typeof updates.keepAwakeEnabled === 'boolean' ? updates.keepAwakeEnabled : state.keepAwakeEnabled,
-      })),
-      setKeepAwakeEnabled: (enabled) => set((state) => ({
-        keepAwakeEnabled: enabled,
-        user: state.user ? { ...state.user, keepAwakeEnabled: enabled } : state.user,
-      })),
-      setHasCheckedAuth: (checked) => set({ hasCheckedAuth: checked }),
+        updateUser: (updates) => set((state) => ({
+          user: state.user ? { ...state.user, ...updates } : null,
+          keepAwakeEnabled:
+            typeof updates.keepAwakeEnabled === 'boolean' ? updates.keepAwakeEnabled : state.keepAwakeEnabled,
+          appTheme: updates.appTheme ?? state.appTheme,
+        })),
+        setKeepAwakeEnabled: (enabled) => set((state) => ({
+          keepAwakeEnabled: enabled,
+          user: state.user ? { ...state.user, keepAwakeEnabled: enabled } : state.user,
+        })),
+        setAppTheme: (theme) => set((state) => ({
+          appTheme: theme,
+          user: state.user ? { ...state.user, appTheme: theme } : state.user,
+        })),
+        setHasCheckedAuth: (checked) => set({ hasCheckedAuth: checked }),
       markAchievementCelebrationSeen: (userEmail, achievementId) =>
         set((state) => {
           const normalizedEmail = userEmail.trim().toLowerCase();
@@ -766,8 +821,8 @@ export const useAuthStore = create<AuthState>()(
         }),
     }),
     {
-      name: 'flighttrack-auth',
-      version: 4,
+        name: 'flighttrack-auth',
+        version: 5,
       storage: createJSONStorage(() => AsyncStorage),
       migrate: (persistedState: unknown, version) => {
         if (!persistedState || typeof persistedState !== 'object') {
@@ -805,6 +860,13 @@ export const useAuthStore = create<AuthState>()(
           } as AuthState;
         }
 
+        if (version < 5) {
+          return {
+            ...state,
+            appTheme: (state as Partial<AuthState>).appTheme ?? 'default',
+          } as AuthState;
+        }
+
         return persistedState as AuthState;
       },
       partialize: (state) => ({
@@ -815,6 +877,7 @@ export const useAuthStore = create<AuthState>()(
         accessToken: state.rememberSession ? state.accessToken : null,
         refreshToken: state.rememberSession ? state.refreshToken : null,
         keepAwakeEnabled: state.keepAwakeEnabled,
+        appTheme: state.appTheme,
         seenAchievementCelebrations: state.seenAchievementCelebrations,
       }),
       onRehydrateStorage: () => (state) => {
@@ -1360,6 +1423,10 @@ export const canEditAttendance = (accountType: AccountType): boolean => {
 // Helper for UFPM-like or PT-program features that Demo can still access
 export const canManagePTPrograms = (accountType: AccountType): boolean => {
   return canEditAttendance(accountType) || accountType === 'demo';
+};
+
+export const canManagePFRARecords = (accountType: AccountType): boolean => {
+  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'squadron_leadership' || accountType === 'ptl';
 };
 
 // Helper to check if user has admin access

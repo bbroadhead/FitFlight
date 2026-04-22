@@ -141,7 +141,7 @@
         }
 
         if (!key) {
-          showError('Missing demo access key.');
+          window.location.replace('/login' + window.location.hash);
           return;
         }
 

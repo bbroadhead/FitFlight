@@ -6,8 +6,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { useEffect } from 'react';
-import { Image, ScrollView, Text, View } from 'react-native';
+import { Image, ScrollView, Text, TextInput, View } from 'react-native';
 import { useAuthStore, useMemberStore, ALL_ACHIEVEMENTS } from '@/lib/store';
+import { getAppThemePalette, useAppTheme } from '@/lib/theme';
 import { AchievementCelebration } from '@/components/AchievementCelebration';
 import { TutorialTourProvider } from '@/contexts/TutorialTourContext';
 
@@ -20,43 +21,33 @@ SplashScreen.preventAutoHideAsync();
 
 const queryClient = new QueryClient();
 
-// Custom dark theme for Air Force aesthetic
-const AirForceDarkTheme = {
-  ...DarkTheme,
-  colors: {
-    ...DarkTheme.colors,
-    background: '#0A1628',
-    card: '#0A1628',
-    border: 'rgba(255, 255, 255, 0.1)',
-    primary: '#4A90D9',
-  },
-};
-
 function RootLayoutNav() {
   const recentAchievementId = useMemberStore((state) => state.recentAchievementId);
   const dismissAchievementCelebration = useMemberStore((state) => state.dismissAchievementCelebration);
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
-  const user = useAuthStore((state) => state.user);
-  const markAchievementCelebrationSeen = useAuthStore((state) => state.markAchievementCelebrationSeen);
+  const theme = useAppTheme();
+
+  const navigationTheme = {
+    ...DarkTheme,
+    colors: {
+      ...DarkTheme.colors,
+      background: theme.background,
+      card: theme.background,
+      border: theme.border,
+      primary: theme.accent,
+    },
+  };
 
   useEffect(() => {
     SplashScreen.hideAsync();
   }, []);
-
-  useEffect(() => {
-    if (!recentAchievementId || !user?.email) {
-      return;
-    }
-
-    markAchievementCelebrationSeen(user.email, recentAchievementId);
-  }, [markAchievementCelebrationSeen, recentAchievementId, user?.email]);
 
   const recentAchievement = recentAchievementId
     ? ALL_ACHIEVEMENTS.find((achievement) => achievement.id === recentAchievementId) ?? null
     : null;
 
   return (
-    <ThemeProvider value={AirForceDarkTheme}>
+    <ThemeProvider value={navigationTheme}>
       <TutorialTourProvider>
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="demo" options={{ headerShown: false }} />
@@ -71,6 +62,7 @@ function RootLayoutNav() {
           <Stack.Screen name="add-workout" options={{ headerShown: false }} />
           <Stack.Screen name="schedule-session" options={{ headerShown: false }} />
           <Stack.Screen name="upload-fitness" options={{ headerShown: false }} />
+          <Stack.Screen name="bulk-pfra-entry" options={{ headerShown: false }} />
           <Stack.Screen name="cross-squadron" options={{ headerShown: false }} />
           <Stack.Screen name="import-roster" options={{ headerShown: false }} />
           <Stack.Screen name="resources" options={{ headerShown: false }} />
@@ -90,8 +82,9 @@ function RootLayoutNav() {
 }
 
 export function ErrorBoundary({ error }: { error: Error }) {
+  const fallbackTheme = getAppThemePalette('default');
   return (
-    <View style={{ flex: 1, backgroundColor: '#0A1628', paddingHorizontal: 24, paddingVertical: 40, alignItems: 'center', justifyContent: 'center' }}>
+    <View style={{ flex: 1, backgroundColor: fallbackTheme.background, paddingHorizontal: 24, paddingVertical: 40, alignItems: 'center', justifyContent: 'center' }}>
       <View style={{ width: '100%', maxWidth: 520, alignItems: 'center' }}>
         <View
           style={{
@@ -142,11 +135,39 @@ export function ErrorBoundary({ error }: { error: Error }) {
 }
 
 export default function RootLayout() {
+  const theme = useAppTheme();
+
+  useEffect(() => {
+    const TextComponent = Text as typeof Text & { defaultProps?: Record<string, unknown> };
+    const TextInputComponent = TextInput as typeof TextInput & { defaultProps?: Record<string, unknown> };
+    const originalTextDefaultProps = TextComponent.defaultProps ?? {};
+    const originalTextInputDefaultProps = TextInputComponent.defaultProps ?? {};
+
+    if (theme.id === 'pixel' && theme.bodyFontFamily) {
+      TextComponent.defaultProps = {
+        ...originalTextDefaultProps,
+        style: [originalTextDefaultProps.style, { fontFamily: theme.bodyFontFamily }],
+      };
+      TextInputComponent.defaultProps = {
+        ...originalTextInputDefaultProps,
+        style: [originalTextInputDefaultProps.style, { fontFamily: theme.bodyFontFamily }],
+      };
+    } else {
+      TextComponent.defaultProps = originalTextDefaultProps;
+      TextInputComponent.defaultProps = originalTextInputDefaultProps;
+    }
+
+    return () => {
+      TextComponent.defaultProps = originalTextDefaultProps;
+      TextInputComponent.defaultProps = originalTextInputDefaultProps;
+    };
+  }, [theme.bodyFontFamily, theme.id]);
+
   return (
     <QueryClientProvider client={queryClient}>
       <GestureHandlerRootView style={{ flex: 1 }}>
         <KeyboardProvider>
-          <StatusBar style="light" />
+          <StatusBar style={theme.statusBar} />
           <RootLayoutNav />
         </KeyboardProvider>
       </GestureHandlerRootView>

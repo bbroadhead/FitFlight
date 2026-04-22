@@ -1,17 +1,19 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { View, Text, Pressable, ScrollView, TextInput, Modal, Platform } from 'react-native';
+import { View, Text, Pressable, ScrollView, TextInput, Modal, Platform, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ChevronLeft, ChevronUp, ChevronDown, Calendar, Clock, FileText, Check, X, Edit3, Trash2, User, Users, Building2 } from 'lucide-react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { addDays, format, startOfWeek } from 'date-fns';
-import { useMemberStore, useAuthStore, type Flight, type ScheduledPTKind, type ScheduledPTScope, type ScheduledPTSession, canManagePTPrograms, formatRankDisplay } from '@/lib/store';
+import { useMemberStore, useAuthStore, formatFlightDisplay, type Flight, type ScheduledPTKind, type ScheduledPTScope, type ScheduledPTSession, canManagePTPrograms, formatRankDisplay } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { createScheduledPTSession, deleteScheduledPTSession as deleteScheduledPTSessionFromSupabase, updateScheduledPTSession as updateScheduledPTSessionInSupabase } from '@/lib/supabaseData';
+import { buildScheduledWorkoutToken, stripScheduledWorkoutToken } from '@/lib/scheduledWorkoutLinks';
+import { PageContainer } from '@/components/PageContainer';
 
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
 const HOUR_OPTIONS = Array.from({ length: 24 }, (_, hours) => hours.toString().padStart(2, '0'));
@@ -20,12 +22,15 @@ const MINUTE_OPTIONS = ['00', '15', '30', '45'];
 const isWebMobile = () => Platform.OS === 'web' && typeof navigator !== 'undefined' && /iphone|ipad|ipod|android/i.test(navigator.userAgent.toLowerCase());
 const isSessionUpcoming = (session: ScheduledPTSession) => new Date(`${session.date}T${session.time}:00`).getTime() >= Date.now();
 const sessionKindLabel = (kind: ScheduledPTKind) => kind === 'pfra_mock' ? 'PFRA Mock' : kind === 'pfra_diagnostic' ? 'PFRA Diagnostic' : kind === 'pfra_official' ? 'PFRA Official' : 'Normal PT';
-const scopeLabel = (session: ScheduledPTSession) => session.scope === 'personal' ? 'Personal' : session.scope === 'squadron' ? 'Squadron PT' : session.flights.length === 1 ? `${session.flights[0]} Flight` : session.flights.join(', ');
+const scopeLabel = (session: ScheduledPTSession) => session.scope === 'personal' ? 'Personal' : session.scope === 'squadron' ? 'Squadron PT' : session.flights.length === 1 ? formatFlightDisplay(session.flights[0]) : session.flights.map((flight) => formatFlightDisplay(flight)).join(', ');
 
 export default function ScheduleSessionScreen() {
   const router = useRouter();
+  const { width } = useWindowDimensions();
+  const params = useLocalSearchParams<{ workoutId?: string; workoutName?: string }>();
   const user = useAuthStore((s) => s.user);
   const accessToken = useAuthStore((s) => s.accessToken);
+  const contentMaxWidth = width >= 1440 ? 1120 : width >= 1180 ? 980 : 860;
   const addScheduledSession = useMemberStore((s) => s.addScheduledSession);
   const updateScheduledSession = useMemberStore((s) => s.updateScheduledSession);
   const deleteScheduledSession = useMemberStore((s) => s.deleteScheduledSession);
@@ -36,6 +41,8 @@ export default function ScheduleSessionScreen() {
   const mobileWeb = isWebMobile();
   const userSquadron = user?.squadron ?? 'Hawks';
   const defaultScope: ScheduledPTScope = canManageFlightSessions ? 'flight' : 'personal';
+  const preselectedWorkoutId = Array.isArray(params.workoutId) ? params.workoutId[0] : params.workoutId;
+  const preselectedWorkoutName = Array.isArray(params.workoutName) ? params.workoutName[0] : params.workoutName;
 
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
@@ -44,7 +51,7 @@ export default function ScheduleSessionScreen() {
   const [selectedScope, setSelectedScope] = useState<ScheduledPTScope>(defaultScope);
   const [selectedKind, setSelectedKind] = useState<ScheduledPTKind>('pt');
   const [selectedFlights, setSelectedFlights] = useState<Flight[]>(user?.flight ? [user.flight] : ['Apex']);
-  const [description, setDescription] = useState('');
+  const [description, setDescription] = useState(preselectedWorkoutName ? `Workout: ${preselectedWorkoutName}` : '');
   const [editingSession, setEditingSession] = useState<ScheduledPTSession | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [sessionError, setSessionError] = useState('');
@@ -108,7 +115,9 @@ export default function ScheduleSessionScreen() {
         id: mode === 'edit' && editingSession ? editingSession.id : Date.now().toString(),
         date: format(selectedDate, 'yyyy-MM-dd'),
         time: format(selectedTime, 'HH:mm'),
-        description: description.trim(),
+        description: preselectedWorkoutId && preselectedWorkoutName
+          ? `${description.trim()}\n\n${buildScheduledWorkoutToken(preselectedWorkoutId, preselectedWorkoutName)}`
+          : description.trim(),
         flights,
         squadron: userSquadron,
         createdBy: mode === 'edit' && editingSession ? editingSession.createdBy : user.id,
@@ -139,7 +148,7 @@ export default function ScheduleSessionScreen() {
     setEditingSession(session);
     setSelectedDate(new Date(`${session.date}T00:00:00`));
     const time = new Date(); const [hours, minutes] = session.time.split(':'); time.setHours(parseInt(hours, 10), parseInt(minutes, 10), 0, 0);
-    setSelectedTime(time); setSelectedFlights(session.flights); setSelectedScope(session.scope); setSelectedKind(session.kind); setDescription(session.description); setSessionError(''); setShowEditModal(true);
+    setSelectedTime(time); setSelectedFlights(session.flights); setSelectedScope(session.scope); setSelectedKind(session.kind); setDescription(stripScheduledWorkoutToken(session.description)); setSessionError(''); setShowEditModal(true);
   };
 
   const handleDeleteSession = (id: string) => {
@@ -277,11 +286,14 @@ export default function ScheduleSessionScreen() {
     <View className="flex-1">
       <LinearGradient colors={['#0A1628', '#001F5C', '#0A1628']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }} />
       <SafeAreaView edges={['top']} className="flex-1">
+        <PageContainer maxWidth={contentMaxWidth}>
         <Animated.View entering={FadeInDown.delay(100).springify()} className="px-6 pt-4 pb-2 flex-row items-center">
           <Pressable onPress={() => router.back()} className="w-10 h-10 bg-white/10 rounded-full items-center justify-center mr-4"><ChevronLeft size={24} color="#C0C0C0" /></Pressable>
           <Text className="text-white text-xl font-bold">{canManageFlightSessions ? 'Schedule PT Session' : 'Schedule Personal PT'}</Text>
         </Animated.View>
-        <ScrollView className="flex-1 px-6" contentContainerStyle={{ paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+        </PageContainer>
+        <ScrollView className="flex-1" contentContainerStyle={{ paddingBottom: 40, alignItems: 'center' }} showsVerticalScrollIndicator={false}>
+          <PageContainer maxWidth={contentMaxWidth} className="px-6">
           <Animated.View entering={FadeInDown.delay(150).springify()} className="mt-4 p-4 bg-white/5 rounded-2xl border border-white/10">
             <Text className="text-white font-semibold text-lg mb-4">{editingSession ? 'Edit Session' : 'New Session'}</Text>
             {renderScopeSelector()}
@@ -300,7 +312,7 @@ export default function ScheduleSessionScreen() {
               <View key={session.id} className="bg-white/5 rounded-xl p-4 mb-3 border border-white/10">
                 <View className="flex-row items-start justify-between">
                   <View className="flex-1">
-                    <Text className="text-white font-semibold">{session.description}</Text>
+                    <Text className="text-white font-semibold">{stripScheduledWorkoutToken(session.description)}</Text>
                     <Text className="text-af-silver text-sm mt-1">{format(new Date(`${session.date}T00:00:00`), 'EEE, MMM d')} at {session.time}</Text>
                     <Text className="text-af-silver text-xs mt-1">{sessionKindLabel(session.kind)}</Text>
                     <Text className="text-af-silver text-xs mt-1">{session.scope === 'personal' ? 'Personal PT' : `Flights: ${session.flights.join(', ')}`}</Text>
@@ -315,6 +327,7 @@ export default function ScheduleSessionScreen() {
               </View>
             ))}
           </Animated.View>
+          </PageContainer>
         </ScrollView>
       </SafeAreaView>
       {showDatePicker ? <DateTimePicker value={selectedDate} mode="date" display="spinner" onChange={handleDateChange} minimumDate={new Date()} themeVariant="dark" /> : null}
