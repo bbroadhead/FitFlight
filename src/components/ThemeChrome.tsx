@@ -8,6 +8,7 @@ type ThemeChromeProps = ViewProps & {
   variant?: 'default' | 'alt' | 'feature';
   blurIntensity?: number;
   forceBlur?: boolean;
+  fill?: boolean;
 };
 
 export function ThemeChrome({
@@ -15,6 +16,7 @@ export function ThemeChrome({
   variant = 'default',
   blurIntensity,
   forceBlur = false,
+  fill = false,
   style,
   children,
   ...props
@@ -46,9 +48,9 @@ export function ThemeChrome({
         <BlurView
           intensity={blurIntensity ?? (theme.id === 'dark' ? 30 : theme.id === 'pixel' ? 22 : 24)}
           tint={blurTint}
-          style={[cardStyle, { overflow: 'hidden' }]}
+          style={[cardStyle, fill ? { flex: 1 } : null, { overflow: 'hidden' }]}
         >
-          <View style={{ backgroundColor: blurOverlayColor, position: 'relative', borderRadius: theme.cardRadius, overflow: 'hidden' }}>
+          <View style={{ backgroundColor: blurOverlayColor, position: 'relative', borderRadius: theme.cardRadius, overflow: 'hidden', flex: fill ? 1 : undefined }}>
             {children}
             {theme.id === 'pixel' ? (
               <>
@@ -69,7 +71,7 @@ export function ThemeChrome({
           </View>
         </BlurView>
       ) : (
-        <View style={[cardStyle, { position: 'relative', overflow: 'hidden' }]}>
+        <View style={[cardStyle, fill ? { flex: 1 } : null, { position: 'relative', overflow: 'hidden' }]}>
           {children}
           {theme.id === 'pixel' ? (
             <>

@@ -50,6 +50,8 @@ function TabsInner() {
     typeof window !== 'undefined' &&
     (window.matchMedia?.('(display-mode: standalone)')?.matches ||
       ((window.navigator as Navigator & { standalone?: boolean }).standalone ?? false));
+  const tabBarBottomInset = Platform.OS === 'web' && isStandaloneWeb ? 16 : 0;
+  const tabBarHeight = Platform.OS === 'web' ? (isStandaloneWeb ? 76 : 60) : 66;
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const hasCheckedAuth = useAuthStore((state) => state.hasCheckedAuth);
   const user = useAuthStore((state) => state.user);
@@ -728,9 +730,9 @@ function TabsInner() {
             backgroundColor: theme.tabBar,
             borderTopWidth: 1,
             borderTopColor: theme.tabBarBorder,
-          height: Platform.OS === 'web' ? 60 : 66,
-          paddingBottom: 0,
-          paddingTop: 0,
+          height: tabBarHeight,
+          paddingBottom: tabBarBottomInset,
+          paddingTop: Platform.OS === 'web' && isStandaloneWeb ? 4 : 0,
           position: "absolute",
           left: 0,
           right: 0,
@@ -745,10 +747,10 @@ function TabsInner() {
           height: "100%",
         },
         tabBarLabelStyle: {
-          fontSize: theme.id === 'pixel' ? 11 : 12,
+          fontSize: theme.id === 'pixel' ? 9 : theme.id === 'cyber' ? 11 : 12,
           fontWeight: "600",
           fontFamily: theme.bodyFontFamily,
-          letterSpacing: theme.buttonLetterSpacing,
+          letterSpacing: theme.id === 'pixel' ? 0.05 : theme.buttonLetterSpacing,
           textTransform: "none",
           marginTop: -2,
         },

@@ -15,7 +15,7 @@ import { createScheduledPTSession, deleteScheduledPTSession as deleteScheduledPT
 import { buildScheduledWorkoutToken, stripScheduledWorkoutToken } from '@/lib/scheduledWorkoutLinks';
 import { PageContainer } from '@/components/PageContainer';
 
-const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
+const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'DO', 'ADF', 'DET'];
 const HOUR_OPTIONS = Array.from({ length: 24 }, (_, hours) => hours.toString().padStart(2, '0'));
 const MINUTE_OPTIONS = ['00', '15', '30', '45'];
 

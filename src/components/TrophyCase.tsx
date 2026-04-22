@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, Pressable, Modal } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { View, Text, Pressable, Modal, useWindowDimensions, type DimensionValue } from 'react-native';
 import { ChevronDown, ChevronUp, X } from 'lucide-react-native';
 import { cn } from '@/lib/cn';
 import type { TrophyWithStats } from '@/lib/trophies';
@@ -93,9 +93,24 @@ export function TrophyCase({
   emptyText = 'No trophies earned yet',
   footer,
 }: TrophyCaseProps) {
+  const { width } = useWindowDimensions();
   const earnedTrophies = trophies.filter((trophy) => trophy.isEarned);
   const lockedTrophies = trophies.filter((trophy) => !trophy.isEarned);
   const [selectedTrophy, setSelectedTrophy] = useState<TrophyWithStats | null>(null);
+  const cardsPerRow = width < 520 ? 3 : width < 900 ? 4 : 5;
+  const cardGap = width < 520 ? 6 : 8;
+  const cardWidth = useMemo<DimensionValue>(
+    () => {
+      if (cardsPerRow === 3) {
+        return '32%';
+      }
+      if (cardsPerRow === 4) {
+        return '24%';
+      }
+      return '19%';
+    },
+    [cardsPerRow]
+  );
 
   return (
     <View className="mt-3">
@@ -130,41 +145,57 @@ export function TrophyCase({
                 <Text className="text-af-silver text-sm">{emptyText}</Text>
               </View>
             ) : (
-              <View className="flex-row flex-wrap justify-between">
-                {earnedTrophies.map((trophy, index) => {
+              <View className="flex-row flex-wrap justify-between" style={{ rowGap: cardGap }}>
+                {earnedTrophies.map((trophy) => {
                   const Icon = trophy.Icon;
                   return (
                     <Pressable
                       key={trophy.id}
                       onPress={() => setSelectedTrophy(trophy)}
-                      className={cn(
-                        "rounded-2xl p-3 mb-4 border",
-                        index % 2 === 0 ? "mr-2" : "ml-2",
-                        trophy.isHard ? "" : "border-white/10"
-                      )}
+                      className={cn("rounded-2xl mb-0 border items-center", trophy.isHard ? "" : "border-white/10")}
                       style={{
-                        width: '47%',
+                        width: cardWidth,
+                        paddingHorizontal: width < 520 ? 8 : 12,
+                        paddingVertical: width < 520 ? 10 : 12,
                         backgroundColor: trophy.isHard ? 'rgba(255, 215, 0, 0.08)' : 'rgba(255, 255, 255, 0.04)',
                         borderColor: trophy.isHard ? '#FFD700' : 'rgba(255,255,255,0.12)',
                       }}
                     >
                       <View
-                        className="w-12 h-12 rounded-full items-center justify-center mb-3"
-                        style={{ backgroundColor: trophy.iconBg }}
+                        className="rounded-full items-center justify-center mb-2.5"
+                        style={{
+                          width: width < 520 ? 40 : 48,
+                          height: width < 520 ? 40 : 48,
+                          backgroundColor: trophy.iconBg,
+                        }}
                       >
-                        <Icon size={22} color={trophy.iconColor} />
+                        <Icon size={width < 520 ? 18 : 22} color={trophy.iconColor} />
                       </View>
                       <Text
-                        className="font-semibold text-sm"
-                        style={{ color: trophy.textColor }}
+                        className="font-semibold text-center"
+                        style={{ color: trophy.textColor, fontSize: width < 520 ? 12 : 14, lineHeight: width < 520 ? 15 : 18 }}
                         numberOfLines={2}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.68}
                       >
                         {trophy.name}
                       </Text>
-                      <Text className="text-af-silver text-[11px] mt-2" numberOfLines={2}>
+                      <Text
+                        className="text-af-silver text-center"
+                        style={{ marginTop: width < 520 ? 6 : 8, fontSize: width < 520 ? 10 : 11, lineHeight: width < 520 ? 13 : 15 }}
+                        numberOfLines={2}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.72}
+                      >
                         {trophy.description}
                       </Text>
-                      <Text className="text-af-gold text-[11px] mt-3 font-semibold">
+                      <Text
+                        className="text-af-gold font-semibold text-center"
+                        style={{ marginTop: width < 520 ? 8 : 10, fontSize: width < 520 ? 10 : 11, lineHeight: width < 520 ? 13 : 15 }}
+                        numberOfLines={2}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.72}
+                      >
                         Earned by {trophy.earnRate.toFixed(0)}% of users
                       </Text>
                     </Pressable>
@@ -182,29 +213,52 @@ export function TrophyCase({
                 <Text className="text-af-silver text-xs uppercase tracking-wider mt-3 mb-3">
                   Locked Trophies
                 </Text>
-                <View className="flex-row flex-wrap justify-between">
-                  {lockedTrophies.map((trophy, index) => {
+                <View className="flex-row flex-wrap justify-between" style={{ rowGap: cardGap }}>
+                  {lockedTrophies.map((trophy) => {
                     const Icon = trophy.Icon;
                     return (
                     <Pressable
                       key={trophy.id}
                       onPress={() => setSelectedTrophy(trophy)}
-                      className={cn(
-                        "rounded-2xl p-3 mb-4 border border-white/10",
-                        index % 2 === 0 ? "mr-2" : "ml-2"
-                      )}
-                      style={{ width: '47%', backgroundColor: 'rgba(0,0,0,0.12)' }}
+                      className="rounded-2xl mb-0 border border-white/10 items-center"
+                      style={{
+                        width: cardWidth,
+                        paddingHorizontal: width < 520 ? 8 : 12,
+                        paddingVertical: width < 520 ? 10 : 12,
+                        backgroundColor: 'rgba(0,0,0,0.12)',
+                      }}
                     >
-                      <View className="w-12 h-12 rounded-full items-center justify-center mb-3 bg-white/10">
-                        <Icon size={22} color="#64748B" />
+                      <View
+                        className="rounded-full items-center justify-center mb-2.5 bg-white/10"
+                        style={{ width: width < 520 ? 40 : 48, height: width < 520 ? 40 : 48 }}
+                      >
+                        <Icon size={width < 520 ? 18 : 22} color="#64748B" />
                       </View>
-                        <Text className="text-white/70 font-semibold text-sm" numberOfLines={2}>
+                        <Text
+                          className="text-white/70 font-semibold text-center"
+                          style={{ fontSize: width < 520 ? 12 : 14, lineHeight: width < 520 ? 15 : 18 }}
+                          numberOfLines={2}
+                          adjustsFontSizeToFit
+                          minimumFontScale={0.68}
+                        >
                           {trophy.name}
                         </Text>
-                        <Text className="text-white/40 text-[11px] mt-2" numberOfLines={2}>
+                        <Text
+                          className="text-white/40 text-center"
+                          style={{ marginTop: width < 520 ? 6 : 8, fontSize: width < 520 ? 10 : 11, lineHeight: width < 520 ? 13 : 15 }}
+                          numberOfLines={2}
+                          adjustsFontSizeToFit
+                          minimumFontScale={0.72}
+                        >
                           {trophy.description}
                         </Text>
-                        <Text className="text-white/50 text-[11px] mt-3">
+                        <Text
+                          className="text-white/50 text-center"
+                          style={{ marginTop: width < 520 ? 8 : 10, fontSize: width < 520 ? 10 : 11, lineHeight: width < 520 ? 13 : 15 }}
+                          numberOfLines={2}
+                          adjustsFontSizeToFit
+                          minimumFontScale={0.72}
+                        >
                           Earned by {trophy.earnRate.toFixed(0)}% of users
                         </Text>
                     </Pressable>

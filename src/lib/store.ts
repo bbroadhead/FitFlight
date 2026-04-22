@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { buildLeaderboardHistory } from '@/lib/monthlyStats';
 
 // Types
-export type Flight = 'Apex' | 'Bomber' | 'Cryptid' | 'Doom' | 'Ewok' | 'Foxhound' | 'ADF' | 'DET';
+export type Flight = 'Apex' | 'Bomber' | 'Cryptid' | 'Doom' | 'Ewok' | 'Foxhound' | 'DO' | 'ADF' | 'DET';
 export type AccountType = 'fitflight_creator' | 'ufpm' | 'demo' | 'squadron_leadership' | 'ptl' | 'standard';
 export type Squadron = 'Hawks' | 'Tigers';
 export type WorkoutType = 'Running' | 'Walking' | 'Cycling' | 'Strength' | 'HIIT' | 'Swimming' | 'Sports' | 'Cardio' | 'Flexibility' | 'Other';
@@ -17,9 +17,10 @@ export type AttendanceSource = 'manual' | 'workout' | 'strava' | 'pfra';
 export type AppTheme = 'default' | 'dark' | 'pixel' | 'cyber' | 'space' | 'flowery';
 
 export const SQUADRONS: Squadron[] = ['Hawks', 'Tigers'];
+export const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'DO', 'ADF', 'DET'];
 export const WORKOUT_TYPES: WorkoutType[] = ['Running', 'Walking', 'Cycling', 'Strength', 'HIIT', 'Swimming', 'Sports', 'Cardio', 'Flexibility', 'Other'];
 export const ENLISTED_RANKS = ['AB', 'Amn', 'A1C', 'SrA', 'SSgt', 'TSgt', 'MSgt', 'SMSgt', 'CMSgt'] as const;
-export const OFFICER_RANKS = ['2nd Lt.', '1st Lt.', 'Capt.', 'Maj.', 'Lt. Col.', 'Col.', 'Brig. Gen.', 'Maj. Gen.', 'Lt. Gen.', 'Gen.'] as const;
+export const OFFICER_RANKS = ['2nd Lt.', '1st Lt.', 'Capt.', 'Maj.', 'Lt. Col.', 'Col.'] as const;
 export const ALL_RANKS = [...ENLISTED_RANKS, ...OFFICER_RANKS] as const;
 export const RANK_GROUPS = [
   { label: 'Enlisted', ranks: [...ENLISTED_RANKS] },

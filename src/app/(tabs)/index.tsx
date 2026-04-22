@@ -112,10 +112,10 @@ function DashboardCard({
             <View className="items-end">{editControls}</View>
             <View className="flex-1 items-center justify-center px-3">
               <Text
-                style={[getThemeHeadingStyle(theme, 17), { textAlign: 'center' }]}
+                style={[getThemeHeadingStyle(theme, 15), { textAlign: 'center' }]}
                 numberOfLines={3}
                 adjustsFontSizeToFit
-                minimumFontScale={0.72}
+                minimumFontScale={0.56}
               >
                 {title}
               </Text>
@@ -124,23 +124,15 @@ function DashboardCard({
         ) : (
           <>
             <View className="flex-row items-start justify-between">
-              <View className="flex-row items-center flex-1 pr-3">
-                <View className="w-12 h-12 items-center justify-center" style={getThemeIconWellStyle(theme)}>
-                  <Icon size={22} color={accent} />
-                </View>
-                <View className="ml-3 flex-1">
-                  <Text
-                    style={[getThemeHeadingStyle(theme, 16), { flexShrink: 1 }]}
-                    numberOfLines={2}
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.72}
-                  >
-                    {title}
-                  </Text>
-                  <Text style={[getThemeBodyStyle(theme, 12, theme.textMuted), { marginTop: 4 }]}>
-                    Tap to {expanded ? 'collapse' : 'expand'}
-                  </Text>
-                </View>
+              <View className="flex-1 pr-3">
+                <Text
+                  style={[getThemeHeadingStyle(theme, 15), { flexShrink: 1 }]}
+                  numberOfLines={2}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.5}
+                >
+                  {title}
+                </Text>
               </View>
               <View className="items-end">
                 {editControls}
@@ -159,6 +151,21 @@ function DashboardCard({
                   ) : null}
                   {expanded ? <ChevronUp size={18} color={theme.textSecondary} /> : <ChevronDown size={18} color={theme.textSecondary} />}
                 </View>
+              </View>
+            </View>
+            <View className="mt-3 flex-row items-center">
+              <View className="w-12 h-12 items-center justify-center" style={getThemeIconWellStyle(theme)}>
+                <Icon size={22} color={accent} />
+              </View>
+              <View className="ml-3 flex-1">
+                <Text
+                  style={[getThemeBodyStyle(theme, 12, theme.textMuted), { flexShrink: 1 }]}
+                  numberOfLines={2}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.68}
+                >
+                  Tap to {expanded ? 'collapse' : 'expand'}
+                </Text>
               </View>
             </View>
             <View style={{ marginTop: 16 }}>{children}</View>
@@ -219,13 +226,16 @@ function normalizeLockedExpandedCardIds(
 
 export default function HomeScreen() {
   const theme = useAppTheme();
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const contentMaxWidth = width >= 1440 ? 1280 : 1120;
   const availableGridWidth = Math.min(width, contentMaxWidth) - 48;
   const collapsedCardTargetWidth = 280;
+  const isPhoneLandscape = width > height && width < 1024;
   const dashboardColumns =
     width >= 1024
       ? Math.max(2, Math.floor(availableGridWidth / collapsedCardTargetWidth))
+      : isPhoneLandscape
+      ? 3
       : 2;
   const navigation = useNavigation<NavigationProp<ParamListBase>>();
   const { currentTargetId, refreshCurrentTarget } = useTutorialTour();
@@ -774,7 +784,7 @@ export default function HomeScreen() {
               </View>
             </View>
             <View className="flex-1 justify-between">
-              <View className="items-center">
+              <View className="flex-1 items-center justify-center py-2">
                 <View className="flex-row items-center w-full">
                   <Text style={[getThemeBodyStyle(theme, 11, theme.textSecondary), { flex: 1, textAlign: 'left' }]}>
                     Current Leader

@@ -717,6 +717,7 @@ export default function CalculatorScreen() {
   const [summaryHeight, setSummaryHeight] = useState(0);
   const { width } = useWindowDimensions();
   const isWide = width >= 1280;
+  const isCompactHeader = width < 430;
   const contentMaxWidth = isWide ? 1460 : undefined;
   const summaryMaxWidth = isWide ? 460 : undefined;
   const jumpOffset = isWide ? 16 : summaryHeight + 16;
@@ -1444,20 +1445,42 @@ export default function CalculatorScreen() {
           stickyHeaderIndices={isWide ? undefined : [1]}
         >
           <View style={{ width: '100%', maxWidth: contentMaxWidth, alignSelf: 'center' }} className="px-6 pt-4 pb-2">
-            <View className="flex-row items-start justify-between gap-4">
+            <View className={isCompactHeader ? "gap-3" : "flex-row items-start justify-between gap-4"}>
               <View className="flex-1">
-                <Text style={getThemeHeadingStyle(theme, 28)}>PFRA Calculator</Text>
-                <Text style={[getThemeBodyStyle(theme, 14), { marginTop: 4 }]}>Based on PFRA Scoring Charts released on 1 MAR 2026</Text>
+                <Text
+                  style={getThemeHeadingStyle(theme, 28)}
+                  numberOfLines={2}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.58}
+                >
+                  PFRA Calculator
+                </Text>
+                <Text
+                  style={[getThemeBodyStyle(theme, 14), { marginTop: 4 }]}
+                  numberOfLines={3}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.72}
+                >
+                  Based on PFRA Scoring Charts released on 1 MAR 2026
+                </Text>
               </View>
               <TutorialTarget id="calculator-actions">
-                <View className="items-end">
+                <View className={isCompactHeader ? "items-stretch" : "items-end"}>
                   <Pressable
                     onPress={() => setShowPfraActionsMenu((current) => !current)}
                     className="rounded-xl px-4 py-2.5"
-                    style={getThemeControlStyle(theme, true)}
+                    style={[getThemeControlStyle(theme, true), isCompactHeader ? { minWidth: 220 } : null]}
                   >
                     <View className="flex-row items-center">
-                      <Text className="font-semibold" style={{ color: theme.accent }}>Save/PFRA Actions</Text>
+                      <Text
+                        className="font-semibold"
+                        style={{ color: theme.accent }}
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.75}
+                      >
+                        Save/PFRA Actions
+                      </Text>
                       <Ionicons name={showPfraActionsMenu ? 'chevron-up' : 'chevron-down'} size={16} color={theme.accent} style={{ marginLeft: 8 }} />
                     </View>
                   </Pressable>

@@ -378,18 +378,23 @@ export function LeaderboardContent({
   }, [currentMonthKey, currentMonthSummaries, ptSessions, squadronMembers]);
 
   const flightPointsRanking = useMemo(() => {
-    const pointsByFlight = new Map<Flight, { flight: Flight; points: number; members: number }>();
+    const pointsByFlight = new Map<Flight, { flight: Flight; totalPoints: number; averagePoints: number; members: number }>();
 
     squadronMembers.forEach((member) => {
       const summary = currentMonthSummaries.get(member.id) ?? getMemberMonthSummary(member, currentMonthKey, ptSessions);
-      const current = pointsByFlight.get(member.flight) ?? { flight: member.flight, points: 0, members: 0 };
-      current.points += summary.score;
+      const current = pointsByFlight.get(member.flight) ?? { flight: member.flight, totalPoints: 0, averagePoints: 0, members: 0 };
+      current.totalPoints += summary.score;
       current.members += 1;
       pointsByFlight.set(member.flight, current);
     });
 
-    return Array.from(pointsByFlight.values()).sort((a, b) => {
-      if (b.points !== a.points) return b.points - a.points;
+    return Array.from(pointsByFlight.values())
+      .map((entry) => ({
+        ...entry,
+        averagePoints: entry.members > 0 ? entry.totalPoints / entry.members : 0,
+      }))
+      .sort((a, b) => {
+      if (b.averagePoints !== a.averagePoints) return b.averagePoints - a.averagePoints;
       return a.flight.localeCompare(b.flight);
     });
   }, [currentMonthKey, currentMonthSummaries, ptSessions, squadronMembers]);
@@ -522,17 +527,22 @@ export function LeaderboardContent({
 
           {(squadronWorkoutBreakdown.totalWorkouts > 0 || flightPointsRanking.length > 0) && (
             <Animated.View entering={FadeInDown.delay(250).springify()} className="mx-6 mt-4">
-              <View className="flex-row">
+              <View className="flex-row items-stretch">
                 {squadronWorkoutBreakdown.totalWorkouts > 0 ? (
                   <View className="flex-1 mr-2">
-                    <ThemeChrome theme={theme} variant="feature" style={{ height: '100%' }}>
-                      <View className="p-4 flex-1">
-                        <View className="flex-row items-center justify-between mb-3">
+                    <ThemeChrome theme={theme} variant="feature">
+                      <View className="p-4 min-h-[180px] justify-between">
+                        <View className="mb-3">
                           <View className="flex-row items-center">
                             <BarChart3 size={16} color={theme.accent} />
                             <Text style={[getThemeBodyStyle(theme, 11, theme.textMuted), { textTransform: 'uppercase', marginLeft: 8 }]}>Workout Types</Text>
                           </View>
-                          <Text style={[getThemeBodyStyle(theme, 12), { textAlign: 'right', flexShrink: 1, marginLeft: 8 }]} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.8}>
+                          <Text
+                            style={[getThemeBodyStyle(theme, 12), { marginTop: 8, textAlign: 'left', flexShrink: 1 }]}
+                            numberOfLines={2}
+                            adjustsFontSizeToFit
+                            minimumFontScale={0.68}
+                          >
                             {squadronWorkoutBreakdown.breakdown.length} {squadronWorkoutBreakdown.breakdown.length === 1 ? 'type' : 'types'} | {squadronWorkoutBreakdown.totalWorkouts} total {squadronWorkoutBreakdown.totalWorkouts === 1 ? 'workout' : 'workouts'}
                           </Text>
                         </View>
@@ -564,14 +574,16 @@ export function LeaderboardContent({
                         setShowFlightRankings(true);
                       }}
                     >
-                      <ThemeChrome theme={theme} variant="feature" style={{ height: '100%' }}>
-                        <View className="p-4 flex-1">
-                          <View className="flex-row items-center justify-between mb-3">
-                            <View className="flex-row items-center">
-                              <Users size={16} color={theme.accent} />
-                              <Text style={[getThemeBodyStyle(theme, 11, theme.textMuted), { textTransform: 'uppercase', marginLeft: 8 }]}>Flight Points</Text>
+                      <ThemeChrome theme={theme} variant="feature">
+                        <View className="p-4 min-h-[180px] justify-between">
+                          <View className="mb-3">
+                            <View className="flex-row items-center justify-between">
+                              <View className="flex-row items-center">
+                                <Users size={16} color={theme.accent} />
+                                <Text style={[getThemeBodyStyle(theme, 11, theme.textMuted), { textTransform: 'uppercase', marginLeft: 8 }]}>Flight Points</Text>
+                              </View>
+                              <Text style={getThemeBodyStyle(theme, 11, theme.accent)}>Open</Text>
                             </View>
-                            <Text style={getThemeBodyStyle(theme, 11, theme.accent)}>Open</Text>
                           </View>
 
                           {topFlights.map((entry, index) => (
@@ -590,12 +602,15 @@ export function LeaderboardContent({
                                   {entry.flight}
                                 </Text>
                               </View>
-                              <Text style={getThemeHeadingStyle(theme, 16)}>{entry.points}</Text>
+                              <View className="items-end">
+                                <Text style={getThemeHeadingStyle(theme, 16)}>{entry.averagePoints.toFixed(1)}</Text>
+                                <Text style={getThemeBodyStyle(theme, 10, theme.textMuted)}>avg</Text>
+                              </View>
                             </View>
                           ))}
 
                           {flightPointsRanking.length > 2 ? (
-                            <Text style={[getThemeBodyStyle(theme, 11, theme.textSecondary), { marginTop: 10 }]}>
+                            <Text style={[getThemeBodyStyle(theme, 11, theme.textSecondary), { marginTop: 8 }]}>
                               Tap to view all {flightPointsRanking.length} flights
                             </Text>
                           ) : null}
@@ -712,9 +727,9 @@ export function LeaderboardContent({
           onRequestClose={() => setShowFlightRankings(false)}
         >
           <View className="flex-1 bg-black/75 justify-center items-center px-5">
-            <View style={{ width: '100%', maxWidth: 460, maxHeight: '80%' }}>
-            <ThemeChrome theme={theme} variant="feature" style={{ width: '100%' }}>
-              <View style={{ maxHeight: '100%', overflow: 'hidden' }}>
+            <View style={{ width: '100%', maxWidth: 460, height: '80%' }}>
+            <ThemeChrome theme={theme} variant="feature" blurIntensity={40} style={{ width: '100%', height: '100%' }} fill>
+              <View style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
                 <View className="flex-row items-center justify-between p-6 pb-0">
                   <Text style={getThemeHeadingStyle(theme, 20)}>Flight Rankings</Text>
                   <Pressable
@@ -730,7 +745,7 @@ export function LeaderboardContent({
                 </View>
 
                 <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 14, paddingHorizontal: 24 }]}>
-                  Flight points are the sum of each member’s current monthly leaderboard points.
+                  Flight score is the average monthly leaderboard points across members in each flight.
                 </Text>
 
                 <ScrollView
@@ -760,24 +775,15 @@ export function LeaderboardContent({
                               </Text>
                             </View>
                           </View>
-                          <Text style={getThemeHeadingStyle(theme, 20)}>{entry.points}</Text>
+                          <View className="items-end">
+                            <Text style={getThemeHeadingStyle(theme, 20)}>{entry.averagePoints.toFixed(1)}</Text>
+                            <Text style={getThemeBodyStyle(theme, 10, theme.textMuted)}>avg</Text>
+                          </View>
                         </View>
                       </View>
                     </ThemeChrome>
                   ))}
                 </ScrollView>
-                <View className="px-6 pb-6 pt-1">
-                  <Pressable
-                    onPress={() => {
-                      Haptics.selectionAsync();
-                      setShowFlightRankings(false);
-                    }}
-                    className="self-end rounded-full border px-4 py-2"
-                    style={{ borderColor: `${theme.accent}66`, backgroundColor: theme.accentSoft }}
-                  >
-                    <Text style={[getThemeBodyStyle(theme, 14, theme.textPrimary), { fontWeight: '600' }]}>Close</Text>
-                  </Pressable>
-                </View>
               </View>
             </ThemeChrome>
             </View>

@@ -15,7 +15,7 @@ import { bulkSavePFRAResults, fetchAttendanceSessions, fetchPFRABatchById, fetch
 import { buildBulkAssessment, createEmptyBulkPFRARow, scoreBulkPFRARow, type BulkPFRARowDraft } from '@/lib/pfraBulk';
 import { getThemeBodyStyle, getThemeControlStyle, getThemeHeadingStyle, useAppTheme } from '@/lib/theme';
 
-const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
+const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'DO', 'ADF', 'DET'];
 const RECORD_TYPES: Array<{ value: Exclude<PFRARecordType, 'self'>; label: string }> = [
   { value: 'mock', label: 'Mock' },
   { value: 'diagnostic', label: 'Diagnostic' },

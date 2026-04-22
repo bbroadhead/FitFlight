@@ -16,7 +16,7 @@ import { getThemeBodyStyle, getThemeButtonStyle, getThemeButtonTextStyle, getThe
 import { clearUrlHashSession, getUserForAccessToken, readSessionFromUrlHash, requestPasswordReset, signInWithPassword, signUpWithPassword } from '@/lib/supabaseAuth';
 import { createRosterMember, ensureMemberRole, fetchRoleForEmail, fetchRosterMembers, sendAppNotification, updateRosterMember } from '@/lib/supabaseData';
 
-const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
+const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'DO', 'ADF', 'DET'];
 const EMAIL_RATE_LIMIT_MESSAGE = "The server's hourly email limit has been reached. Please try again in 1 hour.";
 const DEMO_ACCOUNT_EMAIL = 'fitflight@us.af.mil';
 const DEMO_ACCOUNT_NAME = { firstName: 'Ima', lastName: 'Demo' };
@@ -917,34 +917,25 @@ export default function LoginScreen() {
                   {/* Rank Selection */}
                   <View className="mb-4">
                     <Text style={getThemeBodyStyle(theme, 13, theme.textSecondary)} className="mb-2 ml-1">Rank</Text>
-                    <ScrollView
-                      horizontal
-                      showsHorizontalScrollIndicator={false}
-                      style={{ flexGrow: 0 }}
-                    >
-                      <View>
-                        {RANK_GROUPS.map((group, groupIndex) => (
-                          <View key={group.label} className={groupIndex > 0 ? 'mt-3' : ''}>
-                            <Text style={getThemeBodyStyle(theme, 11, theme.textMuted)} className="uppercase mb-2">{group.label}</Text>
-                            <View className="flex-row flex-wrap">
-                              {group.ranks.map((rank) => (
-                                <Pressable
-                                  key={rank}
-                                  onPress={() => { setSelectedRank(rank); Haptics.selectionAsync(); }}
-                                  className={cn(
-                                    "px-4 py-2 rounded-lg border mr-2 mb-2",
-                                    selectedRank === rank ? "" : ""
-                                  )}
-                                  style={selectedRank === rank ? getThemeButtonStyle(theme, 'accent') : getThemeControlStyle(theme)}
-                                >
-                                  <Text style={selectedRank === rank ? getThemeButtonTextStyle(theme, 'accent') : getThemeBodyStyle(theme, 13, theme.textPrimary)}>{rank}</Text>
-                                </Pressable>
-                              ))}
-                            </View>
+                    {RANK_GROUPS.map((group, groupIndex) => (
+                      <View key={group.label} className={groupIndex > 0 ? 'mt-3' : ''}>
+                        <Text style={getThemeBodyStyle(theme, 11, theme.textMuted)} className="uppercase mb-2">{group.label}</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }}>
+                          <View className="flex-row">
+                            {group.ranks.map((rank) => (
+                              <Pressable
+                                key={rank}
+                                onPress={() => { setSelectedRank(rank); Haptics.selectionAsync(); }}
+                                className="px-4 py-2 rounded-lg border mr-2"
+                                style={selectedRank === rank ? getThemeButtonStyle(theme, 'accent') : getThemeControlStyle(theme)}
+                              >
+                                <Text style={selectedRank === rank ? getThemeButtonTextStyle(theme, 'accent') : getThemeBodyStyle(theme, 13, theme.textPrimary)}>{rank}</Text>
+                              </Pressable>
+                            ))}
                           </View>
-                        ))}
+                        </ScrollView>
                       </View>
-                    </ScrollView>
+                    ))}
                   </View>
 
                   {/* Flight Selection */}

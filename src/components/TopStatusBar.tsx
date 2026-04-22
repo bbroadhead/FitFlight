@@ -65,6 +65,8 @@ export function TopStatusBar({
       className="px-6 py-1.5"
       style={{
         backgroundColor: theme.surfaceAlt,
+        borderTopWidth: 1,
+        borderTopColor: theme.border,
         borderBottomWidth: 1,
         borderBottomColor: theme.border,
       }}

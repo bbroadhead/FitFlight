@@ -1,17 +1,18 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, View, Text, Pressable, RefreshControl, ScrollView, TextInput, Modal, KeyboardAvoidingView, Platform, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Plus, Search, X, ThumbsUp, ThumbsDown, Star, Trash2, Clock, Flame, ChevronDown, ChevronUp, Check, ListOrdered, Filter, Pencil, CalendarPlus } from 'lucide-react-native';
-import Animated, { FadeInDown, FadeInRight } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeInDown, FadeInRight, SlideInDown } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import SmartSlider from "../../components/SmartSlider";
-import { useMemberStore, useAuthStore, getDisplayName, type WorkoutType, type SharedWorkout, type Squadron, WORKOUT_TYPES, isAdmin, canManagePTPrograms } from '@/lib/store';
+import { useMemberStore, useAuthStore, getShortDisplayName, type WorkoutType, type SharedWorkout, type Squadron, WORKOUT_TYPES, isAdmin, canManagePTPrograms } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { createSharedWorkout, deleteSharedWorkoutFromSupabase, fetchSharedWorkouts, updateSharedWorkout } from '@/lib/supabaseData';
 import { TutorialTarget } from '@/contexts/TutorialTourContext';
+import { useTabSwipe } from '@/contexts/TabSwipeContext';
 import { PLAYBOOK_WORKOUT_CREATOR_ID, PLAYBOOK_WORKOUT_SOURCE_LABEL, PLAYBOOK_WORKOUTS } from '@/lib/playbookWorkouts';
 import { parseScheduledWorkoutLink } from '@/lib/scheduledWorkoutLinks';
 import { getThemeBodyStyle, getThemeButtonStyle, getThemeButtonTextStyle, getThemeControlStyle, getThemeHeadingStyle, getThemeIconWellStyle, getThemeInputContainerStyle, getThemeLabelStyle, useAppTheme, type AppThemePalette } from '@/lib/theme';
@@ -24,6 +25,17 @@ import { createOfflineActionId, requestRegisteredSync, runOrQueueOfflineMutation
 type FilterType = 'all' | 'favorites' | 'mine' | 'playbook';
 type SortType = 'newest' | 'popular' | 'duration';
 const PLAYBOOK_FAVORITES_KEY_PREFIX = 'fitflight-playbook-favorites:';
+
+function slugifyMemberKey(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function getLegacyWorkoutMemberId(member: { rank: string; firstName: string; lastName: string; flight: string }) {
+  return `roster-${slugifyMemberKey(`${member.rank}-${member.lastName}-${member.firstName}-${member.flight}`)}`;
+}
 
 function getWorkoutVoteScore(workout: SharedWorkout) {
   return workout.thumbsUp.length;
@@ -330,6 +342,7 @@ function WorkoutCard({
 export default function WorkoutsScreen() {
   const theme = useAppTheme();
   const { width } = useWindowDimensions();
+  const { setSwipeEnabled } = useTabSwipe();
   const router = useRouter();
   const params = useLocalSearchParams<{ openWorkoutId?: string }>();
   const user = useAuthStore(s => s.user);
@@ -354,6 +367,8 @@ export default function WorkoutsScreen() {
   const [playbookFavoriteIds, setPlaybookFavoriteIds] = useState<string[]>([]);
   const [expandedWorkoutId, setExpandedWorkoutId] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const filterTouchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const filterDragActivatedRef = useRef(false);
 
   // Create modal state
   const [newName, setNewName] = useState('');
@@ -435,12 +450,42 @@ export default function WorkoutsScreen() {
     }
   };
 
+  const handleFilterTouchStart = useCallback((event: any) => {
+    filterTouchStartRef.current = {
+      x: event.nativeEvent.pageX,
+      y: event.nativeEvent.pageY,
+    };
+    filterDragActivatedRef.current = false;
+    setSwipeEnabled(false);
+  }, [setSwipeEnabled]);
+
+  const handleFilterTouchMove = useCallback((event: any) => {
+    const start = filterTouchStartRef.current;
+    if (!start || filterDragActivatedRef.current) {
+      return;
+    }
+
+    const dx = Math.abs(event.nativeEvent.pageX - start.x);
+    const dy = Math.abs(event.nativeEvent.pageY - start.y);
+    if (dx > 6 || dy > 6) {
+      filterDragActivatedRef.current = true;
+    }
+  }, []);
+
+  const releaseFilterSwipeLock = useCallback(() => {
+    filterTouchStartRef.current = null;
+    filterDragActivatedRef.current = false;
+    setSwipeEnabled(true);
+  }, [setSwipeEnabled]);
+
   const getMemberName = (memberId: string, workout?: SharedWorkout) => {
     if (memberId === PLAYBOOK_WORKOUT_CREATOR_ID || workout?.source === 'playbook') {
       return PLAYBOOK_WORKOUT_SOURCE_LABEL;
     }
-    const member = members.find(m => m.id === memberId);
-    return member ? getDisplayName(member) : 'Unknown';
+    const member = members.find(
+      (candidate) => candidate.id === memberId || getLegacyWorkoutMemberId(candidate) === memberId
+    );
+    return member ? getShortDisplayName(member) : 'Unknown';
   };
 
   // Filter and sort workouts
@@ -854,6 +899,13 @@ export default function WorkoutsScreen() {
             className="mt-3"
             contentContainerStyle={{ paddingRight: 20 }}
             style={{ flexGrow: 0 }}
+            onTouchStart={handleFilterTouchStart}
+            onTouchMove={handleFilterTouchMove}
+            onTouchEnd={releaseFilterSwipeLock}
+            onTouchCancel={releaseFilterSwipeLock}
+            onScrollBeginDrag={() => setSwipeEnabled(false)}
+            onScrollEndDrag={releaseFilterSwipeLock}
+            onMomentumScrollEnd={releaseFilterSwipeLock}
           >
             <Pressable
               onPress={() => setShowFilterModal(true)}
@@ -1140,8 +1192,9 @@ export default function WorkoutsScreen() {
       </Modal>
 
       {/* Filter Modal */}
-      <Modal visible={showFilterModal} transparent animationType="slide">
-        <View className="flex-1 bg-black/80 justify-end">
+      <Modal visible={showFilterModal} transparent animationType="none">
+        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View entering={SlideInDown.duration(260)}>
           <ThemeChrome theme={theme} variant="feature">
           <View className="p-6 pb-12">
             <View className="flex-row items-center justify-between mb-6">
@@ -1223,7 +1276,8 @@ export default function WorkoutsScreen() {
             </Pressable>
           </View>
           </ThemeChrome>
-        </View>
+          </Animated.View>
+        </Animated.View>
       </Modal>
     </View>
   );

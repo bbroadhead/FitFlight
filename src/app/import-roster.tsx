@@ -13,7 +13,7 @@ import { cn } from '@/lib/cn';
 import { createRosterMember } from '@/lib/supabaseData';
 import { PageContainer } from '@/components/PageContainer';
 
-const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
+const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'DO', 'ADF', 'DET'];
 const RANKS = [...ALL_RANKS];
 
 interface ParsedRow {
@@ -184,6 +184,7 @@ export default function ImportRosterScreen() {
       'doom': 'Doom',
       'ewok': 'Ewok',
       'foxhound': 'Foxhound',
+      'do': 'DO',
       'adf': 'ADF',
       'det': 'DET',
       // Common variations

@@ -61,7 +61,7 @@ import {
 } from '@/lib/supabaseData';
 import { createOfflineActionId, requestRegisteredSync, runOrQueueOfflineMutation } from '@/lib/appSync';
 
-const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
+const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'DO', 'ADF', 'DET'];
 const OWNER_EMAIL = 'benjamin.broadhead.2@us.af.mil';
 const PROJECT_COORDINATOR_EMAIL = 'jacob.de_la_rosa@us.af.mil';
 const DEVELOPER_NAME = 'SSgt Benjamin Broadhead';
@@ -583,6 +583,10 @@ export default function ProfileScreen() {
   const memberPendingDelete = useMemo(
     () => members.find((member) => member.id === memberPendingDeleteId) ?? null,
     [memberPendingDeleteId, members]
+  );
+  const editingMember = useMemo(
+    () => members.find((member) => member.id === editingMemberId) ?? null,
+    [editingMemberId, members]
   );
   const resetPasswordCandidates = useMemo(() => {
     const inSquadron = members
@@ -1113,6 +1117,7 @@ export default function ProfileScreen() {
 
   const openAddMemberModal = () => {
     resetForm();
+    setShowManageModal(false);
     setShowAddModal(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
@@ -1134,6 +1139,7 @@ export default function ProfileScreen() {
   const openUFPMPicker = () => {
     setUFPMSearchQuery('');
     setSelectedUFPMMemberId(null);
+    setShowManageModal(false);
     setShowUFPMModal(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
@@ -1338,6 +1344,19 @@ export default function ProfileScreen() {
   const handleSetUFPM = (memberId: string) => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setUFPM(memberId);
+  };
+
+  const closeAddMemberModalToManage = () => {
+    setShowAddModal(false);
+    resetForm();
+    setShowManageModal(true);
+  };
+
+  const closeUFPMPickerToManage = () => {
+    setShowUFPMModal(false);
+    setUFPMSearchQuery('');
+    setSelectedUFPMMemberId(null);
+    setShowManageModal(true);
   };
 
   const handleChangeSquadron = () => {
@@ -2878,17 +2897,6 @@ export default function ProfileScreen() {
               <Text className="text-white font-semibold text-lg mb-3">Admin Actions</Text>
 
               <Pressable
-                onPress={openAddMemberModal}
-                className="flex-row items-center bg-af-accent/20 border border-af-accent/50 rounded-xl p-4 mb-3"
-              >
-                <UserPlus size={24} color="#4A90D9" />
-                <View className="ml-3 flex-1">
-                  <Text className="text-white font-semibold">Add New Member</Text>
-                  <Text className="text-af-silver text-xs">Add to PT attendance (no account)</Text>
-                </View>
-              </Pressable>
-
-              <Pressable
                 onPress={() => {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   router.push('/import-roster');
@@ -3020,16 +3028,6 @@ export default function ProfileScreen() {
                 className="mx-6 mt-6"
               >
               <Text className="text-white font-semibold text-lg mb-3">PFL Actions</Text>
-              <Pressable
-                onPress={openAddMemberModal}
-                className="flex-row items-center bg-af-accent/20 border border-af-accent/50 rounded-xl p-4 mb-3"
-              >
-                <UserPlus size={24} color="#4A90D9" />
-                <View className="ml-3 flex-1">
-                  <Text className="text-white font-semibold">Add Member</Text>
-                  <Text className="text-af-silver text-xs">Add someone to the roster and attendance</Text>
-                </View>
-              </Pressable>
               <Pressable
                 onPress={() => { setShowManageModal(true); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
                 className="flex-row items-center bg-white/5 border border-white/10 rounded-xl p-4"
@@ -3194,7 +3192,7 @@ export default function ProfileScreen() {
       </SafeAreaView>
 
       {/* Add Member Modal */}
-      <Modal visible={showAddModal} transparent animationType="slide">
+      <Modal visible={showAddModal} transparent animationType="none">
         <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
           <Animated.View entering={SlideInDown.duration(260)}
             style={[
@@ -3208,11 +3206,11 @@ export default function ProfileScreen() {
             ]}
           >
             <BlurView intensity={modalBlurIntensity} tint="dark" style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }} />
-            <View style={{ backgroundColor: 'rgba(8, 14, 24, 0.34)', padding: 24, paddingBottom: 48 }}>
+            <View style={{ backgroundColor: 'rgba(8, 14, 24, 0.34)', paddingHorizontal: 24, paddingTop: 24, paddingBottom: 48, flex: 1, minHeight: 0 }}>
             <View className="flex-row items-center justify-between mb-6">
               <Text style={getThemeHeadingStyle(themePalette, 22)}>{editingMemberId ? 'Edit Member' : 'Add Member'}</Text>
               <Pressable
-                onPress={() => { setShowAddModal(false); resetForm(); }}
+                onPress={closeAddMemberModalToManage}
                 className="w-8 h-8 rounded-full items-center justify-center"
                 style={getThemeControlStyle(themePalette)}
               >
@@ -3220,7 +3218,11 @@ export default function ProfileScreen() {
               </Pressable>
             </View>
 
-            <ScrollView showsVerticalScrollIndicator={false}>
+            <ScrollView
+              style={{ flex: 1, minHeight: 0 }}
+              contentContainerStyle={{ paddingBottom: 12 }}
+              showsVerticalScrollIndicator={false}
+            >
               {/* First Name */}
               <View className="mb-4">
                 <Text style={getThemeBodyStyle(themePalette, 13, themePalette.textSecondary)} className="mb-2">First Name</Text>
@@ -3258,18 +3260,20 @@ export default function ProfileScreen() {
                   {RANK_GROUPS.map((group, groupIndex) => (
                     <View key={group.label} className={groupIndex > 0 ? 'mt-3' : ''}>
                       <Text style={getThemeBodyStyle(themePalette, 12, themePalette.textMuted)} className="uppercase mb-2">{group.label}</Text>
-                      <View className="flex-row flex-wrap">
-                        {group.ranks.map((rank) => (
-                          <Pressable
-                            key={rank}
-                            onPress={() => setNewMemberRank(rank)}
-                            className="px-4 py-2 rounded-lg mr-2 mb-2 border"
-                            style={newMemberRank === rank ? getThemeControlStyle(themePalette, true) : getThemeControlStyle(themePalette)}
-                          >
-                            <Text style={getThemeBodyStyle(themePalette, 13, newMemberRank === rank ? themePalette.textPrimary : themePalette.textSecondary)}>{rank}</Text>
-                          </Pressable>
-                        ))}
-                      </View>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }}>
+                        <View className="flex-row">
+                          {group.ranks.map((rank) => (
+                            <Pressable
+                              key={rank}
+                              onPress={() => setNewMemberRank(rank)}
+                              className="px-4 py-2 rounded-lg mr-2 border"
+                              style={newMemberRank === rank ? getThemeControlStyle(themePalette, true) : getThemeControlStyle(themePalette)}
+                            >
+                              <Text style={getThemeBodyStyle(themePalette, 13, newMemberRank === rank ? themePalette.textPrimary : themePalette.textSecondary)}>{rank}</Text>
+                            </Pressable>
+                          ))}
+                        </View>
+                      </ScrollView>
                     </View>
                   ))}
                 </View>
@@ -3346,6 +3350,54 @@ export default function ProfileScreen() {
                 </View>
               ) : null}
 
+              {editingMember && canManage && editingMember.accountType !== 'fitflight_creator' && editingMember.accountType !== 'ufpm' ? (
+                <View className="mb-4">
+                  <Text style={getThemeBodyStyle(themePalette, 13, themePalette.textSecondary)} className="mb-2">PFL Role</Text>
+                  <View style={getThemeControlStyle(themePalette)} className="rounded-2xl p-4">
+                    <View className="flex-row items-start justify-between">
+                      <View className="flex-1 pr-3">
+                        <Text style={[getThemeBodyStyle(themePalette, 14, themePalette.textPrimary), { fontWeight: '700' }]}>
+                          {editingMember.accountType === 'ptl' ? 'PFL Access Active' : 'PFL Access Available'}
+                        </Text>
+                        <Text style={getThemeBodyStyle(themePalette, 12, themePalette.textSecondary)} className="mt-1">
+                          {editingMember.accountType === 'ptl'
+                            ? 'This member can currently manage PFL workflows in-app.'
+                            : 'Grant this member Physical Fitness Leader access from their edit view.'}
+                        </Text>
+                      </View>
+                      <View className="w-10 h-10 rounded-full items-center justify-center" style={getThemeControlStyle(themePalette, editingMember.accountType !== 'ptl')}>
+                        <UserCheck size={18} color={editingMember.accountType === 'ptl' ? '#F59E0B' : themePalette.textPrimary} />
+                      </View>
+                    </View>
+                    {editingMember.accountType === 'ptl' ? (
+                      <Pressable
+                        onPress={() => {
+                          setShowAddModal(false);
+                          resetForm();
+                          handleRevokePTL(editingMember.id);
+                        }}
+                        className="self-start mt-4 px-4 py-3 rounded-xl"
+                        style={getThemeControlStyle(themePalette)}
+                      >
+                        <Text style={getThemeBodyStyle(themePalette, 13, '#F59E0B')}>Revoke PFL</Text>
+                      </Pressable>
+                    ) : (
+                      <Pressable
+                        onPress={() => {
+                          setShowAddModal(false);
+                          resetForm();
+                          handleAssignPTL(editingMember.id);
+                        }}
+                        className="self-start mt-4 px-4 py-3 rounded-xl"
+                        style={getThemeControlStyle(themePalette, true)}
+                      >
+                        <Text style={getThemeBodyStyle(themePalette, 13, themePalette.textPrimary)}>Assign PFL</Text>
+                      </Pressable>
+                    )}
+                  </View>
+                </View>
+              ) : null}
+
               {memberActionError ? (
                 <View className="bg-red-500/20 border border-red-500/40 rounded-xl px-4 py-3 mb-4">
                   <Text className="text-red-300">{memberActionError}</Text>
@@ -3371,18 +3423,30 @@ export default function ProfileScreen() {
       </Modal>
 
       {/* Manage Members Modal */}
-      <Modal visible={showManageModal} transparent animationType="slide">
+      <Modal visible={showManageModal} transparent animationType="none">
         <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
-          <Animated.View entering={SlideInDown.duration(260)} className="rounded-t-3xl max-h-[80%]" style={{ overflow: 'hidden' }}>
+          <Animated.View
+            entering={SlideInDown.duration(260)}
+            style={[
+              getThemeCardStyle(themePalette, 'feature'),
+              {
+                borderTopLeftRadius: 24,
+                borderTopRightRadius: 24,
+                maxHeight: '80%',
+                overflow: 'hidden',
+              },
+            ]}
+          >
             <BlurView intensity={modalBlurIntensity} tint="dark" style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }} />
-            <View className="bg-af-navy/70 rounded-t-3xl p-6 pb-12">
+            <View style={{ backgroundColor: 'rgba(8, 14, 24, 0.34)', paddingHorizontal: 24, paddingTop: 24, paddingBottom: 48, flex: 1, minHeight: 0 }}>
             <View className="flex-row items-center justify-between mb-6">
-              <Text className="text-white text-xl font-bold">Manage Members</Text>
+              <Text style={getThemeHeadingStyle(themePalette, 22)}>Manage Members</Text>
               <Pressable
                 onPress={() => setShowManageModal(false)}
-                className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+                className="w-8 h-8 rounded-full items-center justify-center"
+                style={getThemeControlStyle(themePalette)}
               >
-                <X size={20} color="#C0C0C0" />
+                <X size={20} color={themePalette.textSecondary} />
               </Pressable>
             </View>
 
@@ -3392,44 +3456,62 @@ export default function ProfileScreen() {
               </View>
             ) : null}
 
-            <View className="bg-white/5 border border-white/10 rounded-2xl p-4 mb-4">
+            <View className="rounded-2xl p-4 mb-4" style={getThemeControlStyle(themePalette)}>
               <View className="flex-row items-center justify-between">
                 <View>
-                  <Text className="text-white font-semibold">Roster Controls</Text>
-                  <Text className="text-af-silver text-xs mt-1">
+                  <Text style={[getThemeBodyStyle(themePalette, 15, themePalette.textPrimary), { fontWeight: '700' }]}>Roster Controls</Text>
+                  <Text style={getThemeBodyStyle(themePalette, 12, themePalette.textSecondary)} className="mt-1">
                     {filteredMembers.length} shown of {members.length} members
                   </Text>
                 </View>
+              </View>
+              <View className="flex-row mt-3" style={{ gap: 10 }}>
+                <Pressable
+                  onPress={openAddMemberModal}
+                  className="flex-1 flex-row items-center justify-center rounded-xl px-4 py-3"
+                  style={getThemeControlStyle(themePalette, true)}
+                >
+                  <UserPlus size={16} color={themePalette.textPrimary} />
+                  <Text style={[getThemeBodyStyle(themePalette, 13, themePalette.textPrimary), { fontWeight: '700', marginLeft: 8 }]}>
+                    Add Member
+                  </Text>
+                </Pressable>
                 {canManage && (
                   <Pressable
                     onPress={openUFPMPicker}
-                    className="flex-row items-center bg-af-gold/20 border border-af-gold/40 rounded-full px-3 py-2"
+                    className="flex-1 flex-row items-center justify-center rounded-xl px-4 py-3"
+                    style={{
+                      ...getThemeControlStyle(themePalette),
+                      backgroundColor: 'rgba(245, 158, 11, 0.18)',
+                      borderColor: 'rgba(245, 158, 11, 0.42)',
+                    }}
                   >
-                    <Star size={14} color="#FFD700" />
-                    <Text className="text-af-gold text-xs font-semibold ml-2">Assign UFPM</Text>
+                    <Dumbbell size={16} color="#F59E0B" />
+                    <Text style={[getThemeBodyStyle(themePalette, 13, '#FFD700'), { fontWeight: '700', marginLeft: 8 }]}>
+                      Change UFPM
+                    </Text>
                   </Pressable>
                 )}
               </View>
-              {currentUFPM && (
-                <View className="mt-3 bg-af-gold/10 border border-af-gold/30 rounded-xl px-3 py-2">
-                  <Text className="text-af-gold text-xs uppercase tracking-wider">Current UFPM</Text>
-                  <Text className="text-white font-semibold mt-1">{getDisplayName(currentUFPM)}</Text>
-                </View>
-              )}
-              <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10 mt-4">
-                <Search size={18} color="#C0C0C0" />
+              <View className="flex-row items-center rounded-xl px-4 py-3 mt-4" style={getThemeControlStyle(themePalette)}>
+                <Search size={18} color={themePalette.textSecondary} />
                 <TextInput
                   value={memberSearchQuery}
                   onChangeText={setMemberSearchQuery}
                   placeholder="Search members"
                   placeholderTextColor="#ffffff40"
                   autoCapitalize="none"
-                  className="flex-1 ml-3 text-white"
+                  className="flex-1 ml-3"
+                  style={{ color: themePalette.textPrimary }}
                 />
               </View>
             </View>
 
-            <ScrollView showsVerticalScrollIndicator={false}>
+            <ScrollView
+              style={{ flex: 1, minHeight: 0 }}
+              contentContainerStyle={{ paddingBottom: 12 }}
+              showsVerticalScrollIndicator={false}
+            >
               {filteredMembers.map((member) => {
                 const memberDisplayName = getDisplayName(member);
                 const memberColors = getAccountTypeColor(member.accountType);
@@ -3481,16 +3563,6 @@ export default function ProfileScreen() {
                           className="self-start bg-af-warning/20 px-3 py-2 rounded-full"
                         >
                           <Text className="text-af-warning text-xs font-semibold">Revoke PFL</Text>
-                        </Pressable>
-                      </View>
-                    )}
-                    {!isPTL && canManage && !isOwner && member.accountType !== 'ufpm' && (
-                      <View className="mt-3 pt-3 border-t border-white/10">
-                        <Pressable
-                          onPress={() => handleAssignPTL(member.id)}
-                          className="self-start bg-af-accent/20 px-3 py-2 rounded-full"
-                        >
-                          <Text className="text-af-accent text-xs font-semibold">Assign PFL</Text>
                         </Pressable>
                       </View>
                     )}
@@ -3561,38 +3633,61 @@ export default function ProfileScreen() {
         </View>
       </Modal>
 
-      <Modal visible={showUFPMModal} transparent animationType="slide">
+      <Modal visible={showUFPMModal} transparent animationType="none">
         <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
-          <Animated.View entering={SlideInDown.duration(260)} className="rounded-t-3xl max-h-[80%]" style={{ overflow: 'hidden' }}>
+          <Animated.View
+            entering={SlideInDown.duration(260)}
+            style={[
+              getThemeCardStyle(themePalette, 'feature'),
+              {
+                borderTopLeftRadius: 24,
+                borderTopRightRadius: 24,
+                maxHeight: '82%',
+                overflow: 'hidden',
+              },
+            ]}
+          >
             <BlurView intensity={modalBlurIntensity} tint="dark" style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }} />
-            <View className="bg-af-navy/70 rounded-t-3xl p-6 pb-12">
+            <View style={{ backgroundColor: 'rgba(8, 14, 24, 0.34)', paddingHorizontal: 24, paddingTop: 24, paddingBottom: 48, flex: 1, minHeight: 0 }}>
             <View className="flex-row items-center justify-between mb-6">
-              <Text className="text-white text-xl font-bold">Select UFPM</Text>
+              <View className="flex-1 pr-4">
+                <Text style={getThemeHeadingStyle(themePalette, 22)}>Select UFPM</Text>
+                {currentUFPM ? (
+                  <View className="mt-3 rounded-xl px-3 py-3 border" style={getThemeControlStyle(themePalette)}>
+                    <Text style={getThemeBodyStyle(themePalette, 11, '#FFD700')} className="uppercase">Current UFPM</Text>
+                    <Text style={[getThemeBodyStyle(themePalette, 15, themePalette.textPrimary), { fontWeight: '700', marginTop: 4 }]}>
+                      {getDisplayName(currentUFPM)}
+                    </Text>
+                  </View>
+                ) : (
+                  <Text style={[getThemeBodyStyle(themePalette, 14, themePalette.textSecondary), { marginTop: 4 }]}>
+                    No UFPM is currently assigned.
+                  </Text>
+                )}
+              </View>
               <Pressable
-                onPress={() => {
-                  setShowUFPMModal(false);
-                  setUFPMSearchQuery('');
-                  setSelectedUFPMMemberId(null);
-                }}
-                className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+                onPress={closeUFPMPickerToManage}
+                className="w-8 h-8 rounded-full items-center justify-center"
+                style={getThemeControlStyle(themePalette)}
               >
-                <X size={20} color="#C0C0C0" />
+                <X size={20} color={themePalette.textSecondary} />
               </Pressable>
             </View>
 
-            <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10 mb-4">
-              <Search size={18} color="#C0C0C0" />
+            <View className="flex-row items-center rounded-xl px-4 py-3 mb-4" style={getThemeControlStyle(themePalette)}>
+              <Search size={18} color={themePalette.textSecondary} />
               <TextInput
                 value={ufpmSearchQuery}
                 onChangeText={setUFPMSearchQuery}
                 placeholder="Search members"
                 placeholderTextColor="#ffffff40"
                 autoCapitalize="none"
-                className="flex-1 ml-3 text-white"
+                className="flex-1 ml-3"
+                style={{ color: themePalette.textPrimary }}
               />
             </View>
 
-            <ScrollView showsVerticalScrollIndicator={false}>
+            <ScrollView style={{ flex: 1, minHeight: 0 }} contentContainerStyle={{ paddingBottom: 12 }} showsVerticalScrollIndicator={false}>
               {ufpmCandidates.map((member) => (
                 <Pressable
                   key={member.id}
@@ -3600,17 +3695,18 @@ export default function ProfileScreen() {
                     setSelectedUFPMMemberId(member.id);
                     setShowUFPMConfirmModal(true);
                   }}
-                  className="bg-white/5 border border-white/10 rounded-2xl p-4 mb-3"
+                  className="rounded-2xl p-4 mb-3 border"
+                  style={getThemeControlStyle(themePalette)}
                 >
-                  <Text className="text-white font-semibold">{getDisplayName(member)}</Text>
-                  <Text className="text-af-silver text-xs mt-1">{member.email}</Text>
+                  <Text style={[getThemeBodyStyle(themePalette, 15, themePalette.textPrimary), { fontWeight: '700' }]}>{getDisplayName(member)}</Text>
+                  <Text style={getThemeBodyStyle(themePalette, 12, themePalette.textSecondary)} className="mt-1">{member.email}</Text>
                   <View className="flex-row items-center mt-3">
-                    <View className="bg-white/10 rounded-full px-2 py-1 mr-2">
-                                <Text className="text-af-silver text-xs">{formatFlightDisplay(member.flight)}</Text>
+                    <View className="rounded-full px-2 py-1 mr-2" style={getThemeControlStyle(themePalette)}>
+                      <Text style={getThemeBodyStyle(themePalette, 12, themePalette.textSecondary)}>{formatFlightDisplay(member.flight)}</Text>
                     </View>
                     {member.accountType === 'ufpm' && (
-                      <View className="bg-af-gold/20 rounded-full px-2 py-1">
-                        <Text className="text-af-gold text-xs">Current UFPM</Text>
+                      <View className="bg-af-gold/20 rounded-full px-2 py-1 border border-af-gold/30">
+                        <Text style={getThemeBodyStyle(themePalette, 12, '#FFD700')}>Current UFPM</Text>
                       </View>
                     )}
                   </View>

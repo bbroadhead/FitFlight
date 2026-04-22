@@ -33,7 +33,6 @@ type RosterColumnName =
   | 'EMAIL'
   | 'FLT-DET'
   | 'AUTH_USER_ID'
-  | 'PROFILE_PICTURE'
   | 'SHOW_WORKOUT_HISTORY_ON_PROFILE'
   | 'SHOW_WORKOUT_UPLOADS_ON_PROFILE'
   | 'SHOW_PFRA_RECORDS_ON_PROFILE'
@@ -464,6 +463,7 @@ const FLIGHT_MAP: Record<string, Flight> = {
   doom: 'Doom',
   ewok: 'Ewok',
   foxhound: 'Foxhound',
+  do: 'DO',
   adf: 'ADF',
   det: 'DET',
   'a flt': 'Apex',
@@ -472,6 +472,7 @@ const FLIGHT_MAP: Record<string, Flight> = {
   'd flt': 'Doom',
   'e flt': 'Ewok',
   'f flt': 'Foxhound',
+  'do flt': 'DO',
   'det 1': 'DET',
 };
 
@@ -532,6 +533,7 @@ const FLIGHT_TO_ROSTER: Record<Flight, string> = {
   Doom: 'D FLT',
   Ewok: 'E FLT',
   Foxhound: 'F FLT',
+  DO: 'DO',
   ADF: 'ADF',
   DET: 'DET 1',
 };
@@ -1185,7 +1187,6 @@ function getRosterPayload(
     EMAIL: member.email.toLowerCase(),
     'FLT-DET': getRosterFlight(member),
     AUTH_USER_ID: authUserId,
-    PROFILE_PICTURE: serializeImageReference(member.profilePicture),
     SHOW_WORKOUT_HISTORY_ON_PROFILE: member.showWorkoutHistoryOnProfile ?? true,
     SHOW_WORKOUT_UPLOADS_ON_PROFILE: member.showWorkoutUploadsOnProfile ?? true,
     SHOW_PFRA_RECORDS_ON_PROFILE: member.showPFRARecordsOnProfile ?? true,

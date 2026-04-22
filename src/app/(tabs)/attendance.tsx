@@ -17,7 +17,7 @@ import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { useTabSwipe } from '@/contexts/TabSwipeContext';
 import { deleteScheduledPTSession as deleteScheduledPTSessionFromSupabase, fetchAttendanceSessions, fetchWeeklyAttendanceExcusals, setAttendanceStatus, setWeeklyAttendanceExcusal } from '@/lib/supabaseData';
 import { parseScheduledWorkoutLink, stripScheduledWorkoutToken } from '@/lib/scheduledWorkoutLinks';
-import { useAppTheme } from '@/lib/theme';
+import { getThemeBodyStyle, getThemeButtonStyle, getThemeButtonTextStyle, getThemeControlStyle, getThemeHeadingStyle, getThemeIconWellStyle, useAppTheme } from '@/lib/theme';
 import { PageContainer } from '@/components/PageContainer';
 import { ThemeBackdrop } from '@/components/ThemeBackdrop';
 import { ThemeChrome } from '@/components/ThemeChrome';
@@ -26,7 +26,7 @@ import { createOfflineActionId, requestRegisteredSync, runOrQueueOfflineMutation
 import ExcelJS from 'exceljs';
 import { TutorialTarget } from '@/contexts/TutorialTourContext';
 
-const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'ADF', 'DET'];
+const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'DO', 'ADF', 'DET'];
 const WEEKLY_PROGRESS_TARGET = 5;
 const NAME_COLUMN_WIDTH = 120;
 const PROGRESS_COLUMN_WIDTH = 56;
@@ -48,7 +48,7 @@ const ATTENDANCE_SOURCE_STYLE: Record<AttendanceSource, { border: string; backgr
     background: 'bg-af-success/20',
     icon: '#22C55E',
     label: 'Green Checkmark',
-    description: 'Attendance was marked manually by a PFL, UFPM, Owner, or Squadron Leadership.',
+    description: 'Attendance was marked manually by a PFL, UFPM, or Squadron Leadership.',
   },
   workout: {
     border: 'border-af-accent',
@@ -1211,14 +1211,17 @@ export default function AttendanceScreen() {
                     >
                       <Pressable
                         onPress={() => {
-                          if (canManageWeeklyExcusals) {
-                            Haptics.selectionAsync();
-                            handleToggleWeeklyExcusal(member.id);
-                            return;
-                          }
                           Haptics.selectionAsync();
                           router.push({ pathname: '/member-profile', params: { id: member.id } });
                         }}
+                        onLongPress={
+                          canManageWeeklyExcusals
+                            ? () => {
+                                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                                handleToggleWeeklyExcusal(member.id);
+                              }
+                            : undefined
+                        }
                         style={{ width: NAME_COLUMN_WIDTH, paddingRight: 8 }}
                       >
                           <Text className="text-af-silver text-[11px]" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72}>{displayName.rank}</Text>
@@ -1465,9 +1468,10 @@ export default function AttendanceScreen() {
                 </View>
                 <Pressable
                   onPress={() => setShowReportModal(false)}
-                  className="w-8 h-8 rounded-full bg-white/10 items-center justify-center"
+                  className="w-8 h-8 rounded-full items-center justify-center"
+                  style={getThemeIconWellStyle(theme)}
                 >
-                  <X size={18} color="#C0C0C0" />
+                  <X size={18} color={theme.textSecondary} />
                 </Pressable>
               </View>
 
@@ -1507,10 +1511,11 @@ export default function AttendanceScreen() {
 
         <Modal visible={showScheduledSessionsModal} transparent animationType="fade" onRequestClose={() => setShowScheduledSessionsModal(false)}>
           <View className="flex-1 bg-black/80 items-center justify-center p-6">
-            <View className="w-full max-w-lg rounded-3xl border border-white/20 bg-af-navy p-6 max-h-[80%]">
+            <ThemeChrome theme={theme} variant="feature" style={{ width: '100%', maxWidth: 560, maxHeight: '80%' }} fill>
+            <View className="p-6">
             <View className="flex-row items-center justify-between mb-4">
               <View className="flex-1 pr-3">
-                <Text className="text-white text-xl font-bold">Scheduled PT Sessions</Text>
+                <Text style={getThemeHeadingStyle(theme, 20)}>Scheduled PT Sessions</Text>
                 <Text className="text-af-silver text-sm mt-1">{attendanceSummary.scope} · {currentWeekLabel}</Text>
               </View>
                 <Pressable
@@ -1527,25 +1532,26 @@ export default function AttendanceScreen() {
                   setShowScheduledSessionsModal(false);
                   router.push('/schedule-session');
                 }}
-                className="mb-4 rounded-2xl border border-af-accent/40 bg-af-accent/15 px-4 py-3"
+                className="mb-4 rounded-2xl px-4 py-3"
+                style={getThemeButtonStyle(theme, 'secondary')}
               >
-                <Text className="text-white font-semibold text-center">{canManagePrograms ? 'Schedule PT Session' : 'Schedule Personal PT'}</Text>
+                <Text className="text-center font-semibold" style={getThemeButtonTextStyle(theme, 'secondary')}>{canManagePrograms ? 'Schedule PT Session' : 'Schedule Personal PT'}</Text>
               </Pressable>
 
-              <ScrollView showsVerticalScrollIndicator={false}>
+              <ScrollView style={{ flex: 1, minHeight: 0 }} showsVerticalScrollIndicator={false}>
                 {scheduledSessionsThisWeek.length === 0 ? (
-                  <Text className="text-white/40 text-center py-8">No upcoming PT sessions for this week.</Text>
+                  <Text style={[getThemeBodyStyle(theme, 14, theme.textMuted), { textAlign: 'center', paddingVertical: 32 }]}>No upcoming PT sessions for this week.</Text>
                 ) : (
                   scheduledSessionsThisWeek.map((session) => (
-                    <View key={session.id} className="rounded-2xl border border-white/10 bg-white/5 p-4 mb-3">
+                    <View key={session.id} className="rounded-2xl p-4 mb-3" style={getThemeControlStyle(theme)}>
                       <View className="flex-row items-start justify-between">
                         <View className="flex-1 pr-3">
-                          <Text className="text-white font-semibold">
+                          <Text style={[getThemeBodyStyle(theme, 15, theme.textPrimary), { fontWeight: '700' }]}>
                             {format(new Date(`${session.date}T00:00:00`), 'EEEE, MMM d')} at {session.time}
                           </Text>
                           <ScheduledSessionDescription description={session.description} onOpenWorkout={handleOpenScheduledWorkout} />
-                          <Text className="text-af-silver text-xs mt-2">{scheduledSessionKindLabel(session)}</Text>
-                          <Text className="text-af-silver text-xs mt-2">
+                          <Text style={getThemeBodyStyle(theme, 12, theme.textSecondary)} className="mt-2">{scheduledSessionKindLabel(session)}</Text>
+                          <Text style={getThemeBodyStyle(theme, 12, theme.textSecondary)} className="mt-2">
                             Scheduled by {creatorNameById.get(session.createdBy) ?? 'Unknown member'}
                           </Text>
                         </View>
@@ -1577,8 +1583,8 @@ export default function AttendanceScreen() {
                       {session.scope !== 'personal' ? (
                         <View className="flex-row flex-wrap mt-3" style={{ gap: 8 }}>
                           {session.flights.map((flight) => (
-                            <View key={`${session.id}-${flight}`} className="rounded-full border border-white/10 bg-black/15 px-3 py-1.5">
-                              <Text className="text-white text-xs font-medium">{flight}</Text>
+                            <View key={`${session.id}-${flight}`} className="rounded-full px-3 py-1.5" style={getThemeControlStyle(theme)}>
+                              <Text style={[getThemeBodyStyle(theme, 12, theme.textPrimary), { fontWeight: '600' }]}>{flight}</Text>
                             </View>
                           ))}
                         </View>
@@ -1588,28 +1594,31 @@ export default function AttendanceScreen() {
                 )}
               </ScrollView>
             </View>
+            </ThemeChrome>
           </View>
         </Modal>
 
         <Modal visible={showDayScheduledSessionsModal} transparent animationType="fade" onRequestClose={() => setShowDayScheduledSessionsModal(false)}>
             <View className="flex-1 bg-black/80 items-center justify-center p-6">
-              <View className="w-full max-w-lg rounded-3xl border border-white/20 bg-af-navy p-6 max-h-[80%]">
+              <ThemeChrome theme={theme} variant="feature" style={{ width: '100%', maxWidth: 560, maxHeight: '80%' }} fill>
+              <View className="p-6">
               <View className="flex-row items-center justify-between mb-4">
                 <View className="flex-1 pr-3">
-                  <Text className="text-white text-xl font-bold">Scheduled PT Sessions</Text>
-                  <Text className="text-af-silver text-sm mt-1">{selectedScheduledDayLabel}</Text>
+                  <Text style={getThemeHeadingStyle(theme, 20)}>Scheduled PT Sessions</Text>
+                  <Text style={getThemeBodyStyle(theme, 14, theme.textSecondary)} className="mt-1">{selectedScheduledDayLabel}</Text>
                 </View>
                 <Pressable
                   onPress={() => setShowDayScheduledSessionsModal(false)}
-                  className="w-8 h-8 rounded-full bg-white/10 items-center justify-center"
+                  className="w-8 h-8 rounded-full items-center justify-center"
+                  style={getThemeIconWellStyle(theme)}
                 >
-                  <X size={18} color="#C0C0C0" />
+                  <X size={18} color={theme.textSecondary} />
                 </Pressable>
               </View>
 
-              <ScrollView showsVerticalScrollIndicator={false}>
+              <ScrollView style={{ flex: 1, minHeight: 0 }} showsVerticalScrollIndicator={false}>
                 {selectedDayScheduledSessions.length === 0 ? (
-                  <Text className="text-white/40 text-center py-8">No scheduled PT sessions for this day.</Text>
+                  <Text style={[getThemeBodyStyle(theme, 14, theme.textMuted), { textAlign: 'center', paddingVertical: 32 }]}>No scheduled PT sessions for this day.</Text>
                 ) : (
                   selectedDayScheduledSessions.map((session) => {
                     const expanded = expandedScheduledSessionIds.includes(session.id);
@@ -1617,32 +1626,33 @@ export default function AttendanceScreen() {
                       <Pressable
                         key={session.id}
                         onPress={() => toggleExpandedScheduledSession(session.id)}
-                        className="mb-3 rounded-2xl border border-white/10 bg-white/5 p-4"
+                        className="mb-3 rounded-2xl p-4"
+                        style={getThemeControlStyle(theme)}
                       >
                         <View className="flex-row items-center justify-between">
                           <View className="flex-1 pr-3">
-                            <Text className="text-white font-semibold">
+                            <Text style={[getThemeBodyStyle(theme, 15, theme.textPrimary), { fontWeight: '700' }]}>
                               {format(new Date(`${session.date}T00:00:00`), 'EEE, MMM d')} at {session.time}
                             </Text>
                             <Text className={cn('text-xs mt-1', session.scope === 'personal' ? 'text-af-success' : 'text-af-warning')}>
                               {scheduledSessionScopeLabel(session)}
                             </Text>
                           </View>
-                          {expanded ? <ChevronUp size={18} color="#C0C0C0" /> : <ChevronDown size={18} color="#C0C0C0" />}
+                          {expanded ? <ChevronUp size={18} color={theme.textSecondary} /> : <ChevronDown size={18} color={theme.textSecondary} />}
                         </View>
 
                         {expanded ? (
                           <View className="mt-3 border-t border-white/10 pt-3">
                             <ScheduledSessionDescription description={session.description} onOpenWorkout={handleOpenScheduledWorkout} />
-                            <Text className="text-af-silver text-xs mt-2">{scheduledSessionKindLabel(session)}</Text>
-                            <Text className="text-af-silver text-xs mt-2">
+                            <Text style={getThemeBodyStyle(theme, 12, theme.textSecondary)} className="mt-2">{scheduledSessionKindLabel(session)}</Text>
+                            <Text style={getThemeBodyStyle(theme, 12, theme.textSecondary)} className="mt-2">
                               Scheduled by {creatorNameById.get(session.createdBy) ?? 'Unknown member'}
                             </Text>
                             {session.scope !== 'personal' ? (
                               <View className="flex-row flex-wrap mt-3" style={{ gap: 8 }}>
                                 {session.flights.map((flight) => (
-                                  <View key={`${session.id}-${flight}`} className="rounded-full border border-white/10 bg-black/15 px-3 py-1.5">
-                                    <Text className="text-white text-xs font-medium">{flight}</Text>
+                                  <View key={`${session.id}-${flight}`} className="rounded-full px-3 py-1.5" style={getThemeControlStyle(theme)}>
+                                    <Text style={[getThemeBodyStyle(theme, 12, theme.textPrimary), { fontWeight: '600' }]}>{flight}</Text>
                                   </View>
                                 ))}
                               </View>
@@ -1655,42 +1665,48 @@ export default function AttendanceScreen() {
                 )}
               </ScrollView>
               </View>
+              </ThemeChrome>
             </View>
          </Modal>
 
          <Modal visible={showAttendanceLegendModal} transparent animationType="fade" onRequestClose={() => setShowAttendanceLegendModal(false)}>
             <View className="flex-1 bg-black/80 items-center justify-center p-6">
-              <View className="w-full max-w-sm rounded-3xl border border-white/20 bg-af-navy p-6">
+              <ThemeChrome theme={theme} variant="feature" style={{ width: '100%', maxWidth: 420 }}>
+              <View className="p-6">
                 <View className="flex-row items-center justify-between mb-4">
                   <View className="flex-1 pr-3">
-                    <Text className="text-white text-xl font-bold">Attendance Checkmarks</Text>
-                    <Text className="text-af-silver text-sm mt-1">Reference for the attendance colors used in FitFlight.</Text>
+                    <Text style={{ color: theme.textPrimary, fontSize: 20, fontWeight: '700' }}>Attendance Checkmarks</Text>
+                    <Text style={{ color: theme.textSecondary, fontSize: 14, marginTop: 4 }}>Reference for the attendance colors used in FitFlight.</Text>
                   </View>
                   <Pressable
                     onPress={() => setShowAttendanceLegendModal(false)}
-                    className="w-8 h-8 rounded-full bg-white/10 items-center justify-center"
+                    className="w-8 h-8 rounded-full items-center justify-center"
+                    style={{ backgroundColor: theme.surfaceAlt, borderWidth: 1, borderColor: theme.border }}
                   >
-                    <X size={18} color="#C0C0C0" />
+                    <X size={18} color={theme.textSecondary} />
                   </Pressable>
                 </View>
 
                 {(['manual', 'workout', 'strava', 'pfra'] as AttendanceSource[]).map((source, index) => {
                   const style = ATTENDANCE_SOURCE_STYLE[source];
                   return (
-                    <View key={source} className={cn('rounded-2xl border border-white/10 bg-white/5 p-4', index < 3 ? 'mb-3' : '')}>
+                    <ThemeChrome key={source} theme={theme} variant={source === 'manual' ? 'feature' : 'default'} style={index < 3 ? { marginBottom: 12 } : undefined}>
+                    <View className="p-4">
                       <View className="flex-row items-center">
                         <View className={cn('w-10 h-10 rounded-full items-center justify-center border', style.border, style.background)}>
                           <Check size={20} color={style.icon} />
                         </View>
                         <View className="ml-3 flex-1">
-                          <Text className="text-white font-semibold">{style.label}</Text>
-                          <Text className="text-af-silver text-sm mt-1">{style.description}</Text>
+                          <Text style={{ color: theme.textPrimary, fontWeight: '600' }}>{style.label}</Text>
+                          <Text style={{ color: theme.textSecondary, fontSize: 14, marginTop: 4 }}>{style.description}</Text>
                         </View>
                       </View>
                     </View>
+                    </ThemeChrome>
                   );
                 })}
               </View>
+              </ThemeChrome>
             </View>
          </Modal>
         </SafeAreaView>

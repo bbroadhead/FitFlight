@@ -273,6 +273,12 @@ export function getThemeHeadingStyle(theme: AppThemePalette, size: number): Text
     fontWeight: theme.id === 'pixel' ? '700' : '700',
     fontFamily: theme.headingFontFamily,
     letterSpacing: theme.headingLetterSpacing,
+    ...(Platform.OS === 'web'
+      ? ({
+          wordBreak: 'keep-all',
+          overflowWrap: 'normal',
+        } as TextStyle)
+      : {}),
   };
 }
 
@@ -288,6 +294,12 @@ export function getThemeBodyStyle(theme: AppThemePalette, size = 14, color?: str
     fontSize: adjustedSize,
     fontFamily: theme.bodyFontFamily,
     letterSpacing: theme.bodyLetterSpacing,
+    ...(Platform.OS === 'web'
+      ? ({
+          wordBreak: 'keep-all',
+          overflowWrap: 'normal',
+        } as TextStyle)
+      : {}),
   };
 }
 
@@ -299,6 +311,12 @@ export function getThemeLabelStyle(theme: AppThemePalette): TextStyle {
     fontFamily: theme.bodyFontFamily,
     letterSpacing: theme.id === 'pixel' ? 0.3 : theme.id === 'cyber' ? 0.4 : Math.max(theme.bodyLetterSpacing + 0.45, 0.45),
     textTransform: 'uppercase',
+    ...(Platform.OS === 'web'
+      ? ({
+          wordBreak: 'keep-all',
+          overflowWrap: 'normal',
+        } as TextStyle)
+      : {}),
   };
 }
 
