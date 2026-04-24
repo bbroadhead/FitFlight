@@ -20,6 +20,7 @@ import { ThemeBackdrop } from '@/components/ThemeBackdrop';
 import { ThemeChrome } from '@/components/ThemeChrome';
 import { TopStatusBar } from '@/components/TopStatusBar';
 import { TutorialTarget, useTutorialTour } from '@/contexts/TutorialTourContext';
+import { useErrorLogScreenContext } from '@/lib/errorLog';
 import { canUseStravaSync, disconnectStrava, getStravaSetupError, mapImportedWorkouts, startStravaConnect, syncStravaWorkouts } from '@/lib/strava';
 import { signOutFromSupabase } from '@/lib/supabaseAuth';
 import { buildTrophyStats, getRarestEarnedTrophies } from '@/lib/trophies';
@@ -221,6 +222,15 @@ function getScheduledSessionScopeLabel(session: { scope: 'squadron' | 'flight' |
   return session.flights.join(', ');
 }
 
+const getWebSafeFadeInDown = (delay: number) =>
+  Platform.OS === 'web' ? undefined : FadeInDown.delay(delay).springify();
+
+const getWebSafeFadeIn = (duration: number) =>
+  Platform.OS === 'web' ? undefined : FadeIn.duration(duration);
+
+const getWebSafeSlideInDown = (duration: number) =>
+  Platform.OS === 'web' ? undefined : SlideInDown.duration(duration);
+
 function getWorkoutDisplayTitle(type: WorkoutType) {
   switch (type) {
     case 'Running':
@@ -343,6 +353,52 @@ export default function ProfileScreen() {
   const [auditTrailEntries, setAuditTrailEntries] = useState<AdminAuditAction[]>([]);
   const [auditTrailLoading, setAuditTrailLoading] = useState(false);
   const [auditTrailError, setAuditTrailError] = useState<string | null>(null);
+  const profileOverlayLabel = useMemo(() => {
+    if (showSettingsModal) return 'Settings';
+    if (showNotificationsModal) return 'Notifications';
+    if (showManageModal) return 'Manage Members';
+    if (showAddModal) return 'Add Member';
+    if (showUFPMModal) return 'Select UFPM';
+    if (showSupportInboxModal) return 'Support Inbox';
+    if (showDeveloperMessageModal || showDeveloperContact) return 'Message the FitFlight Team';
+    if (showWorkoutReviewModal) return 'Manual Workout Review';
+    if (showWorkoutHistoryModal) return 'Workout History';
+    if (showPFRAHistoryModal) return 'PFRA History';
+    if (showUpcomingPTSessionsModal) return 'Upcoming PT Sessions';
+    if (showLeaderboardHistoryModal) return 'Leaderboard History';
+    if (showAuditTrailModal) return 'Admin Audit Trail';
+    if (showResetUserPasswordModal) return 'Reset User Password';
+    if (showChangeRankModal) return 'Change My Rank';
+    if (showChangeSquadronModal) return 'Change My Squadron';
+    if (showPTLRequestModal) return 'Request PFL';
+    if (showInstallModal) return 'Install to Home Screen';
+    if (showUFPMConfirmModal) return 'Confirm UFPM Change';
+    if (showDisconnectModal) return 'Disconnect App';
+    return null;
+  }, [
+    showAddModal,
+    showAuditTrailModal,
+    showChangeRankModal,
+    showChangeSquadronModal,
+    showDeveloperContact,
+    showDeveloperMessageModal,
+    showDisconnectModal,
+    showInstallModal,
+    showLeaderboardHistoryModal,
+    showManageModal,
+    showNotificationsModal,
+    showPFRAHistoryModal,
+    showPTLRequestModal,
+    showResetUserPasswordModal,
+    showSettingsModal,
+    showSupportInboxModal,
+    showUFPMConfirmModal,
+    showUFPMModal,
+    showUpcomingPTSessionsModal,
+    showWorkoutHistoryModal,
+    showWorkoutReviewModal,
+  ]);
+  useErrorLogScreenContext('Account', profileOverlayLabel);
 
   const isAuthenticated = useAuthStore(s => s.isAuthenticated);
   const updateUser = useAuthStore(s => s.updateUser);
@@ -1649,11 +1705,7 @@ export default function ProfileScreen() {
           thread.requesterEmail.toLowerCase() === user?.email?.toLowerCase() &&
           supportContactMatchesThread(contact, thread)
       ) ?? null;
-    if (nextThread?.subject) {
-      setSupportSubject(nextThread.subject);
-    } else {
-      setSupportSubject('');
-    }
+    setSupportSubject('');
     setSupportBody('');
     setActiveSupportThreadId(nextThread?.id ?? null);
     if (nextThread?.id) {
@@ -1922,7 +1974,14 @@ export default function ProfileScreen() {
         return;
       }
 
-      if (!supportSubject.trim() || !supportBody.trim()) {
+      const threadOwner = canViewSupportInbox
+        ? supportThreads.find((thread) => thread.id === activeSupportThreadId)
+        : supportThread;
+      const inheritedSubject = threadOwner?.subject?.trim() ?? '';
+      const trimmedSubject = supportSubject.trim() || inheritedSubject;
+      const trimmedBody = supportBody.trim();
+
+      if (!trimmedSubject || !trimmedBody) {
         setSupportError('Please add both a subject line and message.');
         return;
       }
@@ -1930,16 +1989,10 @@ export default function ProfileScreen() {
       setSupportSending(true);
       setSupportError(null);
 
-      const threadOwner = canViewSupportInbox
-        ? supportThreads.find((thread) => thread.id === activeSupportThreadId)
-        : supportThread;
-
       const requesterMemberId = threadOwner?.requesterMemberId ?? user.id;
       const requesterEmail = threadOwner?.requesterEmail ?? user.email;
       const requesterName = threadOwner?.requesterName ?? getDisplayName(user);
       const requesterSquadron = threadOwner?.requesterSquadron ?? user.squadron;
-      const trimmedSubject = supportSubject.trim();
-      const trimmedBody = supportBody.trim();
       const optimisticThreadId = threadOwner?.id ?? createOfflineActionId('support-thread');
       const optimisticMessage: SupportMessage = {
         id: createOfflineActionId('support-message'),
@@ -2398,7 +2451,7 @@ export default function ProfileScreen() {
           <PageContainer maxWidth={contentMaxWidth}>
           {/* Header */}
           <Animated.View
-            entering={FadeInDown.delay(100).springify()}
+            entering={getWebSafeFadeInDown(100)}
             className="px-6 pt-4 pb-2 flex-row items-center justify-between"
           >
             <View>
@@ -2442,7 +2495,7 @@ export default function ProfileScreen() {
             }}
           >
             <Animated.View
-              entering={FadeInDown.delay(150).springify()}
+              entering={getWebSafeFadeInDown(150)}
               className="mx-6 mt-4"
             >
             <ThemeChrome theme={themePalette} variant="feature">
@@ -2517,7 +2570,7 @@ export default function ProfileScreen() {
           {/* Stats Card */}
           {isExcusedThisWeek ? (
             <Animated.View
-              entering={FadeInDown.delay(185).springify()}
+              entering={getWebSafeFadeInDown(185)}
               className="mx-6 mt-4"
             >
               <ThemeChrome theme={themePalette}>
@@ -2530,7 +2583,7 @@ export default function ProfileScreen() {
           ) : null}
 
           <Animated.View
-            entering={FadeInDown.delay(200).springify()}
+            entering={getWebSafeFadeInDown(200)}
             className="mx-6 mt-4"
           >
             <ThemeChrome theme={themePalette}>
@@ -2608,7 +2661,7 @@ export default function ProfileScreen() {
           </Animated.View>
 
           <Animated.View
-            entering={FadeInDown.delay(205).springify()}
+            entering={getWebSafeFadeInDown(205)}
             className="mx-6 mt-4"
           >
             <Pressable
@@ -2654,7 +2707,7 @@ export default function ProfileScreen() {
             }}
           >
             <Animated.View
-              entering={FadeInDown.delay(210).springify()}
+              entering={getWebSafeFadeInDown(210)}
               className="mx-6 mt-4"
             >
               <ThemeChrome theme={themePalette}>
@@ -2711,7 +2764,7 @@ export default function ProfileScreen() {
             }}
           >
             <Animated.View
-              entering={FadeInDown.delay(225).springify()}
+              entering={getWebSafeFadeInDown(225)}
               className="mx-6 mt-4"
             >
             <Text className="text-white font-semibold text-lg mb-3">Quick Actions</Text>
@@ -2790,7 +2843,7 @@ export default function ProfileScreen() {
             }}
           >
             <Animated.View
-              entering={FadeInDown.delay(250).springify()}
+              entering={getWebSafeFadeInDown(250)}
               className="mx-6 mt-4"
             >
             <Text className="text-white font-semibold text-lg mb-3">Connected Apps</Text>
@@ -2891,7 +2944,7 @@ export default function ProfileScreen() {
               }}
             >
               <Animated.View
-                entering={FadeInDown.delay(300).springify()}
+                entering={getWebSafeFadeInDown(300)}
                 className="mx-6 mt-6"
               >
               <Text className="text-white font-semibold text-lg mb-3">Admin Actions</Text>
@@ -3024,7 +3077,7 @@ export default function ProfileScreen() {
               }}
             >
               <Animated.View
-                entering={FadeInDown.delay(300).springify()}
+                entering={getWebSafeFadeInDown(300)}
                 className="mx-6 mt-6"
               >
               <Text className="text-white font-semibold text-lg mb-3">PFL Actions</Text>
@@ -3050,7 +3103,7 @@ export default function ProfileScreen() {
             }}
           >
             <Animated.View
-              entering={FadeInDown.delay(325).springify()}
+              entering={getWebSafeFadeInDown(325)}
               className="mx-6 mt-6"
             >
             <Text className="text-white font-semibold text-lg mb-3">Help</Text>
@@ -3166,7 +3219,7 @@ export default function ProfileScreen() {
 
           {/* Logout */}
           <Animated.View
-            entering={FadeInDown.delay(350).springify()}
+            entering={getWebSafeFadeInDown(350)}
             className="mx-6 mt-6"
           >
             {isAuthenticated ? (
@@ -3193,8 +3246,8 @@ export default function ProfileScreen() {
 
       {/* Add Member Modal */}
       <Modal visible={showAddModal} transparent animationType="none">
-        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
-          <Animated.View entering={SlideInDown.duration(260)}
+        <Animated.View entering={getWebSafeFadeIn(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View entering={getWebSafeSlideInDown(260)}
             style={[
               getThemeCardStyle(themePalette, 'feature'),
               {
@@ -3424,9 +3477,9 @@ export default function ProfileScreen() {
 
       {/* Manage Members Modal */}
       <Modal visible={showManageModal} transparent animationType="none">
-        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
+        <Animated.View entering={getWebSafeFadeIn(180)} className="flex-1 bg-black/80 justify-end">
           <Animated.View
-            entering={SlideInDown.duration(260)}
+            entering={getWebSafeSlideInDown(260)}
             style={[
               getThemeCardStyle(themePalette, 'feature'),
               {
@@ -3634,9 +3687,9 @@ export default function ProfileScreen() {
       </Modal>
 
       <Modal visible={showUFPMModal} transparent animationType="none">
-        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
+        <Animated.View entering={getWebSafeFadeIn(180)} className="flex-1 bg-black/80 justify-end">
           <Animated.View
-            entering={SlideInDown.duration(260)}
+            entering={getWebSafeSlideInDown(260)}
             style={[
               getThemeCardStyle(themePalette, 'feature'),
               {
@@ -3719,8 +3772,8 @@ export default function ProfileScreen() {
       </Modal>
 
       <Modal visible={showResetUserPasswordModal} transparent animationType="slide">
-        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
-          <Animated.View entering={SlideInDown.duration(260)} className="rounded-t-3xl max-h-[85%]" style={{ overflow: 'hidden' }}>
+        <Animated.View entering={getWebSafeFadeIn(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View entering={getWebSafeSlideInDown(260)} className="rounded-t-3xl max-h-[85%]" style={{ overflow: 'hidden' }}>
             <BlurView intensity={modalBlurIntensity} tint="dark" style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }} />
             <View className="bg-af-navy/70 rounded-t-3xl p-6 pb-12">
             <View className="flex-row items-center justify-between mb-6">
@@ -3959,11 +4012,11 @@ export default function ProfileScreen() {
         </View>
       </Modal>
 
-      <Modal visible={showDeveloperMessageModal} transparent animationType="slide">
-        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
-          <Animated.View entering={SlideInDown.duration(260)}>
-          <ThemeChrome theme={themePalette} variant="feature" blurIntensity={modalBlurIntensity} style={{ borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '88%' }}>
-          <View className="p-6 pb-10">
+      <Modal visible={showDeveloperMessageModal} transparent animationType="none">
+        <Animated.View entering={getWebSafeFadeIn(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View entering={getWebSafeSlideInDown(260)} style={{ height: '82%', overflow: 'hidden' }}>
+          <ThemeChrome theme={themePalette} variant="feature" blurIntensity={modalBlurIntensity} fill style={{ borderTopLeftRadius: 24, borderTopRightRadius: 24, height: '100%', overflow: 'hidden' }}>
+          <View className="flex-1 p-6 pb-6">
             <View className="flex-row items-start justify-between mb-4">
               <View className="flex-1 pr-4">
                 <Text style={getThemeHeadingStyle(themePalette, 22)}>Message the FitFlight Team</Text>
@@ -3985,106 +4038,111 @@ export default function ProfileScreen() {
             </View>
 
             {activeSupportThreadId ? (
-              <Pressable
-                onPress={() => handleDeleteSupportThread(activeSupportThreadId)}
-                className="mb-4 self-start rounded-full border border-af-danger/40 bg-af-danger/10 px-3 py-2"
-              >
-                <Text className="text-af-danger text-xs font-semibold">Delete Conversation</Text>
-              </Pressable>
+              <View className="mb-4 flex-row justify-end">
+                <Pressable
+                  onPress={() => handleDeleteSupportThread(activeSupportThreadId)}
+                  className="rounded-full border border-af-danger/40 bg-af-danger/10 px-3 py-2"
+                >
+                  <Text className="text-af-danger text-xs font-semibold">Delete Conversation</Text>
+                </Pressable>
+              </View>
             ) : null}
 
-            <View className="bg-white/5 border border-white/10 rounded-xl p-4 mb-4">
-              <Text className="text-af-silver text-xs uppercase tracking-wider mb-2">Subject</Text>
-              <TextInput
-                value={supportSubject}
-                onChangeText={setSupportSubject}
-                placeholder="Example: Attendance sync issue"
-                placeholderTextColor="#94A3B8"
-                className="text-white bg-white/5 border border-white/10 rounded-xl px-4 py-3"
-              />
-            </View>
+            <View className="flex-1 min-h-0 flex-row">
+              <View className="w-[38%] pr-4 min-h-0">
+                <Text className="text-af-silver text-xs uppercase tracking-wider mb-2">Subject</Text>
+                <TextInput
+                  value={supportSubject}
+                  onChangeText={setSupportSubject}
+                  placeholder="e.g. Workout sync"
+                  placeholderTextColor="#94A3B8"
+                  className="text-white bg-white/5 border border-white/10 rounded-2xl px-4 py-4 mb-4"
+                />
 
-            <View className="flex-1">
-              <Text className="text-af-silver text-xs uppercase tracking-wider mb-2">Conversation</Text>
-              <View className="flex-1 bg-white/5 border border-white/10 rounded-2xl p-4">
-                <ScrollView showsVerticalScrollIndicator={false}>
-                  {supportMessagesLoading ? (
-                    <Text className="text-af-silver text-center py-8">Loading conversation...</Text>
-                  ) : activeSupportMessages.length === 0 ? (
-                    <Text className="text-af-silver text-center py-8">
-                      {activeSupportContact ? `Your message will start a private conversation with the ${activeSupportContact.title.toLowerCase()}.` : 'Your message will start a private conversation with the FitFlight team.'}
-                    </Text>
-                  ) : (
-                    activeSupportMessages.map((message) => (
-                      <View
-                        key={message.id}
-                        className={cn(
-                          "rounded-2xl p-4 mb-3 border",
-                          message.isFromOwner
-                            ? "bg-af-accent/10 border-af-accent/30"
-                            : "bg-white/5 border-white/10"
-                        )}
-                      >
-                        <View className="flex-row items-center justify-between mb-1">
-                          <Text className="text-white font-semibold">
-                            {message.isFromOwner ? message.senderName : 'You'}
-                          </Text>
-                          <Text className="text-af-silver text-xs">
-                            {new Date(message.createdAt).toLocaleString()}
-                          </Text>
-                        </View>
-                        {message.subject ? (
-                          <Text className="text-af-silver text-xs mb-2">{message.subject}</Text>
-                        ) : null}
-                        <Text className="text-white leading-6">{message.body}</Text>
-                      </View>
-                    ))
+                <View className="flex-1 min-h-0">
+                  <Text className="text-af-silver text-xs uppercase tracking-wider mb-2">Message</Text>
+                  <TextInput
+                    value={supportBody}
+                    onChangeText={setSupportBody}
+                    placeholder="Type your message here"
+                    placeholderTextColor="#94A3B8"
+                    multiline
+                    textAlignVertical="top"
+                    className="flex-1 text-white bg-white/5 border border-white/10 rounded-2xl px-4 py-4"
+                    style={{ minHeight: 0 }}
+                  />
+                </View>
+
+                {supportError ? (
+                  <Text className="text-af-danger text-sm mt-3">{supportError}</Text>
+                ) : null}
+
+                <Pressable
+                  onPress={handleSendSupportMessage}
+                  disabled={supportSending}
+                  className={cn(
+                    "mt-4 rounded-xl py-4 items-center justify-center",
+                    supportSending ? "opacity-60" : ""
                   )}
-                </ScrollView>
+                  style={supportSending ? getThemeControlStyle(themePalette) : { backgroundColor: themePalette.accent }}
+                >
+                  <Text className={cn("font-semibold", supportSending ? "text-white/50" : "text-white")}>
+                    {supportSending ? 'Sending...' : 'Send Message'}
+                  </Text>
+                </Pressable>
+              </View>
+
+              <View className="flex-1 min-h-0">
+                <Text className="text-af-silver text-xs uppercase tracking-wider mb-2">Conversation</Text>
+                <View className="flex-1 min-h-0 bg-white/5 border border-white/10 rounded-2xl p-4">
+                  <ScrollView style={{ flex: 1, minHeight: 0 }} contentContainerStyle={{ paddingBottom: 8 }} showsVerticalScrollIndicator={false}>
+                    {supportMessagesLoading ? (
+                      <Text className="text-af-silver text-center py-8">Loading conversation...</Text>
+                    ) : activeSupportMessages.length === 0 ? (
+                      <Text className="text-af-silver text-center py-8">
+                        {activeSupportContact ? `Your message will start a private conversation with the ${activeSupportContact.title.toLowerCase()}.` : 'Your message will start a private conversation with the FitFlight team.'}
+                      </Text>
+                    ) : (
+                      activeSupportMessages.map((message) => (
+                        <View
+                          key={message.id}
+                          className={cn(
+                            "rounded-2xl p-4 mb-3 border",
+                            message.isFromOwner
+                              ? "bg-af-accent/10 border-af-accent/30"
+                              : "bg-white/5 border-white/10"
+                          )}
+                        >
+                          <View className="flex-row items-center justify-between mb-1">
+                            <Text className="text-white font-semibold">
+                              {message.isFromOwner ? message.senderName : 'You'}
+                            </Text>
+                            <Text className="text-af-silver text-xs">
+                              {new Date(message.createdAt).toLocaleString()}
+                            </Text>
+                          </View>
+                          {message.subject ? (
+                            <Text className="text-af-silver text-xs mb-2">{message.subject}</Text>
+                          ) : null}
+                          <Text className="text-white leading-6">{message.body}</Text>
+                        </View>
+                      ))
+                    )}
+                  </ScrollView>
+                </View>
               </View>
             </View>
-
-            <View className="mt-4">
-              <Text className="text-af-silver text-xs uppercase tracking-wider mb-2">Message</Text>
-              <TextInput
-                value={supportBody}
-                onChangeText={setSupportBody}
-                placeholder="Type your message here"
-                placeholderTextColor="#94A3B8"
-                multiline
-                textAlignVertical="top"
-                className="text-white bg-white/5 border border-white/10 rounded-2xl px-4 py-4 min-h-[120px]"
-              />
-            </View>
-
-            {supportError ? (
-              <Text className="text-af-danger text-sm mt-3">{supportError}</Text>
-            ) : null}
-
-            <Pressable
-              onPress={handleSendSupportMessage}
-              disabled={supportSending}
-              className={cn(
-                "mt-4 rounded-xl py-4 items-center justify-center",
-                supportSending ? "opacity-60" : ""
-              )}
-              style={supportSending ? getThemeControlStyle(themePalette) : { backgroundColor: themePalette.accent }}
-            >
-              <Text className={cn("font-semibold", supportSending ? "text-white/50" : "text-white")}>
-                {supportSending ? 'Sending...' : 'Send Message'}
-              </Text>
-            </Pressable>
           </View>
           </ThemeChrome>
           </Animated.View>
         </Animated.View>
       </Modal>
 
-      <Modal visible={showSupportInboxModal} transparent animationType="slide">
-        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
-          <Animated.View entering={SlideInDown.duration(260)}>
-          <ThemeChrome theme={themePalette} variant="feature" blurIntensity={modalBlurIntensity} style={{ borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '90%' }}>
-          <View className="p-6 pb-10">
+      <Modal visible={showSupportInboxModal} transparent animationType="none">
+        <Animated.View entering={getWebSafeFadeIn(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View entering={getWebSafeSlideInDown(260)} style={{ height: '84%', overflow: 'hidden' }}>
+          <ThemeChrome theme={themePalette} variant="feature" blurIntensity={modalBlurIntensity} fill style={{ borderTopLeftRadius: 24, borderTopRightRadius: 24, height: '100%', overflow: 'hidden' }}>
+          <View className="flex-1 p-6 pb-6">
             <View className="flex-row items-center justify-between mb-4">
               <View>
                 <Text style={getThemeHeadingStyle(themePalette, 22)}>Support Inbox</Text>
@@ -4099,9 +4157,9 @@ export default function ProfileScreen() {
               </Pressable>
             </View>
 
-            <View className="flex-row">
-              <View className="w-[38%] pr-3">
-                <ScrollView showsVerticalScrollIndicator={false} className="max-h-[460px]">
+            <View className="flex-1 min-h-0 flex-row">
+              <View className="w-[38%] pr-3 min-h-0">
+                <ScrollView style={{ flex: 1, minHeight: 0 }} contentContainerStyle={{ paddingBottom: 8 }} showsVerticalScrollIndicator={false}>
                   {supportLoading ? (
                     <Text className="text-af-silver text-center py-8">Loading support inbox...</Text>
                   ) : supportThreads.length === 0 ? (
@@ -4143,7 +4201,7 @@ export default function ProfileScreen() {
                 </ScrollView>
               </View>
 
-              <View className="flex-1">
+              <View className="flex-1 min-h-0">
                 {activeSupportThreadId ? (
                   <>
                     <View className="bg-white/5 border border-white/10 rounded-2xl p-4 mb-4">
@@ -4164,8 +4222,8 @@ export default function ProfileScreen() {
                       })()}
                     </View>
 
-                    <View className="flex-1 bg-white/5 border border-white/10 rounded-2xl p-4">
-                      <ScrollView showsVerticalScrollIndicator={false}>
+                    <View className="flex-1 min-h-0 bg-white/5 border border-white/10 rounded-2xl p-4">
+                      <ScrollView style={{ flex: 1, minHeight: 0 }} contentContainerStyle={{ paddingBottom: 8 }} showsVerticalScrollIndicator={false}>
                         {supportMessagesLoading ? (
                           <Text className="text-af-silver text-center py-8">Loading conversation...</Text>
                         ) : (
@@ -4203,7 +4261,8 @@ export default function ProfileScreen() {
                         placeholderTextColor="#94A3B8"
                         multiline
                         textAlignVertical="top"
-                        className="text-white bg-white/5 border border-white/10 rounded-2xl px-4 py-4 min-h-[110px]"
+                        className="text-white bg-white/5 border border-white/10 rounded-2xl px-4 py-4"
+                        style={{ minHeight: 110, maxHeight: 150 }}
                       />
                     </View>
 
@@ -4239,8 +4298,8 @@ export default function ProfileScreen() {
 
       {/* Notifications Modal */}
       <Modal visible={showNotificationsModal} transparent animationType="none">
-        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
-          <Animated.View entering={SlideInDown.duration(260)}>
+        <Animated.View entering={getWebSafeFadeIn(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View entering={getWebSafeSlideInDown(260)}>
             <ThemeChrome theme={themePalette} variant="feature" blurIntensity={modalBlurIntensity} style={{ borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '80%' }}>
             <View className="p-6 pb-12">
             <View className="flex-row items-center justify-between mb-6">
@@ -4606,9 +4665,9 @@ export default function ProfileScreen() {
                         )}
                       >
                         <View className="mb-2 flex-row" style={{ gap: 6 }}>
-                          {theme.gradient.map((color) => (
-                            <View key={`${theme.id}-${color}`} style={{ backgroundColor: color, width: 18, height: 18, borderRadius: 999 }} />
-                          ))}
+                    {theme.gradient.map((color, index) => (
+                      <View key={`${theme.id}-${index}-${color}`} style={{ backgroundColor: color, width: 18, height: 18, borderRadius: 999 }} />
+                    ))}
                         </View>
                         <Text className="text-white font-semibold">{theme.label}</Text>
                         <Text className="mt-1 text-xs text-af-silver">
@@ -4946,8 +5005,8 @@ export default function ProfileScreen() {
       </Modal>
 
       <Modal visible={showWorkoutHistoryModal} transparent animationType="none">
-        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
-          <Animated.View entering={SlideInDown.duration(260)} className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[85%]">
+        <Animated.View entering={getWebSafeFadeIn(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View entering={getWebSafeSlideInDown(260)} className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[85%]">
             <View className="flex-row items-center justify-between mb-6">
               <Text className="text-white text-xl font-bold">Workout History</Text>
               <Pressable
@@ -5050,8 +5109,8 @@ export default function ProfileScreen() {
       </Modal>
 
       <Modal visible={showPFRAHistoryModal} transparent animationType="none">
-        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
-          <Animated.View entering={SlideInDown.duration(260)} className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[85%]">
+        <Animated.View entering={getWebSafeFadeIn(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View entering={getWebSafeSlideInDown(260)} className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[85%]">
             <View className="flex-row items-center justify-between mb-6">
               <Text className="text-white text-xl font-bold">PFRA History</Text>
               <Pressable
@@ -5119,8 +5178,8 @@ export default function ProfileScreen() {
       </Modal>
 
       <Modal visible={showLeaderboardHistoryModal} transparent animationType="none">
-        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
-          <Animated.View entering={SlideInDown.duration(260)} className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[80%]">
+        <Animated.View entering={getWebSafeFadeIn(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View entering={getWebSafeSlideInDown(260)} className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[80%]">
             <View className="flex-row items-center justify-between mb-6">
               <Text className="text-white text-xl font-bold">Leaderboard History</Text>
               <Pressable
@@ -5151,8 +5210,8 @@ export default function ProfileScreen() {
       </Modal>
 
       <Modal visible={showUpcomingPTSessionsModal} transparent animationType="none">
-        <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
-          <Animated.View entering={SlideInDown.duration(260)} className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[82%]">
+        <Animated.View entering={getWebSafeFadeIn(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View entering={getWebSafeSlideInDown(260)} className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[82%]">
             <View className="flex-row items-center justify-between mb-6">
               <Text className="text-white text-xl font-bold">Upcoming PT Sessions</Text>
               <Pressable

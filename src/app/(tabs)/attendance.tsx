@@ -23,6 +23,7 @@ import { ThemeBackdrop } from '@/components/ThemeBackdrop';
 import { ThemeChrome } from '@/components/ThemeChrome';
 import { TopStatusBar } from '@/components/TopStatusBar';
 import { createOfflineActionId, requestRegisteredSync, runOrQueueOfflineMutation } from '@/lib/appSync';
+import { useErrorLogScreenContext } from '@/lib/errorLog';
 import ExcelJS from 'exceljs';
 import { TutorialTarget } from '@/contexts/TutorialTourContext';
 
@@ -43,6 +44,13 @@ const buildLegacyRosterId = (member: { rank: string; firstName: string; lastName
   `roster-${slugify(`${member.rank}-${member.lastName}-${member.firstName}-${member.flight}`)}`;
 const isUpcomingScheduledSession = (date: string, time: string) => new Date(`${date}T${time}:00`).getTime() >= Date.now();
 const ATTENDANCE_SOURCE_STYLE: Record<AttendanceSource, { border: string; background: string; icon: string; label: string; description: string }> = {
+  excused: {
+    border: 'border-slate-400',
+    background: 'bg-slate-400/20',
+    icon: '#94A3B8',
+    label: 'Grey Checkmark',
+    description: 'A single-day excusal was added for this member. It reduces their required sessions for the week by one.',
+  },
   manual: {
     border: 'border-af-success',
     background: 'bg-af-success/20',
@@ -131,6 +139,16 @@ export default function AttendanceScreen() {
   const [showScheduledSessionsModal, setShowScheduledSessionsModal] = useState(false);
   const [showDayScheduledSessionsModal, setShowDayScheduledSessionsModal] = useState(false);
   const [showAttendanceLegendModal, setShowAttendanceLegendModal] = useState(false);
+  const attendanceOverlayLabel = showDayScheduledSessionsModal
+    ? 'Day Scheduled PT Sessions'
+    : showScheduledSessionsModal
+      ? 'Scheduled PT Sessions'
+      : showReportModal
+        ? 'Export Report'
+        : showAttendanceLegendModal
+          ? 'Attendance Checkmarks'
+          : null;
+  useErrorLogScreenContext('Attendance', attendanceOverlayLabel);
   const [isExportingReport, setIsExportingReport] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [deletingScheduledSessionId, setDeletingScheduledSessionId] = useState<string | null>(null);
@@ -143,6 +161,7 @@ export default function AttendanceScreen() {
   const flightScrollXRef = useRef(0);
   const attendanceInteractionRef = useRef(false);
   const attendanceInteractionResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const suppressNextAttendancePressRef = useRef(false);
   const weekTouchStartRef = useRef<{ x: number; y: number } | null>(null);
   const weekDragActivatedRef = useRef(false);
 
@@ -156,6 +175,9 @@ export default function AttendanceScreen() {
 
   const canEdit = user ? canEditAttendance(user.accountType) : false;
   const canManagePrograms = user ? canManagePTPrograms(user.accountType) : false;
+  const canManageDailyExcusals = user
+    ? ['ptl', 'ufpm', 'fitflight_creator', 'squadron_leadership'].includes(user.accountType)
+    : false;
   const canManageWeeklyExcusals = user
     ? ['fitflight_creator', 'ufpm', 'squadron_leadership'].includes(user.accountType)
     : false;
@@ -267,12 +289,34 @@ export default function AttendanceScreen() {
 
     let count = 0;
     weekDays.forEach((day) => {
-      if (isAttending(day, memberId, member.flight, member.squadron)) {
+      const source = getAttendanceSource(day, memberId, member.flight, member.squadron);
+      if (source && source !== 'excused') {
         count++;
       }
     });
     return count;
-  }, [isAttending, members, weekDays]);
+  }, [getAttendanceSource, members, weekDays]);
+
+  const getWeeklyDailyExcusalCount = useCallback((memberId: string) => {
+    const member = members.find((entry) => entry.id === memberId);
+    if (!member) return 0;
+
+    let count = 0;
+    weekDays.forEach((day) => {
+      if (getAttendanceSource(day, memberId, member.flight, member.squadron) === 'excused') {
+        count++;
+      }
+    });
+    return count;
+  }, [getAttendanceSource, members, weekDays]);
+
+  const getWeeklyRequiredSessions = useCallback((memberId: string) => {
+    if (isMemberWeeklyExcused(memberId)) {
+      return 0;
+    }
+
+    return Math.max(WEEKLY_PROGRESS_TARGET - getWeeklyDailyExcusalCount(memberId), 0);
+  }, [getWeeklyDailyExcusalCount, isMemberWeeklyExcused]);
 
   const totalWeeklyCheckIns = useMemo(
     () => flightMembers.reduce((sum, member) => sum + getWeeklyAttendance(member.id), 0),
@@ -280,8 +324,8 @@ export default function AttendanceScreen() {
   );
   const averageWeeklyCheckIns = flightMembers.length > 0 ? totalWeeklyCheckIns / flightMembers.length : 0;
   const membersOnTarget = useMemo(
-    () => flightMembers.filter((member) => isMemberWeeklyExcused(member.id) || getWeeklyAttendance(member.id) >= WEEKLY_PROGRESS_TARGET).length,
-    [flightMembers, getWeeklyAttendance, isMemberWeeklyExcused]
+    () => flightMembers.filter((member) => isMemberWeeklyExcused(member.id) || getWeeklyAttendance(member.id) >= getWeeklyRequiredSessions(member.id)).length,
+    [flightMembers, getWeeklyAttendance, getWeeklyRequiredSessions, isMemberWeeklyExcused]
   );
   const canViewReport = !!user && canManagePTPrograms(user.accountType);
   const currentWeekLabel = `${format(currentWeekStart, 'MMM d')} - ${format(addDays(currentWeekStart, 6), 'MMM d, yyyy')}`;
@@ -292,10 +336,11 @@ export default function AttendanceScreen() {
         return {
           member,
           dayStatuses,
-          weeklyAttendance: dayStatuses.filter(Boolean).length,
+          weeklyAttendance: getWeeklyAttendance(member.id),
+          weeklyRequired: getWeeklyRequiredSessions(member.id),
         };
       }),
-    [flightMembers, isAttending, weekDays]
+    [flightMembers, getWeeklyAttendance, getWeeklyRequiredSessions, isAttending, weekDays]
   );
   const attendanceSummary = useMemo(() => {
     const dailyCounts = weekDays.map((day) =>
@@ -427,7 +472,9 @@ export default function AttendanceScreen() {
         'Managed attendance',
         attendanceSource === 'pfra'
           ? 'This attendance came from a mock PFRA entry and cannot be removed here. Edit the PFRA batch instead.'
-          : 'This attendance came from an approved or imported workout and cannot be removed here. Remove or edit the workout instead.'
+          : attendanceSource === 'excused'
+            ? 'This day is marked as a single-day excusal. Tap and hold again to remove the excusal.'
+            : 'This attendance came from an approved or imported workout and cannot be removed here. Remove or edit the workout instead.'
       );
       return;
     }
@@ -522,6 +569,116 @@ export default function AttendanceScreen() {
       }
     } catch (error) {
       console.error('Unable to update attendance in Supabase.', error);
+    }
+  };
+
+  const handleToggleDailyExcusal = async (date: Date, memberId: string, flight: Flight, squadron: typeof userSquadron = userSquadron) => {
+    if (!canManageDailyExcusals || attendanceInteractionRef.current || !accessToken || !user) {
+      return;
+    }
+
+    suppressNextAttendancePressRef.current = true;
+
+    if (isMemberWeeklyExcused(memberId)) {
+      Alert.alert('Member excused this week', 'This member is already excused from the weekly workout requirement for this week.');
+      return;
+    }
+
+    const attendanceSource = getAttendanceSource(date, memberId, flight, squadron);
+    const currentlyAttending = isAttending(date, memberId, flight, squadron);
+    const isSingleDayExcused = attendanceSource === 'excused';
+
+    if (currentlyAttending && !isSingleDayExcused) {
+      Alert.alert(
+        'Attendance already recorded',
+        'This member already has attendance for that day. Remove the attendance first if you need to use a single-day excusal instead.'
+      );
+      return;
+    }
+
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+    try {
+      const dateKey = format(date, 'yyyy-MM-dd');
+      const session = getSession(date, flight, squadron);
+      const nextSessions = (() => {
+        if (!session) {
+          return [
+            ...ptSessions,
+            {
+              id: createOfflineActionId('pt-session'),
+              date: dateKey,
+              flight,
+              squadron,
+              createdBy: user.id,
+              attendees: [memberId],
+              attendeeSources: { [memberId]: 'excused' as const },
+            },
+          ];
+        }
+
+        const nextAttendees = !isSingleDayExcused
+          ? Array.from(new Set([...session.attendees, memberId]))
+          : session.attendees.filter((attendeeId) => attendeeId !== memberId);
+        const nextAttendeeSources = {
+          ...(session.attendeeSources ?? {}),
+          ...(!isSingleDayExcused ? { [memberId]: 'excused' as const } : {}),
+        };
+
+        if (isSingleDayExcused) {
+          delete nextAttendeeSources[memberId];
+        }
+
+        return ptSessions.map((candidate) =>
+          candidate.id === session.id
+            ? {
+                ...candidate,
+                attendees: nextAttendees,
+                attendeeSources: nextAttendeeSources,
+              }
+            : candidate
+        );
+      })();
+
+      syncPTSessions(nextSessions);
+
+      const mutation = await runOrQueueOfflineMutation({
+        action: {
+          id: createOfflineActionId('attendance-excusal'),
+          type: 'attendance_status',
+          createdAt: new Date().toISOString(),
+          payload: {
+            date: dateKey,
+            flight,
+            squadron,
+            memberId,
+            createdBy: user.id,
+            isAttending: !isSingleDayExcused,
+            source: 'excused',
+          },
+        },
+        execute: () =>
+          setAttendanceStatus({
+            date: dateKey,
+            flight,
+            squadron,
+            memberId,
+            createdBy: user.id,
+            isAttending: !isSingleDayExcused,
+            source: 'excused',
+            accessToken,
+          }),
+        onQueued: () => {
+          Alert.alert('Saved offline', 'This single-day excusal will sync automatically when the device reconnects.');
+        },
+      });
+
+      if (mutation.result) {
+        syncPTSessions(mutation.result);
+      }
+    } catch (error) {
+      Alert.alert('Unable to update daily excusal', error instanceof Error ? error.message : 'Please try again.');
+      console.error('Unable to update daily attendance excusal in Supabase.', error);
     }
   };
 
@@ -777,7 +934,7 @@ export default function AttendanceScreen() {
               <div class="card"><div class="label">Scope</div><div class="value">${attendanceSummary.scope}</div></div>
               <div class="card"><div class="label">Members</div><div class="value">${attendanceSummary.totalMembers}</div></div>
               <div class="card"><div class="label">Total Check-Ins</div><div class="value">${attendanceSummary.totalCheckIns}</div></div>
-              <div class="card"><div class="label">At 5/5</div><div class="value">${attendanceSummary.membersOnTarget}</div></div>
+<div class="card"><div class="label">Weekly Compliance</div><div class="value">${attendanceSummary.membersOnTarget}</div></div>
             </div>
             <h2>Weekly Attendance</h2>
             <table>
@@ -822,7 +979,7 @@ export default function AttendanceScreen() {
       { metric: 'Members', value: attendanceSummary.totalMembers },
       { metric: 'Total Check-Ins', value: attendanceSummary.totalCheckIns },
       { metric: 'Average Check-Ins', value: Number(attendanceSummary.averageCheckIns.toFixed(2)) },
-      { metric: 'Members at 5/5', value: attendanceSummary.membersOnTarget },
+{ metric: 'Weekly Compliance', value: attendanceSummary.membersOnTarget },
     ]);
 
     const attendanceSheet = workbook.addWorksheet('Attendance');
@@ -1163,7 +1320,7 @@ export default function AttendanceScreen() {
                     </Text>
                   </View>
                   <View className="rounded-xl border border-white/10 bg-black/15 px-3 py-1.5 items-center min-w-[70px]">
-                    <Text className="text-af-silver text-[10px] uppercase tracking-[0.4px]">At 5/5</Text>
+                    <Text className="text-af-silver text-[10px] uppercase tracking-[0.4px]">Weekly Compliance</Text>
                     <Text className="text-white text-lg font-bold mt-0.5">{membersOnTarget}</Text>
                   </View>
                 </View>
@@ -1227,7 +1384,7 @@ export default function AttendanceScreen() {
                           <Text className="text-af-silver text-[11px]" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72}>{displayName.rank}</Text>
                           <Text className="text-white font-medium mt-0.5" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.68}>{displayName.name}</Text>
                         <Text className="text-af-silver text-xs mt-1">
-                          {isExcused ? 'Excused this week' : `${weeklyAttendance}/${WEEKLY_PROGRESS_TARGET} sessions`}
+                          {isExcused ? 'Excused this week' : `${weeklyAttendance}/${getWeeklyRequiredSessions(member.id)} sessions`}
                         </Text>
                       </Pressable>
                     </Animated.View>
@@ -1344,7 +1501,16 @@ export default function AttendanceScreen() {
                             return (
                               <Pressable
                               key={`${member.id}-${day.toISOString()}`}
-                              onPress={() => handleToggleAttendance(day, member.id, member.flight, member.squadron)}
+                              onPress={() => {
+                                if (suppressNextAttendancePressRef.current) {
+                                  suppressNextAttendancePressRef.current = false;
+                                  return;
+                                }
+                                void handleToggleAttendance(day, member.id, member.flight, member.squadron);
+                              }}
+                              onLongPress={() => {
+                                void handleToggleDailyExcusal(day, member.id, member.flight, member.squadron);
+                              }}
                               disabled={!canEdit || isExcused}
                               style={{ width: DAY_COLUMN_WIDTH }}
                               className="items-center"
@@ -1406,7 +1572,8 @@ export default function AttendanceScreen() {
                 {flightMembers.map((member, index) => {
                   const weeklyAttendance = getWeeklyAttendance(member.id);
                   const isExcused = isMemberWeeklyExcused(member.id);
-                  const progressPercent = Math.min((weeklyAttendance / WEEKLY_PROGRESS_TARGET) * 100, 100);
+                  const weeklyRequired = getWeeklyRequiredSessions(member.id);
+                  const progressPercent = weeklyRequired > 0 ? Math.min((weeklyAttendance / weeklyRequired) * 100, 100) : 100;
 
                   return (
                     <Animated.View
@@ -1479,7 +1646,7 @@ export default function AttendanceScreen() {
                 <Text className="text-white font-semibold">Current view summary</Text>
                 <Text className="text-af-silver text-sm mt-2">Members: {attendanceSummary.totalMembers}</Text>
                 <Text className="text-af-silver text-sm mt-1">Total check-ins: {attendanceSummary.totalCheckIns}</Text>
-                <Text className="text-af-silver text-sm mt-1">At 5/5: {attendanceSummary.membersOnTarget}</Text>
+              <Text className="text-af-silver text-sm mt-1">Weekly Compliance: {attendanceSummary.membersOnTarget}</Text>
               </View>
 
               <Pressable
@@ -1677,6 +1844,11 @@ export default function AttendanceScreen() {
                   <View className="flex-1 pr-3">
                     <Text style={{ color: theme.textPrimary, fontSize: 20, fontWeight: '700' }}>Attendance Checkmarks</Text>
                     <Text style={{ color: theme.textSecondary, fontSize: 14, marginTop: 4 }}>Reference for the attendance colors used in FitFlight.</Text>
+                    {canManageDailyExcusals ? (
+                      <Text style={{ color: theme.textSecondary, fontSize: 13, marginTop: 10 }}>
+                        Tap and hold an attendance circle to add or remove a single-day excusal for that member.
+                      </Text>
+                    ) : null}
                   </View>
                   <Pressable
                     onPress={() => setShowAttendanceLegendModal(false)}
@@ -1687,10 +1859,10 @@ export default function AttendanceScreen() {
                   </Pressable>
                 </View>
 
-                {(['manual', 'workout', 'strava', 'pfra'] as AttendanceSource[]).map((source, index) => {
+                {(['excused', 'manual', 'workout', 'strava', 'pfra'] as AttendanceSource[]).map((source, index) => {
                   const style = ATTENDANCE_SOURCE_STYLE[source];
                   return (
-                    <ThemeChrome key={source} theme={theme} variant={source === 'manual' ? 'feature' : 'default'} style={index < 3 ? { marginBottom: 12 } : undefined}>
+                    <ThemeChrome key={source} theme={theme} variant={source === 'manual' || source === 'excused' ? 'feature' : 'default'} style={index < 4 ? { marginBottom: 12 } : undefined}>
                     <View className="p-4">
                       <View className="flex-row items-center">
                         <View className={cn('w-10 h-10 rounded-full items-center justify-center border', style.border, style.background)}>

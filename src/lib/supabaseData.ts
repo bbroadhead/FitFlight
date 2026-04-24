@@ -432,8 +432,19 @@ function getManualWorkoutWriteErrorMessage(payload: unknown, fallbackMessage: st
     : rawMessage;
 }
 
+function getAttendanceWriteErrorMessage(payload: unknown, fallbackMessage: string) {
+  const rawMessage =
+    typeof (payload as { message?: unknown }).message === 'string'
+      ? (payload as { message: string }).message
+      : fallbackMessage;
+  const normalized = rawMessage.toLowerCase();
+  return normalized.includes('attendance_source') && normalized.includes('check constraint')
+    ? 'Attendance status is blocked by Supabase attendance rules. Re-run supabase/sql/attendance_rls.sql, then try again.'
+    : rawMessage;
+}
+
 function normalizeAttendanceSource(source?: string | null): AttendanceSource {
-  if (source === 'workout' || source === 'strava' || source === 'pfra') {
+  if (source === 'workout' || source === 'strava' || source === 'pfra' || source === 'excused') {
     return source;
   }
 
@@ -2574,10 +2585,7 @@ export async function setAttendanceStatus(params: {
 
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
-      const message =
-        typeof (payload as { message?: unknown }).message === 'string'
-          ? (payload as { message: string }).message
-          : 'Unable to mark attendance in Supabase.';
+      const message = getAttendanceWriteErrorMessage(payload, 'Unable to mark attendance in Supabase.');
       throw new Error(message);
     }
   } else {
@@ -2592,10 +2600,7 @@ export async function setAttendanceStatus(params: {
 
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
-      const message =
-        typeof (payload as { message?: unknown }).message === 'string'
-          ? (payload as { message: string }).message
-          : 'Unable to remove attendance in Supabase.';
+      const message = getAttendanceWriteErrorMessage(payload, 'Unable to remove attendance in Supabase.');
       throw new Error(message);
     }
 
@@ -3311,6 +3316,44 @@ export async function deleteSupportThread(params: {
         ? (payload as { message: string }).message
         : 'Unable to delete the support conversation.';
     throw new Error(message);
+  }
+
+  const verifyThreadResponse = await fetch(
+    `${SUPABASE_URL}/rest/v1/support_threads?select=id&id=eq.${encodeURIComponent(params.threadId)}`,
+    {
+      method: 'GET',
+      headers: await getHeaders(params.accessToken),
+    }
+  );
+  const verifyThreadPayload = await verifyThreadResponse.json().catch(() => []);
+  if (!verifyThreadResponse.ok) {
+    const message =
+      typeof (verifyThreadPayload as { message?: unknown }).message === 'string'
+        ? (verifyThreadPayload as { message: string }).message
+        : 'Unable to verify support conversation deletion.';
+    throw new Error(message);
+  }
+  if (Array.isArray(verifyThreadPayload) && verifyThreadPayload.length > 0) {
+    throw new Error('Support conversation still exists in Supabase after deletion. Re-run support_inbox.sql so delete policies are applied.');
+  }
+
+  const verifyMessagesResponse = await fetch(
+    `${SUPABASE_URL}/rest/v1/support_messages?select=id&thread_id=eq.${encodeURIComponent(params.threadId)}`,
+    {
+      method: 'GET',
+      headers: await getHeaders(params.accessToken),
+    }
+  );
+  const verifyMessagesPayload = await verifyMessagesResponse.json().catch(() => []);
+  if (!verifyMessagesResponse.ok) {
+    const message =
+      typeof (verifyMessagesPayload as { message?: unknown }).message === 'string'
+        ? (verifyMessagesPayload as { message: string }).message
+        : 'Unable to verify support message deletion.';
+    throw new Error(message);
+  }
+  if (Array.isArray(verifyMessagesPayload) && verifyMessagesPayload.length > 0) {
+    throw new Error('Support messages still exist in Supabase after deletion. Re-run support_inbox.sql so delete policies are applied.');
   }
 }
 

@@ -15,6 +15,7 @@ import { ThemeBackdrop } from '@/components/ThemeBackdrop';
 import { ThemeChrome } from '@/components/ThemeChrome';
 import { TopStatusBar } from '@/components/TopStatusBar';
 import { requestRegisteredSync } from '@/lib/appSync';
+import { useErrorLogScreenContext } from '@/lib/errorLog';
 import { getThemeBodyStyle, getThemeControlStyle, getThemeHeadingStyle, useAppTheme } from '@/lib/theme';
 
 const WORKOUT_TYPE_COLORS: Record<WorkoutType, string> = {
@@ -276,6 +277,12 @@ export function LeaderboardContent({
   const [searchQuery, setSearchQuery] = useState('');
   const [showScoringHelp, setShowScoringHelp] = useState(false);
   const [showFlightRankings, setShowFlightRankings] = useState(false);
+  const leaderboardOverlayLabel = showFlightRankings
+    ? 'Flight Rankings'
+    : showScoringHelp
+      ? 'How Points Work'
+      : null;
+  useErrorLogScreenContext('Leaderboard', leaderboardOverlayLabel);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedFlight] = useState<Flight | 'all'>('all');
   const members = useMemberStore(s => s.members);

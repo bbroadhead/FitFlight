@@ -223,24 +223,41 @@ export default function AnalyticsScreen() {
     const totalMinutes = members.reduce((acc, m) => acc + getMemberMonthSummary(m, activeMonthKey).minutes, 0);
     const totalMiles = members.reduce((acc, m) => acc + getMemberMonthSummary(m, activeMonthKey).miles, 0);
     const currentWeekSessions = ptSessions.filter((session) => currentWeekDates.has(session.date));
-    const totalAttendanceMarksThisWeek = currentWeekSessions.reduce((acc, session) => acc + session.attendees.length, 0);
+    const getMemberWeeklyAttendance = (memberId: string) =>
+      currentWeekSessions.reduce((count, session) => {
+        const source = session.attendeeSources?.[memberId];
+        return source && source !== 'excused' ? count + 1 : count;
+      }, 0);
+    const getMemberWeeklyDailyExcusals = (memberId: string) =>
+      currentWeekSessions.reduce((count, session) => (
+        session.attendeeSources?.[memberId] === 'excused' ? count + 1 : count
+      ), 0);
+    const getMemberWeeklyRequiredSessions = (memberId: string) =>
+      weeklyExcusedMemberIds.includes(memberId)
+        ? 0
+        : Math.max(WEEKLY_ATTENDANCE_TARGET - getMemberWeeklyDailyExcusals(memberId), 0);
+    const totalAttendanceMarksThisWeek = currentWeekSessions.reduce((acc, session) => (
+      acc + Object.values(session.attendeeSources ?? {}).filter((source) => source && source !== 'excused').length
+    ), 0);
     const excusedThisWeekCount = members.filter((member) => weeklyExcusedMemberIds.includes(member.id)).length;
     const weeklyComplianceEligibleMembers = Math.max(totalMembers - excusedThisWeekCount, 0);
+    const totalRequiredSessionsThisWeek = members.reduce((sum, member) => (
+      sum + getMemberWeeklyRequiredSessions(member.id)
+    ), 0);
     const membersMeetingWeeklyTarget = members.filter((member) => {
       if (weeklyExcusedMemberIds.includes(member.id)) {
         return true;
       }
-      const weeklyAttendance = currentWeekSessions.reduce((count, session) => {
-        return session.attendees.includes(member.id) ? count + 1 : count;
-      }, 0);
-
-      return weeklyAttendance >= WEEKLY_ATTENDANCE_TARGET;
+      return getMemberWeeklyAttendance(member.id) >= getMemberWeeklyRequiredSessions(member.id);
     }).length;
     const weeklyCompliancePercent = weeklyComplianceEligibleMembers > 0
       ? Math.round(((membersMeetingWeeklyTarget - excusedThisWeekCount) / weeklyComplianceEligibleMembers) * 100)
       : 0;
     const averageWeeklyAttendance = totalMembers > 0
       ? totalAttendanceMarksThisWeek / totalMembers
+      : 0;
+    const averageWeeklyRequiredSessions = weeklyComplianceEligibleMembers > 0
+      ? totalRequiredSessionsThisWeek / weeklyComplianceEligibleMembers
       : 0;
 
     // Flight breakdown
@@ -308,9 +325,8 @@ export default function AnalyticsScreen() {
 
     const memberWeeklySummaries = members
       .map((member) => {
-        const weeklyAttendance = currentWeekSessions.reduce((count, session) => (
-          session.attendees.includes(member.id) ? count + 1 : count
-        ), 0);
+        const weeklyAttendance = getMemberWeeklyAttendance(member.id);
+        const weeklyRequired = getMemberWeeklyRequiredSessions(member.id);
         const weeklyWorkouts = member.workouts.filter((workout) => currentWeekDates.has(workout.date));
         const weeklyMinutes = weeklyWorkouts.reduce((count, workout) => count + workout.duration, 0);
         const weeklyMiles = weeklyWorkouts.reduce((count, workout) => count + (workout.distance ?? 0), 0);
@@ -322,6 +338,7 @@ export default function AnalyticsScreen() {
           lastName: member.lastName,
           flight: member.flight,
           attendance: weeklyAttendance,
+          weeklyRequired,
           isExcused: weeklyExcusedMemberIds.includes(member.id),
           workouts: weeklyWorkouts.length,
           minutes: weeklyMinutes,
@@ -423,9 +440,11 @@ export default function AnalyticsScreen() {
       totalAttendanceMarksThisWeek,
       excusedThisWeekCount,
       weeklyComplianceEligibleMembers,
+      totalRequiredSessionsThisWeek,
       membersMeetingWeeklyTarget,
       weeklyCompliancePercent,
       averageWeeklyAttendance: Math.round(averageWeeklyAttendance * 10) / 10,
+      averageWeeklyRequiredSessions: Math.round(averageWeeklyRequiredSessions * 10) / 10,
       memberWeeklySummaries,
       workoutsByType,
       longestWorkout,
@@ -499,7 +518,7 @@ export default function AnalyticsScreen() {
               <div class="card"><div class="label">Avg PFRA</div><div class="value">${analytics.avgPFRAScore}</div></div>
               <div class="card"><div class="label">Logged PFRAs</div><div class="value">${analytics.pfraTotalCount}</div></div>
               <div class="card"><div class="label">Attendance This Week</div><div class="value">${analytics.totalAttendanceMarksThisWeek}</div></div>
-              <div class="card"><div class="label">Members at 5/5</div><div class="value">${analytics.membersMeetingWeeklyTarget}/${analytics.totalMembers} (${analytics.weeklyCompliancePercent}%)</div></div>
+              <div class="card"><div class="label">Weekly Compliance</div><div class="value">${analytics.membersMeetingWeeklyTarget - analytics.excusedThisWeekCount}/${analytics.weeklyComplianceEligibleMembers} (${analytics.weeklyCompliancePercent}%)</div></div>
             </div>
             <div class="section">
               <h2>Flight Breakdown</h2>
@@ -536,7 +555,7 @@ export default function AnalyticsScreen() {
       { metric: 'Total Minutes', value: analytics.totalMinutes },
       { metric: 'Total Miles', value: analytics.totalMiles },
       { metric: 'Attendance Marks This Week', value: analytics.totalAttendanceMarksThisWeek },
-      { metric: 'Members at 5/5 This Week', value: `${analytics.membersMeetingWeeklyTarget}/${analytics.totalMembers}` },
+      { metric: 'Weekly Compliance This Week', value: `${analytics.membersMeetingWeeklyTarget - analytics.excusedThisWeekCount}/${analytics.weeklyComplianceEligibleMembers}` },
       { metric: 'Weekly Compliance %', value: analytics.weeklyCompliancePercent },
       { metric: 'Average PFRA', value: analytics.avgPFRAScore },
       { metric: 'Members With PFRA', value: analytics.membersWithFA },
@@ -1105,7 +1124,7 @@ export default function AnalyticsScreen() {
               </Text>
             </View>
             <View className="mt-2 flex-row items-center justify-between">
-              <Text className="text-af-silver text-xs">Members at 5/5</Text>
+              <Text className="text-af-silver text-xs">Weekly Compliance</Text>
                 <Text className="text-white font-semibold text-sm">
                   {analytics.membersMeetingWeeklyTarget - analytics.excusedThisWeekCount}/{analytics.weeklyComplianceEligibleMembers} ({analytics.weeklyCompliancePercent}%)
                 </Text>
@@ -1126,7 +1145,7 @@ export default function AnalyticsScreen() {
                       <Text className="text-af-silver text-xs">{formatFlightDisplay(member.flight)}</Text>
                     </View>
                     <View className="items-end">
-                      <Text className="text-white text-sm">{member.isExcused ? 'Excused this week' : `${member.attendance}/5 attendance`}</Text>
+                      <Text className="text-white text-sm">{member.isExcused ? 'Excused this week' : `${member.attendance}/${member.weeklyRequired} attendance`}</Text>
                       <Text className="text-af-silver text-xs">
                     {member.workouts} workouts, {member.minutes} min, {member.miles.toFixed(2)} mi
                       </Text>
@@ -1280,7 +1299,7 @@ export default function AnalyticsScreen() {
                           {analytics.weeklyCompliancePercent}%
                         </Text>
                       </View>
-                      <Text className="text-af-silver text-xs mt-1 text-center">At 5/5</Text>
+                      <Text className="text-af-silver text-xs mt-1 text-center">Weekly Compliance</Text>
                     </View>
                   );
                 })()}
@@ -1289,7 +1308,7 @@ export default function AnalyticsScreen() {
             <View className="mt-3 pt-3 border-t border-white/10 flex-row items-center justify-between">
               <Text className="text-af-silver text-xs">Avg attendance per member this week</Text>
               <Text className="text-white font-semibold text-sm">
-                {analytics.averageWeeklyAttendance}/{WEEKLY_ATTENDANCE_TARGET}
+                {analytics.averageWeeklyAttendance.toFixed(1)}/{analytics.averageWeeklyRequiredSessions.toFixed(1)}
               </Text>
             </View>
           </Animated.View>

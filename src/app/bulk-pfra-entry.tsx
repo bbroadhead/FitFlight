@@ -1,9 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Platform, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ChevronLeft, ChevronDown, Save, History, ArrowUpDown } from 'lucide-react-native';
+import { ChevronLeft, ChevronDown, Save, History, ArrowUpDown, Check, AlertTriangle } from 'lucide-react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { ThemeBackdrop } from '@/components/ThemeBackdrop';
 import { ThemeChrome } from '@/components/ThemeChrome';
@@ -112,6 +112,7 @@ export default function BulkPFRAEntryScreen() {
   const [rowsByMemberId, setRowsByMemberId] = useState<Record<string, BulkPFRARowDraft>>({});
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [isLoadingExistingBatch, setIsLoadingExistingBatch] = useState(false);
   const [hasHydratedDraft, setHasHydratedDraft] = useState(false);
   const [hasLocalDraft, setHasLocalDraft] = useState(false);
@@ -122,6 +123,13 @@ export default function BulkPFRAEntryScreen() {
   const isCompactMobile = width < 900;
   const contentMaxWidth = width >= 1280 ? 1240 : width >= 1000 ? 1100 : 720;
   const draftKey = `fitflight-bulk-pfra:${user?.id ?? 'anon'}:${resolvedBatchId ?? 'new'}`;
+  const saveStateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (saveStateTimeoutRef.current) {
+      clearTimeout(saveStateTimeoutRef.current);
+    }
+  }, []);
 
   const availableMembers = useMemo(() => {
     if (selectedFlights.length === 0) {
@@ -362,6 +370,25 @@ export default function BulkPFRAEntryScreen() {
         return;
       }
 
+      const invalidCompletedRows = completedRows.filter((row) => {
+        const missingAge = !row.ageYears.trim();
+        const missingHeight = !row.heightIn.trim() && !row.exemptions.waist;
+        const missingWaist = !row.waistIn.trim() && !row.exemptions.waist;
+        const missingStrength = !row.strengthValue.trim() && !row.exemptions.strength;
+        const missingCore = !row.coreValue.trim() && !row.exemptions.core;
+        const missingCardio = !row.cardioValue.trim() && !row.exemptions.cardio;
+        return missingAge || missingHeight || missingWaist || missingStrength || missingCore || missingCardio;
+      });
+
+      if (invalidCompletedRows.length > 0) {
+        const previewNames = invalidCompletedRows.slice(0, 3).map((row) => row.memberName).join(', ');
+        Alert.alert(
+          'Incomplete completed rows',
+          `${previewNames}${invalidCompletedRows.length > 3 ? ', ...' : ''} still have missing PFRA fields. Fill in completed rows or change their accountability status before saving.`
+        );
+        return;
+      }
+
       const batchId = resolvedBatchId ?? `pfra-batch-${Date.now()}`;
       const date = assessmentDate.toISOString().split('T')[0];
       const rows = orderedRows.map((row) => {
@@ -390,6 +417,7 @@ export default function BulkPFRAEntryScreen() {
       });
 
       setIsSaving(true);
+      setSaveState('saving');
       try {
         const saveSummary = await bulkSavePFRAResults({
           batchId,
@@ -402,21 +430,47 @@ export default function BulkPFRAEntryScreen() {
           rows,
           accessToken,
         });
-        const [pfraEntries, sessions, refreshedBatches] = await Promise.all([
+        const [savedBatch, savedBatchMembers, pfraEntries, sessions, refreshedBatches] = await Promise.all([
+          fetchPFRABatchById(batchId, accessToken),
+          fetchPFRABatchMembers(batchId, accessToken),
           fetchPFRARecords(accessToken, user.squadron),
           fetchAttendanceSessions(accessToken).catch(() => []),
           fetchPFRABatches(accessToken, user.squadron).catch(() => recentBatches),
         ]);
+
+        if (!savedBatch) {
+          throw new Error('PFRA batch save did not persist correctly. Please rerun pfra_batches.sql and try again.');
+        }
+
+        if (savedBatchMembers.length !== rows.length) {
+          throw new Error(`PFRA batch save completed incompletely. Expected ${rows.length} accountability rows, but found ${savedBatchMembers.length}.`);
+        }
+
         syncFitnessAssessments(pfraEntries);
         syncPTSessions(sessions);
         setRecentBatches(refreshedBatches);
         await AsyncStorage.removeItem(draftKey).catch(() => undefined);
+        setSaveState('saved');
+        if (saveStateTimeoutRef.current) {
+          clearTimeout(saveStateTimeoutRef.current);
+        }
+        saveStateTimeoutRef.current = setTimeout(() => {
+          setSaveState('idle');
+          saveStateTimeoutRef.current = null;
+        }, 2200);
         Alert.alert(
           'PFRA batch saved',
           `${saveSummary.completed_count} completed result${saveSummary.completed_count === 1 ? '' : 's'} saved. Accountability rows saved: ${saveSummary.row_count}.`
         );
-        router.back();
       } catch (error) {
+        setSaveState('error');
+        if (saveStateTimeoutRef.current) {
+          clearTimeout(saveStateTimeoutRef.current);
+        }
+        saveStateTimeoutRef.current = setTimeout(() => {
+          setSaveState('idle');
+          saveStateTimeoutRef.current = null;
+        }, 2200);
         Alert.alert('Unable to save PFRA batch', error instanceof Error ? error.message : 'Please try again.');
       } finally {
         setIsSaving(false);
@@ -460,8 +514,39 @@ export default function BulkPFRAEntryScreen() {
             style={{ borderColor: theme.accent, backgroundColor: theme.accentSoft }}
           >
             <View className="flex-row items-center">
-              <Save size={16} color={theme.accent} />
-              <Text style={[getThemeBodyStyle(theme, 14, theme.accent), { marginLeft: 8, fontWeight: '600' }]}>{isSaving ? 'Saving...' : isLoadingExistingBatch ? 'Loading...' : 'Save All'}</Text>
+              {isLoadingExistingBatch || saveState === 'saving' ? (
+                <ActivityIndicator size="small" color={theme.accent} />
+              ) : saveState === 'saved' ? (
+                <Check size={16} color="#22C55E" />
+              ) : saveState === 'error' ? (
+                <AlertTriangle size={16} color="#EF4444" />
+              ) : (
+                <Save size={16} color={theme.accent} />
+              )}
+              <Text
+                style={[
+                  getThemeBodyStyle(
+                    theme,
+                    14,
+                    saveState === 'saved'
+                      ? '#22C55E'
+                      : saveState === 'error'
+                        ? '#EF4444'
+                        : theme.accent
+                  ),
+                  { marginLeft: 8, fontWeight: '600' },
+                ]}
+              >
+                {isLoadingExistingBatch
+                  ? 'Loading...'
+                  : saveState === 'saving'
+                    ? 'Saving'
+                    : saveState === 'saved'
+                      ? 'Saved'
+                      : saveState === 'error'
+                        ? 'ERROR'
+                        : 'Save All'}
+              </Text>
             </View>
           </Pressable>
         </View>

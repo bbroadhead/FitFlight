@@ -21,6 +21,7 @@ import { ThemeBackdrop } from '@/components/ThemeBackdrop';
 import { ThemeChrome } from '@/components/ThemeChrome';
 import { TopStatusBar } from '@/components/TopStatusBar';
 import { createOfflineActionId, requestRegisteredSync, runOrQueueOfflineMutation } from '@/lib/appSync';
+import { useErrorLogScreenContext } from '@/lib/errorLog';
 
 type FilterType = 'all' | 'favorites' | 'mine' | 'playbook';
 type SortType = 'newest' | 'popular' | 'duration';
@@ -360,6 +361,14 @@ export default function WorkoutsScreen() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingWorkoutId, setEditingWorkoutId] = useState<string | null>(null);
   const [showFilterModal, setShowFilterModal] = useState(false);
+  const workoutsOverlayLabel = showCreateModal
+    ? editingWorkoutId
+      ? 'Edit Workout'
+      : 'New Workout'
+    : showFilterModal
+      ? 'Filter & Sort'
+      : null;
+  useErrorLogScreenContext('Workouts', workoutsOverlayLabel);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<FilterType>('all');
   const [sortType, setSortType] = useState<SortType>('newest');

@@ -14,6 +14,7 @@ import { ThemeChrome } from '@/components/ThemeChrome';
 import { TopStatusBar } from '@/components/TopStatusBar';
 import { TutorialTarget, useTutorialTour } from '@/contexts/TutorialTourContext';
 import { requestRegisteredSync } from '@/lib/appSync';
+import { useErrorLogScreenContext } from '@/lib/errorLog';
 import { getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
 import { fetchDashboardLayoutPreference, saveDashboardLayoutPreference } from '@/lib/supabaseData';
 import { canManagePFRARecords, canManagePTPrograms, getShortDisplayName, useAuthStore, useMemberStore } from '@/lib/store';
@@ -250,6 +251,12 @@ export default function HomeScreen() {
 
   const [showingLeaderboard, setShowingLeaderboard] = useState(false);
   const [showInstallHelp, setShowInstallHelp] = useState(false);
+  const homeOverlayLabel = showingLeaderboard
+    ? 'Leaderboard'
+    : showInstallHelp
+      ? 'Install Help'
+      : null;
+  useErrorLogScreenContext('Home', homeOverlayLabel);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [expandedDashboardCardIds, setExpandedDashboardCardIds] = useState<DashboardCardId[]>([]);
   const [isEditingLayout, setIsEditingLayout] = useState(false);

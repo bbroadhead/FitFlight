@@ -1,5 +1,5 @@
 import { DarkTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack } from 'expo-router';
+import { Stack, usePathname } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -8,6 +8,7 @@ import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { useEffect } from 'react';
 import { Image, ScrollView, Text, TextInput, View } from 'react-native';
 import { useAuthStore, useMemberStore, ALL_ACHIEVEMENTS } from '@/lib/store';
+import { formatErrorLogRouteLabel, recordAppError, useErrorLogStore } from '@/lib/errorLog';
 import { getAppThemePalette, useAppTheme } from '@/lib/theme';
 import { AchievementCelebration } from '@/components/AchievementCelebration';
 import { TutorialTourProvider } from '@/contexts/TutorialTourContext';
@@ -26,6 +27,8 @@ function RootLayoutNav() {
   const dismissAchievementCelebration = useMemberStore((state) => state.dismissAchievementCelebration);
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const theme = useAppTheme();
+  const pathname = usePathname();
+  const setCurrentRouteLabel = useErrorLogStore((state) => state.setCurrentRouteLabel);
 
   const navigationTheme = {
     ...DarkTheme,
@@ -41,6 +44,10 @@ function RootLayoutNav() {
   useEffect(() => {
     SplashScreen.hideAsync();
   }, []);
+
+  useEffect(() => {
+    setCurrentRouteLabel(formatErrorLogRouteLabel(pathname));
+  }, [pathname, setCurrentRouteLabel]);
 
   const recentAchievement = recentAchievementId
     ? ALL_ACHIEVEMENTS.find((achievement) => achievement.id === recentAchievementId) ?? null
@@ -83,6 +90,9 @@ function RootLayoutNav() {
 
 export function ErrorBoundary({ error }: { error: Error }) {
   const fallbackTheme = getAppThemePalette('default');
+  useEffect(() => {
+    recordAppError({ source: 'boundary', error });
+  }, [error]);
   return (
     <View style={{ flex: 1, backgroundColor: fallbackTheme.background, paddingHorizontal: 24, paddingVertical: 40, alignItems: 'center', justifyContent: 'center' }}>
       <View style={{ width: '100%', maxWidth: 520, alignItems: 'center' }}>
@@ -162,6 +172,71 @@ export default function RootLayout() {
       TextInputComponent.defaultProps = originalTextInputDefaultProps;
     };
   }, [theme.bodyFontFamily, theme.id]);
+
+  useEffect(() => {
+    const originalConsoleError = console.error;
+
+    console.error = (...args: unknown[]) => {
+      const firstError = args.find((value) => value instanceof Error);
+      const message = args
+        .map((value) => {
+          if (value instanceof Error) {
+            return value.message;
+          }
+          if (typeof value === 'string') {
+            return value;
+          }
+
+          try {
+            return JSON.stringify(value);
+          } catch {
+            return String(value);
+          }
+        })
+        .filter(Boolean)
+        .join(' ');
+
+      recordAppError({
+        source: 'console',
+        error: firstError,
+        message,
+      });
+
+      originalConsoleError(...args);
+    };
+
+    if (typeof window === 'undefined') {
+      return () => {
+        console.error = originalConsoleError;
+      };
+    }
+
+    const handleWindowError = (event: ErrorEvent) => {
+      recordAppError({
+        source: 'window',
+        error: event.error,
+        message: event.message,
+        stack: event.error?.stack,
+      });
+    };
+
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      recordAppError({
+        source: 'promise',
+        error: event.reason,
+        message: event.reason instanceof Error ? event.reason.message : 'Unhandled promise rejection',
+      });
+    };
+
+    window.addEventListener('error', handleWindowError);
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+
+    return () => {
+      console.error = originalConsoleError;
+      window.removeEventListener('error', handleWindowError);
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+    };
+  }, []);
 
   return (
     <QueryClientProvider client={queryClient}>

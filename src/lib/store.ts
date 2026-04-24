@@ -13,7 +13,7 @@ export type ScheduledPTScope = 'squadron' | 'flight' | 'personal';
 export type ScheduledPTKind = 'pt' | 'pfra_mock' | 'pfra_diagnostic' | 'pfra_official';
 export type PFRARecordType = 'self' | 'mock' | 'diagnostic' | 'official';
 export type PFRAAccountabilityStatus = 'completed' | 'pending' | 'absent' | 'excused' | 'postponed';
-export type AttendanceSource = 'manual' | 'workout' | 'strava' | 'pfra';
+export type AttendanceSource = 'manual' | 'workout' | 'strava' | 'pfra' | 'excused';
 export type AppTheme = 'default' | 'dark' | 'pixel' | 'cyber' | 'space' | 'flowery';
 
 export const SQUADRONS: Squadron[] = ['Hawks', 'Tigers'];
