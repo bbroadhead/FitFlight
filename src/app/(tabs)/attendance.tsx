@@ -11,7 +11,7 @@ import * as FileSystem from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { format, startOfWeek, addDays, subWeeks, addWeeks, isSameDay } from 'date-fns';
-import { useMemberStore, useAuthStore, formatFlightDisplay, type AttendanceSource, type Flight, type ScheduledPTSession, canEditAttendance, canManagePTPrograms, formatRankDisplay } from '@/lib/store';
+import { useMemberStore, useAuthStore, formatFlightDisplay, type AttendanceSource, type Flight, type ScheduledPTSession, canEditAttendance, canManagePTPrograms, formatRankDisplay, isPFLAccountType } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { useTabSwipe } from '@/contexts/TabSwipeContext';
@@ -176,7 +176,7 @@ export default function AttendanceScreen() {
   const canEdit = user ? canEditAttendance(user.accountType) : false;
   const canManagePrograms = user ? canManagePTPrograms(user.accountType) : false;
   const canManageDailyExcusals = user
-    ? ['ptl', 'ufpm', 'fitflight_creator', 'squadron_leadership'].includes(user.accountType)
+    ? (isPFLAccountType(user.accountType) || ['ufpm', 'fitflight_creator', 'squadron_leadership'].includes(user.accountType))
     : false;
   const canManageWeeklyExcusals = user
     ? ['fitflight_creator', 'ufpm', 'squadron_leadership'].includes(user.accountType)

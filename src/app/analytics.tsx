@@ -217,7 +217,7 @@ export default function AnalyticsScreen() {
       Array.from({ length: 7 }, (_, index) => format(addDays(currentWeekStart, index), 'yyyy-MM-dd'))
     );
     const totalMembers = members.length;
-    const totalPFLs = members.filter(m => m.accountType === 'ptl').length;
+    const totalPFLs = members.filter(m => m.accountType === 'pfl' || m.accountType === 'ptl').length;
     const monthSessions = getMonthSessions(ptSessions, activeMonthKey);
     const totalSessions = monthSessions.length;
     const totalMinutes = members.reduce((acc, m) => acc + getMemberMonthSummary(m, activeMonthKey).minutes, 0);
@@ -585,7 +585,7 @@ export default function AnalyticsScreen() {
         lastName: member.lastName,
         flight: member.flight,
         role:
-          member.accountType === 'ptl'
+                      member.accountType === 'pfl' || member.accountType === 'ptl'
             ? 'PFL'
             : member.accountType === 'squadron_leadership'
               ? 'Squadron Leadership'

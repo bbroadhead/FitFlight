@@ -97,12 +97,12 @@ export function TrophyCase({
   const earnedTrophies = trophies.filter((trophy) => trophy.isEarned);
   const lockedTrophies = trophies.filter((trophy) => !trophy.isEarned);
   const [selectedTrophy, setSelectedTrophy] = useState<TrophyWithStats | null>(null);
-  const cardsPerRow = width < 520 ? 3 : width < 900 ? 4 : 5;
-  const cardGap = width < 520 ? 6 : 8;
+  const cardsPerRow = width < 520 ? 2 : width < 900 ? 4 : 5;
+  const cardGap = width < 520 ? 8 : 8;
   const cardWidth = useMemo<DimensionValue>(
     () => {
-      if (cardsPerRow === 3) {
-        return '32%';
+      if (cardsPerRow === 2) {
+        return '48.5%';
       }
       if (cardsPerRow === 4) {
         return '24%';
@@ -135,6 +135,7 @@ export function TrophyCase({
           style={{ backgroundColor: '#2A1D12', borderColor: '#6B4E2E' }}
         >
           <View style={{ height: 10, backgroundColor: '#6B4E2E' }} />
+          <View style={{ height: 6, backgroundColor: '#4B341E' }} />
           <View
             className="absolute inset-0"
             style={{ backgroundColor: 'rgba(255,255,255,0.03)' }}
@@ -155,10 +156,10 @@ export function TrophyCase({
                       className={cn("rounded-2xl mb-0 border items-center", trophy.isHard ? "" : "border-white/10")}
                       style={{
                         width: cardWidth,
-                        paddingHorizontal: width < 520 ? 8 : 12,
+                        paddingHorizontal: width < 520 ? 10 : 12,
                         paddingVertical: width < 520 ? 10 : 12,
-                        backgroundColor: trophy.isHard ? 'rgba(255, 215, 0, 0.08)' : 'rgba(255, 255, 255, 0.04)',
-                        borderColor: trophy.isHard ? '#FFD700' : 'rgba(255,255,255,0.12)',
+                        backgroundColor: trophy.isHard ? 'rgba(255, 215, 0, 0.08)' : 'rgba(255, 248, 220, 0.04)',
+                        borderColor: trophy.isHard ? '#FFD700' : 'rgba(214, 182, 116, 0.24)',
                       }}
                     >
                       <View
@@ -173,7 +174,7 @@ export function TrophyCase({
                       </View>
                       <Text
                         className="font-semibold text-center"
-                        style={{ color: trophy.textColor, fontSize: width < 520 ? 12 : 14, lineHeight: width < 520 ? 15 : 18 }}
+                        style={{ color: trophy.textColor, fontSize: width < 520 ? 11 : 14, lineHeight: width < 520 ? 14 : 18 }}
                         numberOfLines={2}
                         adjustsFontSizeToFit
                         minimumFontScale={0.68}
@@ -182,7 +183,7 @@ export function TrophyCase({
                       </Text>
                       <Text
                         className="text-af-silver text-center"
-                        style={{ marginTop: width < 520 ? 6 : 8, fontSize: width < 520 ? 10 : 11, lineHeight: width < 520 ? 13 : 15 }}
+                        style={{ marginTop: width < 520 ? 5 : 8, fontSize: width < 520 ? 9 : 11, lineHeight: width < 520 ? 12 : 15 }}
                         numberOfLines={2}
                         adjustsFontSizeToFit
                         minimumFontScale={0.72}
@@ -191,7 +192,7 @@ export function TrophyCase({
                       </Text>
                       <Text
                         className="text-af-gold font-semibold text-center"
-                        style={{ marginTop: width < 520 ? 8 : 10, fontSize: width < 520 ? 10 : 11, lineHeight: width < 520 ? 13 : 15 }}
+                        style={{ marginTop: width < 520 ? 7 : 10, fontSize: width < 520 ? 9 : 11, lineHeight: width < 520 ? 12 : 15 }}
                         numberOfLines={2}
                         adjustsFontSizeToFit
                         minimumFontScale={0.72}
@@ -210,6 +211,10 @@ export function TrophyCase({
                   className="my-2"
                   style={{ height: 8, backgroundColor: '#6B4E2E', borderRadius: 999 }}
                 />
+                <View
+                  className="mb-2"
+                  style={{ height: 4, backgroundColor: '#4B341E', borderRadius: 999 }}
+                />
                 <Text className="text-af-silver text-xs uppercase tracking-wider mt-3 mb-3">
                   Locked Trophies
                 </Text>
@@ -223,9 +228,10 @@ export function TrophyCase({
                       className="rounded-2xl mb-0 border border-white/10 items-center"
                       style={{
                         width: cardWidth,
-                        paddingHorizontal: width < 520 ? 8 : 12,
+                        paddingHorizontal: width < 520 ? 10 : 12,
                         paddingVertical: width < 520 ? 10 : 12,
-                        backgroundColor: 'rgba(0,0,0,0.12)',
+                        backgroundColor: 'rgba(26, 18, 10, 0.35)',
+                        borderColor: 'rgba(214, 182, 116, 0.16)',
                       }}
                     >
                       <View
@@ -236,7 +242,7 @@ export function TrophyCase({
                       </View>
                         <Text
                           className="text-white/70 font-semibold text-center"
-                          style={{ fontSize: width < 520 ? 12 : 14, lineHeight: width < 520 ? 15 : 18 }}
+                          style={{ fontSize: width < 520 ? 11 : 14, lineHeight: width < 520 ? 14 : 18 }}
                           numberOfLines={2}
                           adjustsFontSizeToFit
                           minimumFontScale={0.68}
@@ -245,7 +251,7 @@ export function TrophyCase({
                         </Text>
                         <Text
                           className="text-white/40 text-center"
-                          style={{ marginTop: width < 520 ? 6 : 8, fontSize: width < 520 ? 10 : 11, lineHeight: width < 520 ? 13 : 15 }}
+                          style={{ marginTop: width < 520 ? 5 : 8, fontSize: width < 520 ? 9 : 11, lineHeight: width < 520 ? 12 : 15 }}
                           numberOfLines={2}
                           adjustsFontSizeToFit
                           minimumFontScale={0.72}
@@ -254,7 +260,7 @@ export function TrophyCase({
                         </Text>
                         <Text
                           className="text-white/50 text-center"
-                          style={{ marginTop: width < 520 ? 8 : 10, fontSize: width < 520 ? 10 : 11, lineHeight: width < 520 ? 13 : 15 }}
+                          style={{ marginTop: width < 520 ? 7 : 10, fontSize: width < 520 ? 9 : 11, lineHeight: width < 520 ? 12 : 15 }}
                           numberOfLines={2}
                           adjustsFontSizeToFit
                           minimumFontScale={0.72}

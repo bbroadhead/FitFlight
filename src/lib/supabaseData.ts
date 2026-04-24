@@ -14,6 +14,7 @@ import type {
   Squadron,
   WorkoutType,
 } from '@/lib/store';
+import { normalizeAccountType } from '@/lib/store';
 import { getValidAccessToken } from '@/lib/supabaseAuth';
 import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
@@ -40,7 +41,7 @@ type RosterColumnName =
   | 'HAS_LOGGED_INTO_APP';
 type MemberRoleRow = {
   email: string;
-  app_role: AccountType;
+  app_role: AccountType | string;
 };
 type AttendanceSessionRow = {
   id: string;
@@ -1276,7 +1277,7 @@ function normalizeRosterRow(row: SupabaseRow): Member | null {
     lastName: normalizedLastName,
     flight,
     squadron,
-    accountType: getAccountType(normalizedFirstName, normalizedLastName, normalizedEmail),
+    accountType: normalizeAccountType(getAccountType(normalizedFirstName, normalizedLastName, normalizedEmail)),
     email: normalizedEmail,
     exerciseMinutes: 0,
     distanceRun: 0,
@@ -1301,10 +1302,16 @@ function normalizeRosterRow(row: SupabaseRow): Member | null {
 }
 
 export async function fetchRosterMembers(accessToken?: string, squadron: Squadron = 'Hawks') {
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/${getRosterTableName(squadron)}?select=*`, {
-    method: 'GET',
-    headers: await getHeaders(accessToken),
-  });
+  const [response, memberRolesResponse] = await Promise.all([
+    fetch(`${SUPABASE_URL}/rest/v1/${getRosterTableName(squadron)}?select=*`, {
+      method: 'GET',
+      headers: await getHeaders(accessToken),
+    }),
+    fetch(`${SUPABASE_URL}/rest/v1/member_roles?select=email,app_role`, {
+      method: 'GET',
+      headers: await getHeaders(accessToken),
+    }).catch(() => null),
+  ]);
 
   const payload = await response.json().catch(() => []);
   if (!response.ok) {
@@ -1315,9 +1322,29 @@ export async function fetchRosterMembers(accessToken?: string, squadron: Squadro
     throw new Error(message);
   }
 
+  const memberRolesPayload = memberRolesResponse ? await memberRolesResponse.json().catch(() => []) : [];
+  const roleByEmail = new Map<string, AccountType>();
+  if (memberRolesResponse?.ok && Array.isArray(memberRolesPayload)) {
+    (memberRolesPayload as MemberRoleRow[]).forEach((row) => {
+      if (typeof row.email === 'string') {
+        roleByEmail.set(row.email.toLowerCase(), normalizeAccountType(row.app_role));
+      }
+    });
+  }
+
   const rows = parseResponse<SupabaseRow[]>(payload);
   return rows
     .map(normalizeRosterRow)
+    .map((member) => {
+      if (!member) {
+        return null;
+      }
+      if (member.flight === 'DO') {
+        return { ...member, accountType: 'squadron_leadership' };
+      }
+      const liveRole = roleByEmail.get(member.email.toLowerCase());
+      return liveRole ? { ...member, accountType: liveRole } : member;
+    })
     .filter((member): member is Member => Boolean(member));
 }
 
@@ -2837,7 +2864,9 @@ export async function fetchRoleForEmail(email: string, accessToken?: string) {
   }
 
   const rows = payload as MemberRoleRow[];
-  return rows[0] ?? null;
+  return rows[0]
+    ? { ...rows[0], app_role: normalizeAccountType(rows[0].app_role) }
+    : null;
 }
 
 export async function ensureMemberRole(email: string, role: AccountType, accessToken?: string) {
@@ -2851,7 +2880,7 @@ export async function ensureMemberRole(email: string, role: AccountType, accessT
     headers: await getMemberRoleHeaders(accessToken),
     body: JSON.stringify({
       email: email.toLowerCase(),
-      app_role: role,
+      app_role: normalizeAccountType(role),
     }),
   });
 
@@ -2865,16 +2894,19 @@ export async function ensureMemberRole(email: string, role: AccountType, accessT
   }
 
   const rows = payload as MemberRoleRow[];
-  return rows[0] ?? { email: email.toLowerCase(), app_role: role };
+  return rows[0]
+    ? { ...rows[0], app_role: normalizeAccountType(rows[0].app_role) }
+    : { email: email.toLowerCase(), app_role: normalizeAccountType(role) };
 }
 
 export async function updateMemberRole(email: string, role: AccountType, accessToken?: string) {
   const encodedEmail = encodeURIComponent(email.toLowerCase());
+  const normalizedRole = normalizeAccountType(role);
   const response = await fetch(`${SUPABASE_URL}/rest/v1/member_roles?email=eq.${encodedEmail}`, {
     method: 'PATCH',
     headers: await getMemberRoleHeaders(accessToken),
     body: JSON.stringify({
-      app_role: role,
+      app_role: normalizedRole,
     }),
   });
 
@@ -2888,7 +2920,11 @@ export async function updateMemberRole(email: string, role: AccountType, accessT
   }
 
   const rows = payload as MemberRoleRow[];
-  return rows[0] ?? { email: email.toLowerCase(), app_role: role };
+  if (rows[0]) {
+    return { ...rows[0], app_role: normalizeAccountType(rows[0].app_role) };
+  }
+
+  return ensureMemberRole(email, normalizedRole, accessToken);
 }
 
 export async function assignUFPMRole(nextEmail: string, accessToken?: string) {
@@ -2909,7 +2945,7 @@ export async function assignUFPMRole(nextEmail: string, accessToken?: string) {
   const currentUFPM = (currentUFPMPayload as MemberRoleRow[])[0] ?? null;
 
   if (currentUFPM && currentUFPM.email.toLowerCase() !== nextEmail.toLowerCase()) {
-    await updateMemberRole(currentUFPM.email, 'ptl', accessToken);
+    await updateMemberRole(currentUFPM.email, 'pfl', accessToken);
   }
 
   const existingNextRole = await fetchRoleForEmail(nextEmail, accessToken).catch(() => null);

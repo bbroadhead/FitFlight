@@ -10,7 +10,7 @@ import Animated, { FadeIn, FadeInDown, FadeInUp, SlideInDown } from 'react-nativ
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import SmartSlider from '@/components/SmartSlider';
-import { useAuthStore, useMemberStore, formatFlightDisplay, type Flight, type Member, type AccountType, type Squadron, type IntegrationService, type WorkoutType, RANK_GROUPS, getDisplayName, canEditAttendance, canManagePTL, canManagePTPrograms, isAdmin, SQUADRONS, ALL_ACHIEVEMENTS } from '@/lib/store';
+import { useAuthStore, useMemberStore, formatFlightDisplay, type Flight, type Member, type AccountType, type Squadron, type IntegrationService, type WorkoutType, RANK_GROUPS, getDisplayName, canEditAttendance, canManagePTL, canManagePTPrograms, isAdmin, SQUADRONS, ALL_ACHIEVEMENTS, isPFLAccountType, normalizeAccountType } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { AchievementCelebration } from '@/components/AchievementCelebration';
@@ -978,11 +978,13 @@ export default function ProfileScreen() {
             ? 'fitflight_creator'
             : previousMember?.accountType === 'ufpm'
               ? 'ufpm'
+              : newMemberFlight === 'DO'
+                ? 'squadron_leadership'
               : newMemberSquadronLeadership
                 ? 'squadron_leadership'
                 : previousMember?.accountType === 'squadron_leadership'
                   ? 'standard'
-                  : previousMember?.accountType ?? 'standard',
+                  : normalizeAccountType(previousMember?.accountType ?? 'standard'),
         email: (newMemberEmail || `${newMemberLastName.toLowerCase()}.${newMemberFirstName.toLowerCase()}@us.af.mil`).toLowerCase(),
         exerciseMinutes: previousMember?.exerciseMinutes ?? 0,
         distanceRun: previousMember?.distanceRun ?? 0,
@@ -1017,10 +1019,10 @@ export default function ProfileScreen() {
           actionType: 'update_member',
           targetMember: newMember,
           details: {
-            previousEmail: previousMember.email,
-            nextEmail: newMember.email,
-            flight: newMember.flight,
-            accountType: newMember.accountType,
+              previousEmail: previousMember.email,
+              nextEmail: newMember.email,
+              flight: newMember.flight,
+              accountType: newMember.accountType,
           },
         });
       } else {
@@ -1268,7 +1270,7 @@ export default function ProfileScreen() {
           : Haptics.NotificationFeedbackType.Warning
       );
 
-      await updateMemberRole(member.email, approve ? 'ptl' : 'standard', accessToken).catch(() => undefined);
+        await updateMemberRole(member.email, approve ? 'pfl' : 'standard', accessToken).catch(() => undefined);
 
       if (approve) {
         approvePTL(memberId);
@@ -1368,7 +1370,7 @@ export default function ProfileScreen() {
       }
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      await updateMemberRole(member.email, 'ptl', accessToken).catch(() => undefined);
+        await updateMemberRole(member.email, 'pfl', accessToken).catch(() => undefined);
       approvePTL(memberId);
       await logAdminAction({
         actionType: 'assign_pfl',
@@ -1424,7 +1426,7 @@ export default function ProfileScreen() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
 
     // If user is PTL and changing squadrons, remove PTL status
-    const isPTL = user.accountType === 'ptl';
+    const isPTL = isPFLAccountType(user.accountType);
     const newAccountType = isPTL ? 'standard' : user.accountType;
 
     // Update member in store
@@ -2263,6 +2265,7 @@ export default function ProfileScreen() {
       case 'ufpm': return 'UFPM';
       case 'demo': return 'Demo Role';
       case 'squadron_leadership': return 'Squadron Leadership';
+      case 'pfl':
       case 'ptl': return 'PFL';
       default: return 'Member';
     }
@@ -2308,6 +2311,7 @@ export default function ProfileScreen() {
       case 'ufpm': return { bg: 'bg-af-gold/20', text: 'text-af-gold', border: 'border-af-gold/50' };
       case 'demo': return { bg: 'bg-emerald-500/20', text: 'text-emerald-300', border: 'border-emerald-400/40' };
       case 'squadron_leadership': return { bg: 'bg-sky-500/20', text: 'text-sky-300', border: 'border-sky-400/40' };
+      case 'pfl':
       case 'ptl': return { bg: 'bg-af-accent/20', text: 'text-af-accent', border: 'border-af-accent/50' };
       default: return { bg: 'bg-white/10', text: 'text-af-silver', border: 'border-white/20' };
     }
@@ -3349,6 +3353,11 @@ export default function ProfileScreen() {
                     ))}
                   </View>
                 </ScrollView>
+                {newMemberFlight === 'DO' ? (
+                  <Text style={getThemeBodyStyle(themePalette, 12, themePalette.textSecondary)} className="mt-2">
+                    Members assigned to DO are automatically given Squadron Leadership access.
+                  </Text>
+                ) : null}
               </View>
 
               {/* Email */}
@@ -3410,19 +3419,19 @@ export default function ProfileScreen() {
                     <View className="flex-row items-start justify-between">
                       <View className="flex-1 pr-3">
                         <Text style={[getThemeBodyStyle(themePalette, 14, themePalette.textPrimary), { fontWeight: '700' }]}>
-                          {editingMember.accountType === 'ptl' ? 'PFL Access Active' : 'PFL Access Available'}
+                          {isPFLAccountType(editingMember.accountType) ? 'PFL Access Active' : 'PFL Access Available'}
                         </Text>
                         <Text style={getThemeBodyStyle(themePalette, 12, themePalette.textSecondary)} className="mt-1">
-                          {editingMember.accountType === 'ptl'
+                          {isPFLAccountType(editingMember.accountType)
                             ? 'This member can currently manage PFL workflows in-app.'
                             : 'Grant this member Physical Fitness Leader access from their edit view.'}
                         </Text>
                       </View>
-                      <View className="w-10 h-10 rounded-full items-center justify-center" style={getThemeControlStyle(themePalette, editingMember.accountType !== 'ptl')}>
-                        <UserCheck size={18} color={editingMember.accountType === 'ptl' ? '#F59E0B' : themePalette.textPrimary} />
+                      <View className="w-10 h-10 rounded-full items-center justify-center" style={getThemeControlStyle(themePalette, !isPFLAccountType(editingMember.accountType))}>
+                        <UserCheck size={18} color={isPFLAccountType(editingMember.accountType) ? '#F59E0B' : themePalette.textPrimary} />
                       </View>
                     </View>
-                    {editingMember.accountType === 'ptl' ? (
+                    {isPFLAccountType(editingMember.accountType) ? (
                       <Pressable
                         onPress={() => {
                           setShowAddModal(false);
@@ -3568,7 +3577,7 @@ export default function ProfileScreen() {
               {filteredMembers.map((member) => {
                 const memberDisplayName = getDisplayName(member);
                 const memberColors = getAccountTypeColor(member.accountType);
-                const isPTL = member.accountType === 'ptl';
+                const isPTL = isPFLAccountType(member.accountType);
                 const isOwner = member.accountType === 'fitflight_creator';
 
                 return (
@@ -4772,7 +4781,7 @@ export default function ProfileScreen() {
             <Text className="text-white text-xl font-bold mb-4">Change My Squadron</Text>
 
             {/* Warning for PFLs */}
-            {user?.accountType === 'ptl' && (
+              {isPFLAccountType(user?.accountType) && (
               <View className="flex-row items-start bg-af-warning/20 border border-af-warning/50 rounded-xl p-4 mb-4">
                 <AlertTriangle size={20} color="#F59E0B" />
                 <View className="flex-1 ml-3">

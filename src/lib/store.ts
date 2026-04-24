@@ -5,7 +5,7 @@ import { buildLeaderboardHistory } from '@/lib/monthlyStats';
 
 // Types
 export type Flight = 'Apex' | 'Bomber' | 'Cryptid' | 'Doom' | 'Ewok' | 'Foxhound' | 'DO' | 'ADF' | 'DET';
-export type AccountType = 'fitflight_creator' | 'ufpm' | 'demo' | 'squadron_leadership' | 'ptl' | 'standard';
+export type AccountType = 'fitflight_creator' | 'ufpm' | 'demo' | 'squadron_leadership' | 'pfl' | 'ptl' | 'standard';
 export type Squadron = 'Hawks' | 'Tigers';
 export type WorkoutType = 'Running' | 'Walking' | 'Cycling' | 'Strength' | 'HIIT' | 'Swimming' | 'Sports' | 'Cardio' | 'Flexibility' | 'Other';
 export type IntegrationService = 'apple_health' | 'strava' | 'garmin';
@@ -253,6 +253,26 @@ export const formatRankDisplay = (rank: string) => {
 
 export const formatFlightDisplay = (flight: string) =>
   flight.trim().replace(/\s+flight$/i, '');
+
+export const normalizeAccountType = (accountType: AccountType | string | null | undefined): AccountType => {
+  if (accountType === 'ptl') {
+    return 'pfl';
+  }
+  if (
+    accountType === 'fitflight_creator' ||
+    accountType === 'ufpm' ||
+    accountType === 'demo' ||
+    accountType === 'squadron_leadership' ||
+    accountType === 'pfl' ||
+    accountType === 'standard'
+  ) {
+    return accountType;
+  }
+  return 'standard';
+};
+
+export const isPFLAccountType = (accountType: AccountType | string | null | undefined) =>
+  normalizeAccountType(accountType) === 'pfl';
 
 // Helper to calculate required PT sessions based on fitness score
 export const calculateRequiredPTSessions = (score: number): number => {
@@ -1082,7 +1102,7 @@ export const useMemberStore = create<MemberState>()(
       approvePTL: (memberId) => set((state) => ({
         members: state.members.map(m =>
           m.id === memberId
-            ? { ...m, accountType: 'ptl' as AccountType, ptlPendingApproval: false }
+            ? { ...m, accountType: 'pfl' as AccountType, ptlPendingApproval: false }
             : m
         ),
       })),
@@ -1111,7 +1131,7 @@ export const useMemberStore = create<MemberState>()(
           accountType: m.id === memberId
             ? 'ufpm' as AccountType
             : m.accountType === 'ufpm'
-              ? 'ptl' as AccountType
+              ? 'pfl' as AccountType
               : m.accountType,
         })),
       })),
@@ -1418,7 +1438,7 @@ export const canManagePTL = (accountType: AccountType): boolean => {
 
 // Helper to check if user can edit PT attendance
 export const canEditAttendance = (accountType: AccountType): boolean => {
-  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'squadron_leadership' || accountType === 'ptl';
+  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'squadron_leadership' || isPFLAccountType(accountType);
 };
 
 // Helper for UFPM-like or PT-program features that Demo can still access
@@ -1427,7 +1447,7 @@ export const canManagePTPrograms = (accountType: AccountType): boolean => {
 };
 
 export const canManagePFRARecords = (accountType: AccountType): boolean => {
-  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'squadron_leadership' || accountType === 'ptl';
+  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'squadron_leadership' || isPFLAccountType(accountType);
 };
 
 // Helper to check if user has admin access

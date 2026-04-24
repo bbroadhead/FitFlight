@@ -292,6 +292,7 @@ export default function MemberProfileScreen() {
       case 'ufpm': return 'UFPM';
       case 'demo': return 'Demo Role';
       case 'squadron_leadership': return 'Squadron Leadership';
+      case 'pfl':
       case 'ptl': return 'PFL';
       default: return 'Member';
     }
@@ -303,6 +304,7 @@ export default function MemberProfileScreen() {
       case 'ufpm': return { bg: 'bg-af-gold/20', text: 'text-af-gold' };
       case 'demo': return { bg: 'bg-emerald-500/20', text: 'text-emerald-300' };
       case 'squadron_leadership': return { bg: 'bg-sky-500/20', text: 'text-sky-300' };
+      case 'pfl':
       case 'ptl': return { bg: 'bg-af-accent/20', text: 'text-af-accent' };
       default: return { bg: 'bg-white/10', text: 'text-af-silver' };
     }

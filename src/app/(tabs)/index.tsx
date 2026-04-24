@@ -408,7 +408,8 @@ export default function HomeScreen() {
     const labels: Record<string, string> = {
       fitflight_creator: 'Owner Dashboard',
       ufpm: 'UFPM Dashboard',
-      ptl: 'PFL Dashboard',
+    pfl: 'PFL Dashboard',
+    ptl: 'PFL Dashboard',
       squadron_leadership: 'Squadron Leadership Dashboard',
       demo: 'Demo Dashboard',
     };
