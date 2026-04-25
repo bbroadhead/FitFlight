@@ -1207,8 +1207,12 @@ function getRosterPayload(
   };
 }
 
-function buildRosterFilter(member: Pick<Member, 'firstName' | 'lastName' | 'rank' | 'flight' | 'email'>) {
+function buildRosterFilter(member: Pick<Member, 'firstName' | 'lastName' | 'rank' | 'flight' | 'email'> & { id?: string }) {
   const params = new URLSearchParams();
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(member.id ?? '')) {
+    params.set('AUTH_USER_ID', `eq.${member.id}`);
+    return params.toString();
+  }
   if (member.email?.trim()) {
     params.set('EMAIL', `eq.${member.email.toLowerCase()}`);
     return params.toString();
@@ -1285,7 +1289,7 @@ function normalizeRosterRow(row: SupabaseRow): Member | null {
     fitnessAssessments: [],
     workouts: [],
     achievements: [],
-    requiredPTSessionsPerWeek: 3,
+    requiredPTSessionsPerWeek: 5,
     isVerified: false,
     ptlPendingApproval: false,
     monthlyPlacements: [],
@@ -2801,6 +2805,19 @@ export async function updateRosterMember(previousMember: Member, nextMember: Mem
       typeof (payload as { message?: unknown }).message === 'string'
         ? (payload as { message: string }).message
         : 'Unable to update member in Supabase roster.';
+    const normalized = message.toLowerCase();
+    const duplicateRosterPrimaryKey =
+      normalized.includes('duplicate key value') && normalized.includes('roster_pkey');
+    if (duplicateRosterPrimaryKey) {
+      await deleteRosterMember(previousMember, accessToken);
+      try {
+        await createRosterMember(nextMember, accessToken);
+        return;
+      } catch (createError) {
+        await createRosterMember(previousMember, accessToken).catch(() => undefined);
+        throw createError;
+      }
+    }
     throw new Error(message);
   }
 }

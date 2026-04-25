@@ -28,11 +28,18 @@ for insert
 to authenticated
 with check (true);
 
+drop policy if exists "admin audit owner or ufpm view" on public.admin_action_audit;
 drop policy if exists "admin audit owner view" on public.admin_action_audit;
-create policy "admin audit owner view"
+create policy "admin audit owner or ufpm view"
 on public.admin_action_audit
 for select
 to authenticated
 using (
   lower(coalesce(auth.jwt() ->> 'email', '')) = 'benjamin.broadhead.2@us.af.mil'
+  or exists (
+    select 1
+    from public.member_roles mr
+    where lower(mr.email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+      and mr.app_role = 'ufpm'
+  )
 );

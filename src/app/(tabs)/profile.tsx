@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, View, Text, Pressable, RefreshControl, ScrollView, TextInput, Modal, Image, Platform, useWindowDimensions } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -65,6 +65,7 @@ import { createOfflineActionId, requestRegisteredSync, runOrQueueOfflineMutation
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'DO', 'ADF', 'DET'];
 const OWNER_EMAIL = 'benjamin.broadhead.2@us.af.mil';
 const PROJECT_COORDINATOR_EMAIL = 'jacob.de_la_rosa@us.af.mil';
+const FITFLIGHT_VERSION = 'v1.0.8';
 const DEVELOPER_NAME = 'SSgt Benjamin Broadhead';
 const DEVELOPER_TITLE = 'Developer';
 const PROJECT_COORDINATOR_NAME = 'SSgt Jacob De La Rosa';
@@ -222,6 +223,11 @@ function getScheduledSessionScopeLabel(session: { scope: 'squadron' | 'flight' |
   return session.flights.join(', ');
 }
 
+function isVisibleScheduledSession(date: string, time: string) {
+  const startTime = new Date(`${date}T${time}:00`).getTime();
+  return startTime + 60 * 60 * 1000 >= Date.now();
+}
+
 const getWebSafeFadeInDown = (delay: number) =>
   Platform.OS === 'web' ? undefined : FadeInDown.delay(delay).springify();
 
@@ -315,6 +321,8 @@ export default function ProfileScreen() {
   const [newMemberSquadronLeadership, setNewMemberSquadronLeadership] = useState(false);
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
   const [memberActionError, setMemberActionError] = useState('');
+  const [pflActionState, setPflActionState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const pflActionResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [memberSearchQuery, setMemberSearchQuery] = useState('');
   const [ufpmSearchQuery, setUFPMSearchQuery] = useState('');
   const [selectedUFPMMemberId, setSelectedUFPMMemberId] = useState<string | null>(null);
@@ -475,10 +483,30 @@ export default function ProfileScreen() {
   const canReviewManualWorkouts = canManagePTPrograms(userAccountType);
   const canResetUserPasswords = userAccountType === 'fitflight_creator' || userAccountType === 'ufpm' || userAccountType === 'demo';
   const isOwnerUser = userAccountType === 'fitflight_creator' || user?.email?.toLowerCase() === OWNER_EMAIL;
+  const canViewAdminAuditTrail = isOwnerUser || userAccountType === 'ufpm';
   const isOwnerReviewer = user?.email?.toLowerCase() === OWNER_EMAIL;
   const canViewSupportInbox = user?.email
     ? supportContacts.some((contact) => contact.email.toLowerCase() === user.email.toLowerCase())
     : false;
+
+  useEffect(() => {
+    return () => {
+      if (pflActionResetRef.current) {
+        clearTimeout(pflActionResetRef.current);
+      }
+    };
+  }, []);
+
+  const setTransientPflActionState = useCallback((state: 'saved' | 'error') => {
+    if (pflActionResetRef.current) {
+      clearTimeout(pflActionResetRef.current);
+    }
+    setPflActionState(state);
+    pflActionResetRef.current = setTimeout(() => {
+      setPflActionState('idle');
+      pflActionResetRef.current = null;
+    }, 2200);
+  }, []);
 
   const unreadNotifications = appNotifications.filter(
     (notification) =>
@@ -601,7 +629,7 @@ export default function ProfileScreen() {
           return false;
         }
 
-        if (new Date(`${session.date}T${session.time}:00`).getTime() < Date.now()) {
+        if (!isVisibleScheduledSession(session.date, session.time)) {
           return false;
         }
 
@@ -807,7 +835,7 @@ export default function ProfileScreen() {
   };
 
   const loadAuditTrail = async () => {
-    if (!isOwnerUser || !accessToken) {
+    if (!canViewAdminAuditTrail || !accessToken) {
       setAuditTrailEntries([]);
       return;
     }
@@ -833,7 +861,7 @@ export default function ProfileScreen() {
         loadManualWorkoutSubmissions(),
         loadAppNotifications(),
       ];
-      if (showAuditTrailModal && isOwnerUser) {
+      if (showAuditTrailModal && canViewAdminAuditTrail) {
         refreshTasks.push(loadAuditTrail());
       }
       await Promise.all(refreshTasks);
@@ -903,12 +931,12 @@ export default function ProfileScreen() {
   }, [accessToken, isFocused, user?.email]);
 
   useEffect(() => {
-    if (!showAuditTrailModal || !isOwnerUser || !accessToken) {
+    if (!showAuditTrailModal || !canViewAdminAuditTrail || !accessToken) {
       return;
     }
 
     void loadAuditTrail();
-  }, [accessToken, isOwnerUser, showAuditTrailModal]);
+  }, [accessToken, canViewAdminAuditTrail, showAuditTrailModal]);
 
   useEffect(() => {
     if (!activeSupportThreadId || !showDeveloperMessageModal && !showSupportInboxModal) {
@@ -992,7 +1020,7 @@ export default function ProfileScreen() {
         fitnessAssessments: previousMember?.fitnessAssessments ?? [],
         workouts: previousMember?.workouts ?? [],
         achievements: previousMember?.achievements ?? [],
-        requiredPTSessionsPerWeek: previousMember?.requiredPTSessionsPerWeek ?? 3,
+        requiredPTSessionsPerWeek: previousMember?.requiredPTSessionsPerWeek ?? 5,
         isVerified: previousMember?.isVerified ?? false,
         ptlPendingApproval: previousMember?.ptlPendingApproval ?? false,
         monthlyPlacements: previousMember?.monthlyPlacements ?? [],
@@ -1163,6 +1191,10 @@ export default function ProfileScreen() {
   };
 
   const resetForm = () => {
+    if (pflActionResetRef.current) {
+      clearTimeout(pflActionResetRef.current);
+      pflActionResetRef.current = null;
+    }
     setNewMemberFirstName('');
     setNewMemberLastName('');
     setNewMemberRank('A1C');
@@ -1171,6 +1203,7 @@ export default function ProfileScreen() {
     setNewMemberSquadronLeadership(false);
     setEditingMemberId(null);
     setMemberActionError('');
+    setPflActionState('idle');
   };
 
   const openAddMemberModal = () => {
@@ -1181,6 +1214,10 @@ export default function ProfileScreen() {
   };
 
   const openEditMemberModal = (member: Member) => {
+    if (pflActionResetRef.current) {
+      clearTimeout(pflActionResetRef.current);
+      pflActionResetRef.current = null;
+    }
     setShowManageModal(false);
     setEditingMemberId(member.id);
     setNewMemberFirstName(member.firstName);
@@ -1190,6 +1227,7 @@ export default function ProfileScreen() {
     setNewMemberEmail(member.email);
     setNewMemberSquadronLeadership(member.accountType === 'squadron_leadership');
     setMemberActionError('');
+    setPflActionState('idle');
     setShowAddModal(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
@@ -1329,15 +1367,15 @@ export default function ProfileScreen() {
     void run();
   };
 
-  const handleRevokePTL = (memberId: string) => {
-    const run = async () => {
-      const member = members.find((candidate) => candidate.id === memberId);
-      if (!member || !user || !accessToken) {
-        return;
-      }
+  const handleRevokePTL = async (memberId: string) => {
+    const member = members.find((candidate) => candidate.id === memberId);
+    if (!member || !user || !accessToken) {
+      return false;
+    }
 
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-      await updateMemberRole(member.email, 'standard', accessToken).catch(() => undefined);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    try {
+      await updateMemberRole(member.email, 'standard', accessToken);
       revokePTL(memberId);
       await logAdminAction({
         actionType: 'revoke_pfl',
@@ -1357,20 +1395,22 @@ export default function ProfileScreen() {
         actionTargetId: member.id,
         accessToken,
       }).catch(() => undefined);
-    };
-
-    void run();
+      return true;
+    } catch (error) {
+      setMemberActionError(error instanceof Error ? error.message : 'Unable to revoke PFL access right now.');
+      return false;
+    }
   };
 
-  const handleAssignPTL = (memberId: string) => {
-    const run = async () => {
-      const member = members.find((candidate) => candidate.id === memberId);
-      if (!member || !user || !accessToken) {
-        return;
-      }
+  const handleAssignPTL = async (memberId: string) => {
+    const member = members.find((candidate) => candidate.id === memberId);
+    if (!member || !user || !accessToken) {
+      return false;
+    }
 
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        await updateMemberRole(member.email, 'pfl', accessToken).catch(() => undefined);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    try {
+      await updateMemberRole(member.email, 'pfl', accessToken);
       approvePTL(memberId);
       await logAdminAction({
         actionType: 'assign_pfl',
@@ -1394,15 +1434,30 @@ export default function ProfileScreen() {
         },
         accessToken,
       }).catch(() => undefined);
-    };
-
-    void run();
+      return true;
+    } catch (error) {
+      setMemberActionError(error instanceof Error ? error.message : 'Unable to assign PFL access right now.');
+      return false;
+    }
   };
 
   const handleSetUFPM = (memberId: string) => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setUFPM(memberId);
   };
+
+  const handlePflRoleAction = useCallback(async (memberId: string, action: 'assign' | 'revoke') => {
+    setMemberActionError('');
+    if (pflActionResetRef.current) {
+      clearTimeout(pflActionResetRef.current);
+      pflActionResetRef.current = null;
+    }
+    setPflActionState('saving');
+    const succeeded = action === 'assign'
+      ? await handleAssignPTL(memberId)
+      : await handleRevokePTL(memberId);
+    setTransientPflActionState(succeeded ? 'saved' : 'error');
+  }, [setTransientPflActionState, handleAssignPTL, handleRevokePTL]);
 
   const closeAddMemberModalToManage = () => {
     setShowAddModal(false);
@@ -3037,7 +3092,7 @@ export default function ProfileScreen() {
                 </Pressable>
               )}
 
-              {isOwnerUser && (
+              {canViewAdminAuditTrail && (
                 <Pressable
                   onPress={() => {
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -3048,7 +3103,7 @@ export default function ProfileScreen() {
                   <FileText size={24} color="#C0C0C0" />
                   <View className="ml-3 flex-1">
                     <Text className="text-white font-semibold">Admin Action Audit Trail</Text>
-                    <Text className="text-af-silver text-xs">Owner-only log of member and role management actions</Text>
+                    <Text className="text-af-silver text-xs">Log of member and role management actions</Text>
                   </View>
                 </Pressable>
               )}
@@ -3227,13 +3282,18 @@ export default function ProfileScreen() {
             className="mx-6 mt-6"
           >
             {isAuthenticated ? (
-              <Pressable
-                onPress={handleLogout}
-                className="flex-row items-center justify-center bg-af-danger/20 border border-af-danger/50 rounded-xl p-4"
-              >
-                <LogOut size={20} color="#EF4444" />
-                <Text className="text-af-danger font-semibold ml-2">Sign Out</Text>
-              </Pressable>
+              <>
+                <Pressable
+                  onPress={handleLogout}
+                  className="flex-row items-center justify-center bg-af-danger/20 border border-af-danger/50 rounded-xl p-4"
+                >
+                  <LogOut size={20} color="#EF4444" />
+                  <Text className="text-af-danger font-semibold ml-2">Sign Out</Text>
+                </Pressable>
+                <Text className="text-center text-af-silver text-xs mt-3 opacity-80">
+                  FitFlight {FITFLIGHT_VERSION}
+                </Text>
+              </>
             ) : (
               <Pressable
                 onPress={() => router.replace('/login')}
@@ -3419,7 +3479,7 @@ export default function ProfileScreen() {
                     <View className="flex-row items-start justify-between">
                       <View className="flex-1 pr-3">
                         <Text style={[getThemeBodyStyle(themePalette, 14, themePalette.textPrimary), { fontWeight: '700' }]}>
-                          {isPFLAccountType(editingMember.accountType) ? 'PFL Access Active' : 'PFL Access Available'}
+                          {isPFLAccountType(editingMember.accountType) ? 'PFL Access' : 'PFL Access Available'}
                         </Text>
                         <Text style={getThemeBodyStyle(themePalette, 12, themePalette.textSecondary)} className="mt-1">
                           {isPFLAccountType(editingMember.accountType)
@@ -3433,27 +3493,43 @@ export default function ProfileScreen() {
                     </View>
                     {isPFLAccountType(editingMember.accountType) ? (
                       <Pressable
-                        onPress={() => {
-                          setShowAddModal(false);
-                          resetForm();
-                          handleRevokePTL(editingMember.id);
-                        }}
+                        onPress={() => void handlePflRoleAction(editingMember.id, 'revoke')}
+                        disabled={pflActionState === 'saving'}
                         className="self-start mt-4 px-4 py-3 rounded-xl"
                         style={getThemeControlStyle(themePalette)}
                       >
-                        <Text style={getThemeBodyStyle(themePalette, 13, '#F59E0B')}>Revoke PFL</Text>
+                        <View className="flex-row items-center">
+                          {pflActionState === 'saving' ? (
+                            <Activity size={14} color="#F59E0B" />
+                          ) : pflActionState === 'saved' ? (
+                            <Check size={14} color="#22C55E" />
+                          ) : pflActionState === 'error' ? (
+                            <AlertTriangle size={14} color="#EF4444" />
+                          ) : null}
+                          <Text style={getThemeBodyStyle(themePalette, 13, pflActionState === 'error' ? '#EF4444' : pflActionState === 'saved' ? '#22C55E' : '#F59E0B')} className={pflActionState !== 'idle' ? 'ml-2' : ''}>
+                            {pflActionState === 'saving' ? 'Saving' : pflActionState === 'saved' ? 'Saved' : pflActionState === 'error' ? 'ERROR' : 'Revoke PFL'}
+                          </Text>
+                        </View>
                       </Pressable>
                     ) : (
                       <Pressable
-                        onPress={() => {
-                          setShowAddModal(false);
-                          resetForm();
-                          handleAssignPTL(editingMember.id);
-                        }}
+                        onPress={() => void handlePflRoleAction(editingMember.id, 'assign')}
+                        disabled={pflActionState === 'saving'}
                         className="self-start mt-4 px-4 py-3 rounded-xl"
                         style={getThemeControlStyle(themePalette, true)}
                       >
-                        <Text style={getThemeBodyStyle(themePalette, 13, themePalette.textPrimary)}>Assign PFL</Text>
+                        <View className="flex-row items-center">
+                          {pflActionState === 'saving' ? (
+                            <Activity size={14} color={themePalette.textPrimary} />
+                          ) : pflActionState === 'saved' ? (
+                            <Check size={14} color="#22C55E" />
+                          ) : pflActionState === 'error' ? (
+                            <AlertTriangle size={14} color="#EF4444" />
+                          ) : null}
+                          <Text style={getThemeBodyStyle(themePalette, 13, pflActionState === 'error' ? '#EF4444' : pflActionState === 'saved' ? '#22C55E' : themePalette.textPrimary)} className={pflActionState !== 'idle' ? 'ml-2' : ''}>
+                            {pflActionState === 'saving' ? 'Saving' : pflActionState === 'saved' ? 'Saved' : pflActionState === 'error' ? 'ERROR' : 'Assign PFL'}
+                          </Text>
+                        </View>
                       </Pressable>
                     )}
                   </View>
@@ -4456,7 +4532,7 @@ export default function ProfileScreen() {
                 <View className="flex-1 pr-4">
                   <Text style={getThemeHeadingStyle(themePalette, 22)}>Admin Action Audit Trail</Text>
                   <Text style={[getThemeBodyStyle(themePalette, 14, themePalette.textSecondary), { marginTop: 4 }]}>
-                    Owner-only history of roster, role, and security-related admin changes.
+                    History of roster, role, and security-related admin changes.
                   </Text>
                 </View>
                 <Pressable

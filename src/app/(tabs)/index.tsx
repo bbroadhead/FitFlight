@@ -6,7 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { NavigationProp, ParamListBase, useNavigation } from '@react-navigation/native';
 import Animated, { FadeInDown, LinearTransition } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import { Activity, ArrowDown, ArrowRight, ArrowUp, Calendar, ChevronDown, ChevronUp, Crown, Lock, LockOpen, Medal, Pencil, Shield, Trophy, Users } from 'lucide-react-native';
+import { Activity, ArrowDown, ArrowRight, ArrowUp, Calendar, ChevronDown, ChevronUp, Crown, Lock, LockOpen, Medal, Pencil, Shield, Trophy, Users, X } from 'lucide-react-native';
 import { LeaderboardContent } from '@/components/LeaderboardContent';
 import { PageContainer } from '@/components/PageContainer';
 import { ThemeBackdrop } from '@/components/ThemeBackdrop';
@@ -18,7 +18,7 @@ import { useErrorLogScreenContext } from '@/lib/errorLog';
 import { getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
 import { fetchDashboardLayoutPreference, saveDashboardLayoutPreference } from '@/lib/supabaseData';
 import { canManagePFRARecords, canManagePTPrograms, getShortDisplayName, useAuthStore, useMemberStore } from '@/lib/store';
-import { getThemeBodyStyle, getThemeCardStyle, getThemeHeadingStyle, getThemeIconWellStyle, getThemeLabelStyle, useAppTheme } from '@/lib/theme';
+import { getThemeBodyStyle, getThemeCardStyle, getThemeControlStyle, getThemeHeadingStyle, getThemeIconWellStyle, getThemeLabelStyle, useAppTheme } from '@/lib/theme';
 
 function getCompetitionPosition(scores: number[], index: number): number {
   if (index <= 0) return 1;
@@ -38,6 +38,11 @@ function getOrdinalLabel(value: number): string {
     default:
       return `${value}th`;
   }
+}
+
+function isVisibleScheduledSession(date: string, time: string) {
+  const startTime = new Date(`${date}T${time}:00`).getTime();
+  return startTime + 60 * 60 * 1000 >= Date.now();
 }
 
 type DashboardCardId =
@@ -251,8 +256,11 @@ export default function HomeScreen() {
 
   const [showingLeaderboard, setShowingLeaderboard] = useState(false);
   const [showInstallHelp, setShowInstallHelp] = useState(false);
+  const [selectedRoleHighlightId, setSelectedRoleHighlightId] = useState<string | null>(null);
   const homeOverlayLabel = showingLeaderboard
     ? 'Leaderboard'
+    : selectedRoleHighlightId
+      ? 'Role Dashboard Detail'
     : showInstallHelp
       ? 'Install Help'
       : null;
@@ -334,7 +342,7 @@ export default function HomeScreen() {
   const upcomingSessions = useMemo(
     () =>
       scheduledSessions
-        .filter((s) => new Date(`${s.date}T${s.time}:00`).getTime() >= Date.now())
+        .filter((s) => isVisibleScheduledSession(s.date, s.time))
         .filter(
           (s) =>
             s.scope === 'squadron' ||
@@ -368,7 +376,7 @@ export default function HomeScreen() {
       cards.push({
         id: 'sessions',
         title: 'Upcoming PT',
-        value: String(scheduledSessions.filter((s) => new Date(`${s.date}T${s.time}:00`).getTime() >= Date.now()).length),
+        value: String(scheduledSessions.filter((s) => isVisibleScheduledSession(s.date, s.time)).length),
         note: 'Sessions still on the calendar',
         icon: Calendar,
         accent: '#4A90D9',
@@ -415,6 +423,73 @@ export default function HomeScreen() {
     };
     return labels[userAccountType] ?? 'Dashboard';
   }, [userAccountType]);
+  const roleHighlightDetail = useMemo(() => {
+    if (!selectedRoleHighlightId) {
+      return null;
+    }
+
+    const baseCard = roleHighlights.find((card) => card.id === selectedRoleHighlightId);
+    if (!baseCard) {
+      return null;
+    }
+
+    if (selectedRoleHighlightId === 'sessions') {
+      return {
+        ...baseCard,
+        lines: upcomingSessions.length === 0
+          ? ['No upcoming scheduled PT sessions right now.']
+          : upcomingSessions.map((session) => `${session.date} • ${session.time} • ${session.description}`),
+      };
+    }
+
+    if (selectedRoleHighlightId === 'accountability') {
+      const belowTargetMembers = squadronMembers
+        .filter((member) => (currentMonthSummaries.get(member.id)?.workoutCount ?? 0) < 5)
+        .sort((left, right) => left.lastName.localeCompare(right.lastName) || left.firstName.localeCompare(right.firstName))
+        .map((member) => `${getShortDisplayName(member)} • ${currentMonthSummaries.get(member.id)?.workoutCount ?? 0} workouts`);
+
+      return {
+        ...baseCard,
+        lines: belowTargetMembers.length === 0 ? ['Everyone is currently at or above 5 workouts this month.'] : belowTargetMembers,
+      };
+    }
+
+    if (selectedRoleHighlightId === 'pfra') {
+      const recentAssessments = squadronMembers
+        .flatMap((member) => member.fitnessAssessments.map((assessment) => ({
+          id: assessment.id,
+          label: `${getShortDisplayName(member)} • ${(assessment.recordType ?? 'self').charAt(0).toUpperCase()}${(assessment.recordType ?? 'self').slice(1)} • ${assessment.overallScore.toFixed(1)}`,
+          date: assessment.date,
+        })))
+        .sort((left, right) => right.date.localeCompare(left.date))
+        .slice(0, 8)
+        .map((entry) => `${entry.date} • ${entry.label}`);
+
+      return {
+        ...baseCard,
+        lines: recentAssessments.length === 0 ? ['No PFRA records are attached to squadron members yet.'] : recentAssessments,
+      };
+    }
+
+    if (selectedRoleHighlightId === 'owner') {
+      const flightCounts = squadronMembers.reduce<Record<string, number>>((acc, member) => {
+        acc[member.flight] = (acc[member.flight] ?? 0) + 1;
+        return acc;
+      }, {});
+      const lines = Object.entries(flightCounts)
+        .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+        .map(([flight, count]) => `${flight} • ${count} members`);
+      return {
+        ...baseCard,
+        lines: lines.length === 0 ? ['No roster members are currently synced.'] : lines,
+      };
+    }
+
+    return {
+      ...baseCard,
+      lines: [baseCard.note],
+    };
+  }, [currentMonthSummaries, roleHighlights, selectedRoleHighlightId, squadronMembers, upcomingSessions]);
 
   const availableCardIds = useMemo(
     () =>
@@ -1016,16 +1091,27 @@ export default function HomeScreen() {
           >
             {expandedDashboardCardIds.includes('role-dashboard') ? (
               roleHighlights.map((card) => (
-                <View key={card.id} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3" style={{ marginBottom: 10 }}>
+                <Pressable
+                  key={card.id}
+                  onPress={() => {
+                    Haptics.selectionAsync();
+                    setSelectedRoleHighlightId(card.id);
+                  }}
+                  className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 active:opacity-90"
+                  style={{ marginBottom: 10 }}
+                >
                   <View className="flex-row items-center justify-between">
                     <View className="flex-row items-center flex-1 pr-3">
                       <card.icon size={18} color={card.accent} />
                       <Text style={[getThemeBodyStyle(theme, 14), { fontWeight: '600', marginLeft: 10 }]}>{card.title}</Text>
                     </View>
-                    <Text style={getThemeHeadingStyle(theme, 18)}>{card.value}</Text>
+                    <View className="items-end">
+                      <Text style={getThemeHeadingStyle(theme, 18)}>{card.value}</Text>
+                      <Text style={getThemeBodyStyle(theme, 11, theme.accent)}>Open</Text>
+                    </View>
                   </View>
                   <Text style={[getThemeBodyStyle(theme, 12, theme.textMuted), { marginTop: 6 }]}>{card.note}</Text>
-                </View>
+                </Pressable>
               ))
               ) : (
                 <Text style={getThemeBodyStyle(theme, 14, theme.textSecondary)}>
@@ -1070,6 +1156,46 @@ export default function HomeScreen() {
                 <Text className="text-white font-semibold">Got it</Text>
               </Pressable>
             </View>
+          </View>
+        </Modal>
+        <Modal visible={!!roleHighlightDetail} transparent animationType="fade" onRequestClose={() => setSelectedRoleHighlightId(null)}>
+          <View className="flex-1 justify-center px-6" style={{ backgroundColor: 'rgba(0, 0, 0, 0.72)' }}>
+            <ThemeChrome theme={theme} variant="feature" fill blurIntensity={30} style={{ maxHeight: '80%', borderRadius: 24 }}>
+              <View className="flex-1 p-6">
+                <View className="flex-row items-start justify-between">
+                  <View className="flex-1 pr-4">
+                    <Text style={getThemeHeadingStyle(theme, 22)}>{roleHighlightDetail?.title ?? 'Role Detail'}</Text>
+                    <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>
+                      {roleHighlightDetail?.note ?? 'Role-specific detail'}
+                    </Text>
+                  </View>
+                  <Pressable
+                    onPress={() => setSelectedRoleHighlightId(null)}
+                    className="h-9 w-9 items-center justify-center rounded-full"
+                    style={getThemeControlStyle(theme)}
+                  >
+                    <X size={18} color={theme.textSecondary} />
+                  </Pressable>
+                </View>
+
+                <ThemeChrome theme={theme} variant="alt" style={{ marginTop: 16 }}>
+                  <View className="p-4">
+                    <Text style={getThemeBodyStyle(theme, 12, theme.textMuted)}>Current Value</Text>
+                    <Text style={[getThemeHeadingStyle(theme, 28), { marginTop: 6 }]}>{roleHighlightDetail?.value ?? '--'}</Text>
+                  </View>
+                </ThemeChrome>
+
+                <ScrollView style={{ flex: 1, minHeight: 0, marginTop: 16 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 12 }}>
+                  {(roleHighlightDetail?.lines ?? []).map((line, index) => (
+                    <ThemeChrome key={`${roleHighlightDetail?.id ?? 'detail'}-${index}`} theme={theme} variant="alt" style={{ marginBottom: 10 }}>
+                      <View className="p-4">
+                        <Text style={getThemeBodyStyle(theme, 14, theme.textPrimary)}>{line}</Text>
+                      </View>
+                    </ThemeChrome>
+                  ))}
+                </ScrollView>
+              </View>
+            </ThemeChrome>
           </View>
         </Modal>
         <ScrollView

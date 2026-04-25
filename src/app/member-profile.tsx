@@ -666,7 +666,7 @@ export default function MemberProfileScreen() {
                   </View>
                   {latestAssessment.components.waist && (
                     <View className="flex-row items-center justify-between">
-                      <Text className="text-af-silver">Waist</Text>
+                      <Text className="text-af-silver">WHtR</Text>
                       <Text className="text-white font-semibold">
                         {latestAssessment.components.waist.exempt
                           ? 'Exempt'
@@ -676,11 +676,6 @@ export default function MemberProfileScreen() {
                   )}
                 </View>
 
-                {/* PT Requirement */}
-                <View className="mt-4 pt-4 border-t border-white/10">
-                  <Text className="text-af-silver text-sm">Required PT Sessions/Week</Text>
-                  <Text className="text-white font-bold text-lg">{member.requiredPTSessionsPerWeek} sessions</Text>
-                </View>
               </View>
             ) : canViewFitnessAssessments ? (
               <View className="bg-white/5 rounded-2xl border border-white/10 p-6 items-center">
@@ -898,7 +893,7 @@ export default function MemberProfileScreen() {
                           </View>
                           {assessment.components.waist ? (
                             <View className="flex-row justify-between">
-                              <Text className="text-af-silver text-sm">Waist</Text>
+                              <Text className="text-af-silver text-sm">WHtR</Text>
                               <Text className="text-white text-sm">
                                 {assessment.components.waist.exempt ? 'Exempt' : `${assessment.components.waist.score} pts (${assessment.components.waist.inches}")`}
                               </Text>

@@ -274,12 +274,10 @@ export const normalizeAccountType = (accountType: AccountType | string | null | 
 export const isPFLAccountType = (accountType: AccountType | string | null | undefined) =>
   normalizeAccountType(accountType) === 'pfl';
 
-// Helper to calculate required PT sessions based on fitness score
+// Legacy helper kept for compatibility. Current policy is a flat 5 sessions/week.
 export const calculateRequiredPTSessions = (score: number): number => {
-  if (score >= 90) return 1;
-  if (score >= 80) return 2;
-  if (score >= 75) return 3;
-  return 4; // <75
+  void score;
+  return 5;
 };
 
 // All available achievements
@@ -423,7 +421,7 @@ export const getAutomaticAchievementIds = (
   });
 
   const completedWeeks = Array.from(attendanceByWeek.entries())
-    .filter(([, count]) => count >= member.requiredPTSessionsPerWeek)
+    .filter(([, count]) => count >= WEEKLY_WARRIOR_SESSION_TARGET)
     .map(([weekKey]) => weekKey);
   const weeklyWarriorWeeks = Array.from(attendanceByWeek.entries())
     .filter(([, count]) => count >= WEEKLY_WARRIOR_SESSION_TARGET)
@@ -571,7 +569,7 @@ const OWNER_ACCOUNT: Member = {
   fitnessAssessments: [],
   workouts: [],
   achievements: [],
-  requiredPTSessionsPerWeek: 3,
+  requiredPTSessionsPerWeek: 5,
   isVerified: true,
   ptlPendingApproval: false,
   monthlyPlacements: [],
@@ -917,7 +915,7 @@ export const useMemberStore = create<MemberState>()(
       ptSessions: [],
       scheduledSessions: [],
       sharedWorkouts: [],
-      defaultPTSessionsPerWeek: 3,
+      defaultPTSessionsPerWeek: 5,
       ufpmId: null,
       recentAchievementId: null,
 
@@ -1141,13 +1139,12 @@ export const useMemberStore = create<MemberState>()(
 
       // Fitness Assessment actions
       addFitnessAssessment: (memberId, assessment) => set((state) => {
-        const requiredSessions = calculateRequiredPTSessions(assessment.overallScore);
         const nextMembers = state.members.map(m =>
           m.id === memberId
             ? {
                 ...m,
                 fitnessAssessments: [...m.fitnessAssessments, assessment],
-                requiredPTSessionsPerWeek: requiredSessions,
+                requiredPTSessionsPerWeek: 5,
               }
             : m
         );

@@ -24,7 +24,7 @@ export function TopStatusBar({
   const clearEntries = useErrorLogStore((state) => state.clearEntries);
   const [showErrorLog, setShowErrorLog] = useState(false);
   const squadronLabel = (subtitle ?? 'FitFlight').replace(/\s+Squadron$/i, '');
-  const canViewErrorLog = user?.accountType === 'fitflight_creator';
+  const canViewErrorLog = user?.accountType === 'fitflight_creator' || user?.accountType === 'ufpm';
   const reversedErrorEntries = useMemo(() => [...errorEntries].reverse(), [errorEntries]);
 
   const statusContent = (() => {

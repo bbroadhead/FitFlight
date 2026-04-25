@@ -342,7 +342,7 @@ export default function ImportRosterScreen() {
         fitnessAssessments: [],
         workouts: [],
         achievements: [],
-        requiredPTSessionsPerWeek: 3,
+        requiredPTSessionsPerWeek: 5,
         isVerified: false,
         ptlPendingApproval: false,
         monthlyPlacements: [],

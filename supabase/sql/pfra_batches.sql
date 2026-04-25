@@ -84,10 +84,10 @@ on public.pfra_batches
 for all
 to authenticated
 using (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'pfl', 'ptl')
 )
 with check (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'pfl', 'ptl')
 );
 
 drop policy if exists "pfra_batch_members_select_authenticated" on public.pfra_batch_members;
@@ -103,10 +103,10 @@ on public.pfra_batch_members
 for all
 to authenticated
 using (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'pfl', 'ptl')
 )
 with check (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'pfl', 'ptl')
 );
 
 drop function if exists public.bulk_save_pfra_batch(text, text, text, date, text[], text, text, jsonb);
@@ -133,7 +133,7 @@ declare
   v_saved_count integer;
   v_completed_count integer;
 begin
-  if v_role not in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl') then
+  if v_role not in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'pfl', 'ptl') then
     raise exception 'You do not have permission to bulk save PFRA results.';
   end if;
 

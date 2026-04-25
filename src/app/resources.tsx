@@ -4,10 +4,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
-import * as WebBrowser from 'expo-web-browser';
 import { Asset } from 'expo-asset';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { ArrowLeft, ExternalLink, FileText } from 'lucide-react-native';
+import { WebView } from 'react-native-webview';
 import { PageContainer } from '@/components/PageContainer';
 import { ThemeBackdrop } from '@/components/ThemeBackdrop';
 import { ThemeChrome } from '@/components/ThemeChrome';
@@ -68,16 +68,9 @@ export default function ResourcesScreen() {
         throw new Error('Missing document URI');
       }
 
-      if (Platform.OS === 'web') {
-        setActiveWebDocument({
-          title: resource.title,
-          uri,
-        });
-        return;
-      }
-
-      await WebBrowser.openBrowserAsync(uri, {
-        presentationStyle: WebBrowser.WebBrowserPresentationStyle.FULL_SCREEN,
+      setActiveWebDocument({
+        title: resource.title,
+        uri,
       });
     } catch (error) {
       Alert.alert(
@@ -94,7 +87,7 @@ export default function ResourcesScreen() {
       <ThemeBackdrop />
 
       <SafeAreaView edges={['top']} className="flex-1">
-        {Platform.OS === 'web' && activeWebDocument ? (
+        {activeWebDocument ? (
           <View className="flex-1 px-4 pb-4">
             <View className="flex-row items-center justify-between px-2 pt-4 pb-3">
               <Pressable
@@ -107,19 +100,32 @@ export default function ResourcesScreen() {
               </Pressable>
                     <Text className="font-semibold ml-4 flex-1" style={{ color: theme.textPrimary }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72}>{activeWebDocument.title}</Text>
             </View>
-            {/* @ts-ignore web-only iframe */}
-            <iframe
-              src={activeWebDocument.uri}
-              title={activeWebDocument.title}
-              style={{
-                flex: 1,
-                width: '100%',
-                height: '100%',
-                border: '1px solid rgba(255,255,255,0.12)',
-                borderRadius: 20,
-                backgroundColor: theme.background,
-              }}
-            />
+            {Platform.OS === 'web' ? (
+              // @ts-ignore web-only iframe
+              <iframe
+                src={activeWebDocument.uri}
+                title={activeWebDocument.title}
+                style={{
+                  flex: 1,
+                  width: '100%',
+                  height: '100%',
+                  border: '1px solid rgba(255,255,255,0.12)',
+                  borderRadius: 20,
+                  backgroundColor: theme.background,
+                }}
+              />
+            ) : (
+              <View style={{ flex: 1, overflow: 'hidden', borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)' }}>
+                <WebView
+                  source={{ uri: activeWebDocument.uri }}
+                  style={{ flex: 1, backgroundColor: theme.background }}
+                  allowsBackForwardNavigationGestures
+                  scalesPageToFit
+                  setBuiltInZoomControls
+                  setDisplayZoomControls={false}
+                />
+              </View>
+            )}
           </View>
         ) : (
         <ScrollView
@@ -156,7 +162,7 @@ export default function ResourcesScreen() {
             <ThemeChrome theme={theme} variant="feature">
               <View className="p-4">
                 <Text style={[getThemeBodyStyle(theme, 11, theme.textMuted), { textTransform: 'uppercase', marginBottom: 8 }]}>Official Documents</Text>
-                <Text style={getThemeBodyStyle(theme, 14)}>These PDFs open in your browser or device viewer.</Text>
+                <Text style={getThemeBodyStyle(theme, 14)}>These PDFs open in the in-app document viewer with full-page scrolling.</Text>
               </View>
             </ThemeChrome>
           </Animated.View>

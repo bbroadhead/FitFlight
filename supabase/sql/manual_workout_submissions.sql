@@ -46,7 +46,7 @@ to authenticated
 using (
   member_id = coalesce(auth.uid()::text, '')
   or lower(member_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
-  or public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl')
+  or public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'pfl', 'ptl')
 );
 
 drop policy if exists "manual_workout_submissions_insert_self" on public.manual_workout_submissions;
@@ -67,10 +67,10 @@ to authenticated
 using (
   member_id = coalesce(auth.uid()::text, '')
   or lower(member_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
-  or public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl')
+  or public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'pfl', 'ptl')
 )
 with check (
   member_id = coalesce(auth.uid()::text, '')
   or lower(member_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
-  or public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl')
+  or public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'pfl', 'ptl')
 );

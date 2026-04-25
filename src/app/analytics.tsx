@@ -12,7 +12,7 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import Svg, { Circle } from 'react-native-svg';
 import { format, startOfWeek, addDays } from 'date-fns';
-import { useMemberStore, useAuthStore, formatFlightDisplay, getDisplayName, type Flight, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
+import { useMemberStore, useAuthStore, formatFlightDisplay, getDisplayName, type Flight, type PFRARecordType, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { fetchPFRABatchMembers, fetchPFRABatches, fetchWeeklyAttendanceExcusals, type PFRABatchMemberEntry, type PFRABatchSummary } from '@/lib/supabaseData';
@@ -23,6 +23,7 @@ import { PageContainer } from '@/components/PageContainer';
 import { ThemeBackdrop } from '@/components/ThemeBackdrop';
 import { ThemeChrome } from '@/components/ThemeChrome';
 import { getThemeBodyStyle, getThemeControlStyle, getThemeHeadingStyle } from '@/lib/theme';
+import { PFRA_MINIMUM_COMPONENT_POINTS } from '@/lib/pfraScoring2026';
 
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'DO', 'ADF', 'DET'];
 const WEEKLY_ATTENDANCE_TARGET = 5;
@@ -57,14 +58,20 @@ async function downloadWebFile(filename: string, blob: Blob) {
 }
 
 type OverviewCardKey = 'members' | 'workouts' | 'sessions' | 'pfra';
-type PFRALeadershipFilter = 'all' | 'mock' | 'diagnostic' | 'official';
+type PFRALeadershipFilter = 'all' | 'self' | 'mock' | 'diagnostic' | 'official';
 
 function formatPFRALabel(value: PFRALeadershipFilter) {
-  return value === 'all' ? 'All' : value.charAt(0).toUpperCase() + value.slice(1);
+  if (value === 'all') return 'All';
+  if (value === 'self') return 'Self';
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function getPFRALeadershipFilters() {
-  return ['all', 'mock', 'diagnostic', 'official'] as const;
+  return ['all', 'self', 'mock', 'diagnostic', 'official'] as const;
+}
+
+function getPFRARecordMethodLabel(recordType?: PFRARecordType | null) {
+  return recordType === 'self' ? 'Self-service submission' : 'Leadership entry';
 }
 
 function didPassAssessment(assessment: { overallScore: number; components: {
@@ -75,10 +82,60 @@ function didPassAssessment(assessment: { overallScore: number; components: {
 } }) {
   return (
     assessment.overallScore >= 75 &&
-    (assessment.components.cardio.exempt || assessment.components.cardio.score >= 20) &&
-    (assessment.components.pushups.exempt || assessment.components.pushups.score >= 20) &&
-    (assessment.components.situps.exempt || assessment.components.situps.score >= 20) &&
-    (assessment.components.waist?.exempt || (assessment.components.waist?.score ?? 20) >= 20)
+    (assessment.components.cardio.exempt || assessment.components.cardio.score >= PFRA_MINIMUM_COMPONENT_POINTS.cardio) &&
+    (assessment.components.pushups.exempt || assessment.components.pushups.score >= PFRA_MINIMUM_COMPONENT_POINTS.strength) &&
+    (assessment.components.situps.exempt || assessment.components.situps.score >= PFRA_MINIMUM_COMPONENT_POINTS.core) &&
+    (assessment.components.waist?.exempt || (assessment.components.waist?.score ?? PFRA_MINIMUM_COMPONENT_POINTS.waist) >= PFRA_MINIMUM_COMPONENT_POINTS.waist)
+  );
+}
+
+function ComplianceCircle({
+  percent,
+  size = 54,
+  strokeWidth = 6,
+  label = 'Weekly Compliance',
+}: {
+  percent: number;
+  size?: number;
+  strokeWidth?: number;
+  label?: string;
+}) {
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const progress = percent / 100;
+  const dashOffset = circumference * (1 - progress);
+
+  return (
+    <View className="items-center">
+      <View style={{ width: size, height: size }} className="items-center justify-center">
+        <Svg width={size} height={size} style={{ position: 'absolute' }}>
+          <Circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            stroke="rgba(255,255,255,0.12)"
+            strokeWidth={strokeWidth}
+            fill="none"
+          />
+          <Circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            stroke={percent >= 50 ? '#22C55E' : '#4A90D9'}
+            strokeWidth={strokeWidth}
+            fill="none"
+            strokeDasharray={`${circumference} ${circumference}`}
+            strokeDashoffset={dashOffset}
+            strokeLinecap="round"
+            rotation={-90}
+            originX={size / 2}
+            originY={size / 2}
+          />
+        </Svg>
+        <Text className="text-white font-bold text-[11px]">{percent}%</Text>
+      </View>
+      <Text className="text-af-silver text-xs mt-1 text-center">{label}</Text>
+    </View>
   );
 }
 
@@ -264,6 +321,12 @@ export default function AnalyticsScreen() {
     const flightStats = FLIGHTS.map(flight => {
       const flightMembers = members.filter(m => m.flight === flight);
       const flightSessions = monthSessions.filter(s => s.flight === flight);
+      const excusedMemberCount = flightMembers.filter((member) => weeklyExcusedMemberIds.includes(member.id)).length;
+      const eligibleMembers = Math.max(flightMembers.length - excusedMemberCount, 0);
+      const compliantMembers = flightMembers.filter((member) => (
+        !weeklyExcusedMemberIds.includes(member.id) &&
+        getMemberWeeklyAttendance(member.id) >= getMemberWeeklyRequiredSessions(member.id)
+      )).length;
       const avgAttendance = flightSessions.length > 0
         ? flightSessions.reduce((acc, s) => acc + s.attendees.length, 0) / flightSessions.length
         : 0;
@@ -275,6 +338,9 @@ export default function AnalyticsScreen() {
         totalMiles: flightMembers.reduce((acc, m) => acc + getMemberMonthSummary(m, activeMonthKey).miles, 0),
         avgAttendance: Math.round(avgAttendance * 10) / 10,
         sessions: flightSessions.length,
+        weeklyCompliancePercent: eligibleMembers > 0 ? Math.round((compliantMembers / eligibleMembers) * 100) : 0,
+        compliantMembers,
+        eligibleMembers,
       };
     });
 
@@ -290,7 +356,7 @@ export default function AnalyticsScreen() {
     const filteredPFRAEntries = pfraEntries.filter((entry) => {
       const recordType = entry.assessment.recordType ?? 'self';
       if (selectedPFRARecordType === 'all') {
-        return recordType === 'mock' || recordType === 'diagnostic' || recordType === 'official';
+        return true;
       }
 
       return recordType === selectedPFRARecordType;
@@ -396,6 +462,7 @@ export default function AnalyticsScreen() {
         date: assessment.date,
         recordType: assessment.recordType ?? 'self',
         loggedByName: assessment.loggedByName ?? memberName,
+        submissionMethod: getPFRARecordMethodLabel(assessment.recordType ?? 'self'),
       }))
       .sort((left, right) => right.date.localeCompare(left.date))
       .slice(0, 6);
@@ -419,10 +486,10 @@ export default function AnalyticsScreen() {
       : 0;
     const componentPassRates = filteredPFRAEntries.length > 0
       ? {
-          waist: filteredPFRAEntries.filter((entry) => (entry.assessment.components.waist?.score ?? 0) >= 20 || entry.assessment.components.waist?.exempt).length / filteredPFRAEntries.length,
-          strength: filteredPFRAEntries.filter((entry) => entry.assessment.components.pushups.score >= 20 || entry.assessment.components.pushups.exempt).length / filteredPFRAEntries.length,
-          core: filteredPFRAEntries.filter((entry) => entry.assessment.components.situps.score >= 20 || entry.assessment.components.situps.exempt).length / filteredPFRAEntries.length,
-          cardio: filteredPFRAEntries.filter((entry) => entry.assessment.components.cardio.score >= 20 || entry.assessment.components.cardio.exempt).length / filteredPFRAEntries.length,
+          waist: filteredPFRAEntries.filter((entry) => (entry.assessment.components.waist?.score ?? 0) >= PFRA_MINIMUM_COMPONENT_POINTS.waist || entry.assessment.components.waist?.exempt).length / filteredPFRAEntries.length,
+          strength: filteredPFRAEntries.filter((entry) => entry.assessment.components.pushups.score >= PFRA_MINIMUM_COMPONENT_POINTS.strength || entry.assessment.components.pushups.exempt).length / filteredPFRAEntries.length,
+          core: filteredPFRAEntries.filter((entry) => entry.assessment.components.situps.score >= PFRA_MINIMUM_COMPONENT_POINTS.core || entry.assessment.components.situps.exempt).length / filteredPFRAEntries.length,
+          cardio: filteredPFRAEntries.filter((entry) => entry.assessment.components.cardio.score >= PFRA_MINIMUM_COMPONENT_POINTS.cardio || entry.assessment.components.cardio.exempt).length / filteredPFRAEntries.length,
         }
       : { waist: 0, strength: 0, core: 0, cardio: 0 };
     const pfraBatchesForFilter = pfraBatches.filter((batch) => (
@@ -514,7 +581,7 @@ export default function AnalyticsScreen() {
             <div class="grid">
               <div class="card"><div class="label">Members</div><div class="value">${analytics.totalMembers}</div></div>
               <div class="card"><div class="label">Workouts</div><div class="value">${analytics.totalWorkouts}</div></div>
-              <div class="card"><div class="label">PT Sessions</div><div class="value">${analytics.totalSessions}</div></div>
+              <div class="card"><div class="label">PT Sessions Logged</div><div class="value">${analytics.totalSessions}</div></div>
               <div class="card"><div class="label">Avg PFRA</div><div class="value">${analytics.avgPFRAScore}</div></div>
               <div class="card"><div class="label">Logged PFRAs</div><div class="value">${analytics.pfraTotalCount}</div></div>
               <div class="card"><div class="label">Attendance This Week</div><div class="value">${analytics.totalAttendanceMarksThisWeek}</div></div>
@@ -551,7 +618,7 @@ export default function AnalyticsScreen() {
       { metric: 'Total PFLs', value: analytics.totalPFLs },
       { metric: 'Report Month', value: formatMonthLabel(activeMonthKey) },
       { metric: 'Total Workouts', value: analytics.totalWorkouts },
-      { metric: 'Total PT Sessions', value: analytics.totalSessions },
+      { metric: 'Total PT Sessions Logged', value: analytics.totalSessions },
       { metric: 'Total Minutes', value: analytics.totalMinutes },
       { metric: 'Total Miles', value: analytics.totalMiles },
       { metric: 'Attendance Marks This Week', value: analytics.totalAttendanceMarksThisWeek },
@@ -673,7 +740,7 @@ export default function AnalyticsScreen() {
           .filter((assessment) => {
             const type = assessment.recordType ?? 'self';
             if (recordType === 'all') {
-              return type === 'mock' || type === 'diagnostic' || type === 'official';
+              return true;
             }
 
             return type === recordType;
@@ -681,6 +748,8 @@ export default function AnalyticsScreen() {
           .map((assessment) => ({
             memberName: getDisplayName(member),
             flight: member.flight,
+            loggedByName: assessment.loggedByName ?? getDisplayName(member),
+            submissionMethod: getPFRARecordMethodLabel(assessment.recordType ?? 'self'),
             assessment,
           }))
       );
@@ -709,6 +778,9 @@ export default function AnalyticsScreen() {
         <tr>
           <td>${entry.memberName}</td>
           <td>${entry.flight}</td>
+          <td>${formatPFRALabel(entry.assessment.recordType ?? 'self')}</td>
+          <td>${entry.loggedByName}</td>
+          <td>${entry.submissionMethod}</td>
           <td>${entry.assessment.date}</td>
           <td>${entry.assessment.overallScore.toFixed(1)}</td>
           <td>${didPassAssessment(entry.assessment) ? 'Pass' : 'Needs Improvement'}</td>
@@ -725,9 +797,9 @@ export default function AnalyticsScreen() {
           </div>
           <table>
             <thead>
-              <tr><th>Member</th><th>Flight</th><th>Date</th><th>Score</th><th>Status</th></tr>
+              <tr><th>Member</th><th>Flight</th><th>Type</th><th>Logged By</th><th>Method</th><th>Date</th><th>Score</th><th>Status</th></tr>
             </thead>
-            <tbody>${entryRows || '<tr><td colspan="5">No PFRA records</td></tr>'}</tbody>
+            <tbody>${entryRows || '<tr><td colspan="8">No PFRA records</td></tr>'}</tbody>
           </table>
         </div>
       `;
@@ -780,6 +852,9 @@ export default function AnalyticsScreen() {
       detailSheet.columns = [
         { header: 'Member', key: 'member', width: 28 },
         { header: 'Flight', key: 'flight', width: 12 },
+        { header: 'Type', key: 'recordType', width: 14 },
+        { header: 'Logged By', key: 'loggedBy', width: 24 },
+        { header: 'Method', key: 'method', width: 22 },
         { header: 'Date', key: 'date', width: 14 },
         { header: 'Score', key: 'score', width: 12 },
         { header: 'Pass', key: 'pass', width: 12 },
@@ -788,6 +863,9 @@ export default function AnalyticsScreen() {
         detailSheet.addRow({
           member: entry.memberName,
           flight: entry.flight,
+          recordType: formatPFRALabel(entry.assessment.recordType ?? 'self'),
+          loggedBy: entry.loggedByName,
+          method: entry.submissionMethod,
           date: entry.assessment.date,
           score: entry.assessment.overallScore,
           pass: didPassAssessment(entry.assessment) ? 'Pass' : 'Needs Improvement',
@@ -1084,34 +1162,49 @@ export default function AnalyticsScreen() {
             entering={FadeInDown.delay(200).springify()}
             className="mt-4 p-4 bg-white/5 rounded-2xl border border-white/10"
           >
-            <Text className="text-white font-semibold text-lg mb-1">Squadron Overview</Text>
-            <Text className="text-af-silver text-xs mb-3">{formatMonthLabel(activeMonthKey)}</Text>
-            <Text className="text-af-silver text-xs mb-3">Tap to expand for additional details</Text>
+            <View className="flex-row items-start justify-between mb-3">
+              <View className="flex-1 pr-3">
+                <Text className="text-white font-semibold text-lg mb-1">Squadron Overview</Text>
+                <Text className="text-af-silver text-xs">{formatMonthLabel(activeMonthKey)}</Text>
+              </View>
+            </View>
             <View className="flex-row flex-wrap">
               <View className="w-1/2 p-2">
                 <Pressable onPress={() => toggleOverviewCard('members')} className="bg-white/5 rounded-xl p-3 border border-transparent active:border-white/10">
-                  <Users size={20} color="#4A90D9" />
+                  <View className="flex-row items-start justify-between">
+                    <Users size={20} color="#4A90D9" />
+                    <Text className="text-af-accent text-xs font-semibold">Open</Text>
+                  </View>
                   <Text className="text-white font-bold text-2xl mt-2">{analytics.totalMembers}</Text>
                   <Text className="text-af-silver text-xs">Total Members</Text>
                 </Pressable>
               </View>
               <View className="w-1/2 p-2">
                 <Pressable onPress={() => toggleOverviewCard('workouts')} className="bg-white/5 rounded-xl p-3 border border-transparent active:border-white/10">
-                  <Dumbbell size={20} color="#A855F7" />
+                  <View className="flex-row items-start justify-between">
+                    <Dumbbell size={20} color="#A855F7" />
+                    <Text className="text-af-accent text-xs font-semibold">Open</Text>
+                  </View>
                   <Text className="text-white font-bold text-2xl mt-2">{analytics.totalWorkouts}</Text>
                   <Text className="text-af-silver text-xs">Total Workouts</Text>
                 </Pressable>
               </View>
               <View className="w-1/2 p-2">
                 <Pressable onPress={() => toggleOverviewCard('sessions')} className="bg-white/5 rounded-xl p-3 border border-transparent active:border-white/10">
-                  <Calendar size={20} color="#22C55E" />
+                  <View className="flex-row items-start justify-between">
+                    <Calendar size={20} color="#22C55E" />
+                    <Text className="text-af-accent text-xs font-semibold">Open</Text>
+                  </View>
                   <Text className="text-white font-bold text-2xl mt-2">{analytics.totalSessions}</Text>
-                  <Text className="text-af-silver text-xs">PT Sessions</Text>
+                  <Text className="text-af-silver text-xs">PT Sessions Logged</Text>
                 </Pressable>
               </View>
               <View className="w-1/2 p-2">
                 <Pressable onPress={() => toggleOverviewCard('pfra')} className="bg-white/5 rounded-xl p-3 border border-transparent active:border-white/10">
-                  <TrendingUp size={20} color="#F59E0B" />
+                  <View className="flex-row items-start justify-between">
+                    <TrendingUp size={20} color="#F59E0B" />
+                    <Text className="text-af-accent text-xs font-semibold">Open</Text>
+                  </View>
                   <Text className="text-white font-bold text-2xl mt-2">{analytics.avgPFRAScore}</Text>
                   <Text className="text-af-silver text-xs">Avg PFRA Score</Text>
                 </Pressable>
@@ -1260,49 +1353,7 @@ export default function AnalyticsScreen() {
               </View>
               <View className="w-px bg-white/10" />
               <View className="items-center flex-1">
-                {(() => {
-                  const circleSize = 54;
-                  const strokeWidth = 6;
-                  const radius = (circleSize - strokeWidth) / 2;
-                  const circumference = 2 * Math.PI * radius;
-                  const progress = analytics.weeklyCompliancePercent / 100;
-                  const dashOffset = circumference * (1 - progress);
-
-                  return (
-                    <View className="items-center -mt-2">
-                      <View style={{ width: circleSize, height: circleSize }} className="items-center justify-center">
-                        <Svg width={circleSize} height={circleSize} style={{ position: 'absolute' }}>
-                          <Circle
-                            cx={circleSize / 2}
-                            cy={circleSize / 2}
-                            r={radius}
-                            stroke="rgba(255,255,255,0.12)"
-                            strokeWidth={strokeWidth}
-                            fill="none"
-                          />
-                          <Circle
-                            cx={circleSize / 2}
-                            cy={circleSize / 2}
-                            r={radius}
-                            stroke={analytics.weeklyCompliancePercent >= 50 ? '#22C55E' : '#4A90D9'}
-                            strokeWidth={strokeWidth}
-                            fill="none"
-                            strokeDasharray={`${circumference} ${circumference}`}
-                            strokeDashoffset={dashOffset}
-                            strokeLinecap="round"
-                            rotation={-90}
-                            originX={circleSize / 2}
-                            originY={circleSize / 2}
-                          />
-                        </Svg>
-                        <Text className="text-white font-bold text-[11px]">
-                          {analytics.weeklyCompliancePercent}%
-                        </Text>
-                      </View>
-                      <Text className="text-af-silver text-xs mt-1 text-center">Weekly Compliance</Text>
-                    </View>
-                  );
-                })()}
+                <ComplianceCircle percent={analytics.weeklyCompliancePercent} />
               </View>
             </View>
             <View className="mt-3 pt-3 border-t border-white/10 flex-row items-center justify-between">
@@ -1349,7 +1400,7 @@ export default function AnalyticsScreen() {
                 <Text className="text-white font-semibold text-lg">PFRA Leadership Summary</Text>
                 <Text className="text-af-accent text-xs font-semibold">Open</Text>
               </View>
-              <Text className="mt-1 text-af-silver text-xs">Use these filters for PFRA analytics only.</Text>
+              <Text className="mt-1 text-af-silver text-xs">Use these filters for PFRA analytics.</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingTop: 12, paddingRight: 8 }}>
                 {getPFRALeadershipFilters().map((value) => (
                   <Pressable
@@ -1470,25 +1521,33 @@ export default function AnalyticsScreen() {
                 className="bg-white/5 rounded-xl p-4 mb-2 border border-white/10"
               >
                 <View className="flex-row items-center justify-between mb-2">
-                  <Text className="text-white font-semibold">{flight.flight}</Text>
+                  <Text className="text-white font-semibold">{formatFlightDisplay(flight.flight)}</Text>
                   <Text className="text-af-silver text-sm">{flight.memberCount} members</Text>
                 </View>
-                <View className="flex-row justify-between">
-                  <View>
+                <View className="flex-row items-center justify-between">
+                  <View className="flex-1">
                     <Text className="text-af-silver text-xs">Minutes</Text>
                     <Text className="text-white font-semibold">{flight.totalMinutes}</Text>
                   </View>
-                  <View>
+                  <View className="flex-1">
                     <Text className="text-af-silver text-xs">Miles</Text>
                     <Text className="text-white font-semibold">{flight.totalMiles.toFixed(2)}</Text>
                   </View>
-                  <View>
+                  <View className="flex-1">
                     <Text className="text-af-silver text-xs">Sessions</Text>
                     <Text className="text-white font-semibold">{flight.sessions}</Text>
                   </View>
-                  <View>
+                  <View className="flex-1">
                     <Text className="text-af-silver text-xs">Avg Attend</Text>
                     <Text className="text-white font-semibold">{flight.avgAttendance}</Text>
+                  </View>
+                  <View className="ml-2">
+                    <ComplianceCircle
+                      percent={flight.weeklyCompliancePercent}
+                      size={46}
+                      strokeWidth={5}
+                      label="Weekly"
+                    />
                   </View>
                 </View>
               </View>
@@ -1499,8 +1558,8 @@ export default function AnalyticsScreen() {
 
         <Modal visible={showPFRADetailModal} transparent animationType="slide" onRequestClose={() => setShowPFRADetailModal(false)}>
           <View className="flex-1 justify-end bg-black/80">
-            <ThemeChrome theme={theme} variant="feature" style={{ borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '88%' }}>
-            <View className="p-6 pb-10">
+            <ThemeChrome theme={theme} variant="feature" fill style={{ borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '88%' }}>
+            <View className="p-6 pb-4 flex-1">
               <View className="mb-4 flex-row items-start justify-between">
                 <View className="flex-1 pr-4">
                   <Text style={getThemeHeadingStyle(theme, 22)}>PFRA Leadership Summary</Text>
@@ -1511,8 +1570,8 @@ export default function AnalyticsScreen() {
                 </Pressable>
               </View>
 
-              <ScrollView showsVerticalScrollIndicator={false}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingRight: 8 }}>
+              <ScrollView style={{ flex: 1, minHeight: 0 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingRight: 8, paddingBottom: 4 }}>
                   {getPFRALeadershipFilters().map((value) => (
                     <Pressable
                       key={value}
@@ -1551,8 +1610,8 @@ export default function AnalyticsScreen() {
                   </Pressable>
                 </View>
 
-                <ThemeChrome theme={theme}>
-                <View className="mt-4 p-4">
+                <ThemeChrome theme={theme} style={{ marginTop: 16 }}>
+                <View className="p-4">
                   <Text className="text-white font-semibold">Current PFRA Snapshot</Text>
                   <View className="mt-4 flex-row justify-between">
                     <View className="items-center flex-1">
@@ -1571,8 +1630,31 @@ export default function AnalyticsScreen() {
                 </View>
                 </ThemeChrome>
 
-                <ThemeChrome theme={theme}>
-                <View className="mt-4 p-4">
+                <ThemeChrome theme={theme} style={{ marginTop: 16 }}>
+                <View className="p-4">
+                  <Text className="text-white font-semibold mb-3">Submission Log</Text>
+                  {analytics.recentPFRARecords.length === 0 ? (
+                    <Text className="text-sm text-af-silver">No PFRA records found for this filter yet.</Text>
+                  ) : (
+                    analytics.recentPFRARecords.map((record) => (
+                      <View key={record.id} className="mb-3 rounded-xl border border-white/10 bg-black/10 p-3 last:mb-0">
+                        <View className="flex-row items-center justify-between">
+                          <Text className="font-semibold text-white">{record.memberName}</Text>
+                          <Text className="text-xs text-white">{record.score.toFixed(1)}</Text>
+                        </View>
+                        <Text className="mt-1 text-xs text-af-silver">
+                          {record.date} • {formatPFRALabel(record.recordType)}
+                        </Text>
+                        <Text className="mt-1 text-xs text-af-silver">Logged by {record.loggedByName}</Text>
+                        <Text className="mt-1 text-xs text-af-silver">{record.submissionMethod}</Text>
+                      </View>
+                    ))
+                  )}
+                </View>
+                </ThemeChrome>
+
+                <ThemeChrome theme={theme} style={{ marginTop: 16 }}>
+                <View className="p-4">
                   <Text className="text-white font-semibold mb-3">Trend Over Time</Text>
                   <View className="flex-row items-end justify-between h-36">
                     {analytics.pfraTimeline.map((entry) => {
@@ -1595,8 +1677,8 @@ export default function AnalyticsScreen() {
                 </View>
                 </ThemeChrome>
 
-                <ThemeChrome theme={theme}>
-                <View className="mt-4 p-4">
+                <ThemeChrome theme={theme} style={{ marginTop: 16 }}>
+                <View className="p-4">
                   <Text className="text-white font-semibold mb-3">Pass Rates by Component</Text>
                   {([
                     ['Waist', analytics.componentPassRates.waist],
@@ -1617,8 +1699,8 @@ export default function AnalyticsScreen() {
                 </View>
                 </ThemeChrome>
 
-                <ThemeChrome theme={theme}>
-                <View className="mt-4 p-4">
+                <ThemeChrome theme={theme} style={{ marginTop: 16 }}>
+                <View className="p-4">
                   <Text className="text-white font-semibold mb-3">Recent PFRA Batches</Text>
                   {analytics.recentPFRABatches.length === 0 ? (
                     <Text className="text-sm text-af-silver">No PFRA batches found for this filter yet.</Text>
@@ -1640,8 +1722,8 @@ export default function AnalyticsScreen() {
                 </View>
                 </ThemeChrome>
 
-                <ThemeChrome theme={theme} variant="feature">
-                <View className="mt-4 p-4">
+                <ThemeChrome theme={theme} variant="feature" style={{ marginTop: 16 }}>
+                <View className="p-4">
                   <View className="flex-row items-center justify-between">
                     <Text className="text-white font-semibold">PFRA Batch Detail</Text>
                     {selectedPFRABatch ? (

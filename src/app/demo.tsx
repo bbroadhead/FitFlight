@@ -204,7 +204,7 @@ export default function DemoLoginScreen() {
             fitnessAssessments: [],
             workouts: [],
             achievements: [],
-            requiredPTSessionsPerWeek: 3,
+            requiredPTSessionsPerWeek: 5,
             isVerified: true,
             ptlPendingApproval: false,
             monthlyPlacements: [],

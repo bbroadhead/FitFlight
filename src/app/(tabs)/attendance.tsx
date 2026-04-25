@@ -42,7 +42,11 @@ const slugify = (value: string) =>
     .replace(/^-+|-+$/g, '');
 const buildLegacyRosterId = (member: { rank: string; firstName: string; lastName: string; flight: Flight }) =>
   `roster-${slugify(`${member.rank}-${member.lastName}-${member.firstName}-${member.flight}`)}`;
-const isUpcomingScheduledSession = (date: string, time: string) => new Date(`${date}T${time}:00`).getTime() >= Date.now();
+const isVisibleScheduledSession = (date: string, time: string) => {
+  const startTime = new Date(`${date}T${time}:00`).getTime();
+  const clearTime = startTime + 60 * 60 * 1000;
+  return clearTime >= Date.now();
+};
 const ATTENDANCE_SOURCE_STYLE: Record<AttendanceSource, { border: string; background: string; icon: string; label: string; description: string }> = {
   excused: {
     border: 'border-slate-400',
@@ -373,7 +377,7 @@ export default function AttendanceScreen() {
           return false;
         }
 
-        if (!isUpcomingScheduledSession(session.date, session.time)) {
+        if (!isVisibleScheduledSession(session.date, session.time)) {
           return false;
         }
 
@@ -1838,8 +1842,8 @@ export default function AttendanceScreen() {
 
          <Modal visible={showAttendanceLegendModal} transparent animationType="fade" onRequestClose={() => setShowAttendanceLegendModal(false)}>
             <View className="flex-1 bg-black/80 items-center justify-center p-6">
-              <ThemeChrome theme={theme} variant="feature" style={{ width: '100%', maxWidth: 420 }}>
-              <View className="p-6">
+              <ThemeChrome theme={theme} variant="feature" fill style={{ width: '100%', maxWidth: 420, maxHeight: '82%' }}>
+              <View className="p-6 flex-1">
                 <View className="flex-row items-center justify-between mb-4">
                   <View className="flex-1 pr-3">
                     <Text style={{ color: theme.textPrimary, fontSize: 20, fontWeight: '700' }}>Attendance Checkmarks</Text>
@@ -1859,24 +1863,26 @@ export default function AttendanceScreen() {
                   </Pressable>
                 </View>
 
-                {(['excused', 'manual', 'workout', 'strava', 'pfra'] as AttendanceSource[]).map((source, index) => {
-                  const style = ATTENDANCE_SOURCE_STYLE[source];
-                  return (
-                    <ThemeChrome key={source} theme={theme} variant={source === 'manual' || source === 'excused' ? 'feature' : 'default'} style={index < 4 ? { marginBottom: 12 } : undefined}>
-                    <View className="p-4">
-                      <View className="flex-row items-center">
-                        <View className={cn('w-10 h-10 rounded-full items-center justify-center border', style.border, style.background)}>
-                          <Check size={20} color={style.icon} />
-                        </View>
-                        <View className="ml-3 flex-1">
-                          <Text style={{ color: theme.textPrimary, fontWeight: '600' }}>{style.label}</Text>
-                          <Text style={{ color: theme.textSecondary, fontSize: 14, marginTop: 4 }}>{style.description}</Text>
+                <ScrollView style={{ flex: 1, minHeight: 0 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 8 }}>
+                  {(['excused', 'manual', 'workout', 'strava', 'pfra'] as AttendanceSource[]).map((source, index) => {
+                    const style = ATTENDANCE_SOURCE_STYLE[source];
+                    return (
+                      <ThemeChrome key={source} theme={theme} variant={source === 'manual' || source === 'excused' ? 'feature' : 'default'} style={index < 4 ? { marginBottom: 12 } : undefined}>
+                      <View className="p-4">
+                        <View className="flex-row items-center">
+                          <View className={cn('w-10 h-10 rounded-full items-center justify-center border', style.border, style.background)}>
+                            <Check size={20} color={style.icon} />
+                          </View>
+                          <View className="ml-3 flex-1">
+                            <Text style={{ color: theme.textPrimary, fontWeight: '600' }}>{style.label}</Text>
+                            <Text style={{ color: theme.textSecondary, fontSize: 14, marginTop: 4 }}>{style.description}</Text>
+                          </View>
                         </View>
                       </View>
-                    </View>
-                    </ThemeChrome>
-                  );
-                })}
+                      </ThemeChrome>
+                    );
+                  })}
+                </ScrollView>
               </View>
               </ThemeChrome>
             </View>

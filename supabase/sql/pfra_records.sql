@@ -101,7 +101,7 @@ for insert
 to authenticated
 with check (
   lower(member_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
-  or public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl')
+  or public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'pfl', 'ptl')
 );
 
 drop policy if exists "pfra_records_update_self_or_admin" on public.pfra_records;
@@ -111,11 +111,11 @@ for update
 to authenticated
 using (
   lower(member_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
-  or public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl')
+  or public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'pfl', 'ptl')
 )
 with check (
   lower(member_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
-  or public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl')
+  or public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'pfl', 'ptl')
 );
 
 drop policy if exists "pfra_records_delete_self_or_admin" on public.pfra_records;
@@ -125,5 +125,5 @@ for delete
 to authenticated
 using (
   lower(member_email) = lower(coalesce(auth.jwt() ->> 'email', ''))
-  or public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl')
+  or public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'pfl', 'ptl')
 );

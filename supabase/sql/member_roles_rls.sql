@@ -1,6 +1,6 @@
 create table if not exists public.member_roles (
   email text primary key,
-  app_role text not null check (app_role in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl', 'standard')),
+  app_role text not null check (app_role in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'pfl', 'ptl', 'standard')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -10,7 +10,7 @@ drop constraint if exists member_roles_app_role_check;
 
 alter table public.member_roles
 add constraint member_roles_app_role_check
-check (app_role in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl', 'standard'));
+check (app_role in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'pfl', 'ptl', 'standard'));
 
 create or replace function public.set_updated_at()
 returns trigger
@@ -90,7 +90,7 @@ on public.roster
 for insert
 to authenticated
 with check (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'pfl', 'ptl')
 );
 
 drop policy if exists "roster_update_role_managers" on public.roster;
@@ -99,10 +99,10 @@ on public.roster
 for update
 to authenticated
 using (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'pfl', 'ptl')
 )
 with check (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'pfl', 'ptl')
 );
 
 drop policy if exists "roster_delete_role_managers" on public.roster;
@@ -111,7 +111,7 @@ on public.roster
 for delete
 to authenticated
 using (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'ptl')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'demo', 'squadron_leadership', 'pfl', 'ptl')
 );
 
 insert into public.member_roles (email, app_role)

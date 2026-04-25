@@ -42,10 +42,10 @@ on public.pt_sessions
 for all
 to authenticated
 using (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'pfl', 'ptl')
 )
 with check (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'pfl', 'ptl')
 );
 
 drop policy if exists "pt_session_attendees_select_authenticated" on public.pt_session_attendees;
@@ -61,8 +61,8 @@ on public.pt_session_attendees
 for all
 to authenticated
 using (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'pfl', 'ptl')
 )
 with check (
-  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'ptl')
+  public.current_member_role() in ('fitflight_creator', 'ufpm', 'squadron_leadership', 'pfl', 'ptl')
 );

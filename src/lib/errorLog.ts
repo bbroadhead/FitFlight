@@ -45,6 +45,12 @@ export const useErrorLogStore = create<ErrorLogState>((set) => ({
   setCurrentOverlayLabel: (currentOverlayLabel) => set({ currentOverlayLabel }),
 }));
 
+const IGNORED_ERROR_LOG_MESSAGE_PATTERNS = [
+  /invalid dom property/i,
+  /transform-origin/i,
+  /transformOrigin/i,
+];
+
 function stringifyValue(value: unknown): string {
   if (value instanceof Error) {
     return value.message;
@@ -78,6 +84,12 @@ export function recordAppError(params: {
         : null;
 
   const message = params.message ?? error?.message ?? 'Unknown error';
+  const normalizedMessage = message.trim();
+  const shouldIgnoreTransformOriginWarning =
+    IGNORED_ERROR_LOG_MESSAGE_PATTERNS.every((pattern) => pattern.test(normalizedMessage));
+  if (shouldIgnoreTransformOriginWarning) {
+    return;
+  }
   const stack = params.stack ?? error?.stack;
   const state = useErrorLogStore.getState();
   const location = params.location ?? (
