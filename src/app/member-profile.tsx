@@ -397,12 +397,6 @@ export default function MemberProfileScreen() {
                     {member.firstName[0]}{member.lastName[0]}
                   </Text>
                 </View>
-                {/* Trophy indicator for users who have placed top 3 */}
-                {member.trophyCount > 0 && (
-                  <View className="absolute -bottom-1 -right-1 bg-af-gold rounded-full p-1 border-2 border-af-navy">
-                    <Trophy size={14} color="#0A1628" />
-                  </View>
-                )}
               </View>
               <Text className="text-white text-2xl font-bold text-center">{displayName}</Text>
               <View className="mt-2 items-center">

@@ -4526,8 +4526,9 @@ export default function ProfileScreen() {
             variant="feature"
             blurIntensity={modalBlurIntensity + 8}
             style={{ width: '100%', maxWidth: 760, maxHeight: '86%', borderRadius: 24 }}
+            fill
           >
-            <View className="p-6">
+            <View className="p-6 flex-1">
               <View className="flex-row items-center justify-between mb-4">
                 <View className="flex-1 pr-4">
                   <Text style={getThemeHeadingStyle(themePalette, 22)}>Admin Action Audit Trail</Text>
@@ -4544,7 +4545,7 @@ export default function ProfileScreen() {
                 </Pressable>
               </View>
 
-              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 16 }}>
+              <ScrollView style={{ flex: 1, minHeight: 0 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 16 }}>
                 {auditTrailLoading ? (
                   <Text style={getThemeBodyStyle(themePalette, 14, themePalette.textSecondary)}>Loading audit trail...</Text>
                 ) : auditTrailError ? (

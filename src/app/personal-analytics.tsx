@@ -8,7 +8,7 @@ import Animated, { FadeInDown } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import Svg, { Circle, Line, Path, Polyline } from 'react-native-svg';
 import { useAuthStore, useMemberStore, getDisplayName } from '@/lib/store';
-import { formatMonthLabel, getAvailableMonthKeys, getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
+import { formatMonthLabel, getAvailableMonthKeys, getMemberAttendanceRecords, getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
 import { useAppTheme } from '@/lib/theme';
 import { PageContainer } from '@/components/PageContainer';
 import { ThemeBackdrop } from '@/components/ThemeBackdrop';
@@ -79,7 +79,13 @@ export default function PersonalAnalyticsScreen() {
     const workouts = summary.workouts;
     const workoutTypeCounts = new Map<string, number>();
     const dailyCounts = new Map<string, number>();
+    const dailyExcusedCounts = new Map<string, number>();
     const weeklyMinutes = new Map<string, number>();
+    const weeklyExcusals = new Map<string, number>();
+
+    const excusedRecords = getMemberAttendanceRecords(member, ptSessions).filter(
+      (record) => record.source === 'excused' && record.date.startsWith(activeMonthKey)
+    );
 
     workouts.forEach((workout) => {
       const label = workout.source === 'attendance' ? 'Attendance' : workout.type;
@@ -91,12 +97,21 @@ export default function PersonalAnalyticsScreen() {
       weeklyMinutes.set(weekKey, (weeklyMinutes.get(weekKey) ?? 0) + workout.duration);
     });
 
+    excusedRecords.forEach((record) => {
+      workoutTypeCounts.set('Excused', (workoutTypeCounts.get('Excused') ?? 0) + 1);
+      dailyExcusedCounts.set(record.date, (dailyExcusedCounts.get(record.date) ?? 0) + 1);
+
+      const excusedDate = new Date(`${record.date}T00:00:00`);
+      const weekKey = `${excusedDate.getFullYear()}-${excusedDate.getMonth() + 1}-${Math.floor((excusedDate.getDate() - 1) / 7) + 1}`;
+      weeklyExcusals.set(weekKey, (weeklyExcusals.get(weekKey) ?? 0) + 1);
+    });
+
     const workoutTypeBreakdown = Array.from(workoutTypeCounts.entries())
       .sort((left, right) => right[1] - left[1])
       .map(([type, count], index) => ({
         type,
         count,
-        color: CHART_COLORS[index % CHART_COLORS.length],
+        color: type === 'Excused' ? '#94A3B8' : CHART_COLORS[index % CHART_COLORS.length],
       }));
 
     const [year, month] = activeMonthKey.split('-').map(Number);
@@ -107,20 +122,30 @@ export default function PersonalAnalyticsScreen() {
       return {
         label: day,
         count: dailyCounts.get(dateKey) ?? 0,
+        excusedCount: dailyExcusedCounts.get(dateKey) ?? 0,
       };
     });
 
-    const weeklyMinutesSeries = Array.from(weeklyMinutes.entries()).map(([weekKey, minutes]) => ({
+    const weeklyKeys = Array.from(new Set([...weeklyMinutes.keys(), ...weeklyExcusals.keys()]))
+      .sort((left, right) => left.localeCompare(right));
+    const weeklyMinutesSeries = weeklyKeys.map((weekKey) => ({
       label: formatWeeklyRangeLabel(weekKey),
-      minutes,
+      minutes: weeklyMinutes.get(weekKey) ?? 0,
+      excusedCount: weeklyExcusals.get(weekKey) ?? 0,
     }));
+
+    const activityDays = new Set([
+      ...dailyCounts.keys(),
+      ...dailyExcusedCounts.keys(),
+    ]);
 
     return {
       summary,
       workoutTypeBreakdown,
       dailySeries,
       weeklyMinutesSeries,
-      daysActive: dailyCounts.size,
+      excusedCount: excusedRecords.length,
+      daysActive: activityDays.size,
       averageWorkoutMinutes: workouts.length > 0 ? summary.minutes / workouts.length : 0,
     };
   }, [activeMonthKey, member, ptSessions]);
@@ -220,7 +245,7 @@ export default function PersonalAnalyticsScreen() {
               <View className="items-center flex-1">
                 <Calendar size={20} color="#4A90D9" />
                 <Text className="text-white font-bold text-lg mt-1">{analytics.daysActive}</Text>
-                <Text className="text-af-silver text-xs">Active Days</Text>
+                <Text className="text-af-silver text-xs">Logged Days</Text>
               </View>
               <View className="w-px bg-white/10" />
               <View className="items-center flex-1">
@@ -234,7 +259,7 @@ export default function PersonalAnalyticsScreen() {
           <Animated.View entering={FadeInDown.delay(200).springify()} className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
             <View className="flex-row items-center mb-3">
               <PieChart size={18} color="#FFD700" />
-              <Text className="text-white font-semibold ml-2">Workout Types</Text>
+              <Text className="text-white font-semibold ml-2">Activity Types</Text>
             </View>
             <View className="items-center">
               <Svg width={160} height={160}>
@@ -258,7 +283,8 @@ export default function PersonalAnalyticsScreen() {
           </Animated.View>
 
           <Animated.View entering={FadeInDown.delay(240).springify()} className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
-            <Text className="text-white font-semibold mb-3">Workouts This Month</Text>
+            <Text className="text-white font-semibold mb-1">Activity This Month</Text>
+            <Text className="text-af-silver text-xs mb-3">Blue line shows workouts. Grey markers show excused sessions.</Text>
             <Svg width="100%" height="130" viewBox="0 0 280 120">
               <Line x1="12" y1="108" x2="268" y2="108" stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
               <Line x1="12" y1="20" x2="12" y2="108" stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
@@ -266,7 +292,21 @@ export default function PersonalAnalyticsScreen() {
               {analytics.dailySeries.map((point, index) => {
                 const x = analytics.dailySeries.length <= 1 ? 12 : 12 + (index / (analytics.dailySeries.length - 1)) * 256;
                 const y = 108 - (point.count / maxDailyCount) * 88;
-                return <Circle key={point.label} cx={x} cy={y} r="2.5" fill="#7DD3FC" />;
+                return (
+                  <React.Fragment key={point.label}>
+                    <Circle cx={x} cy={y} r="2.5" fill="#7DD3FC" />
+                    {point.excusedCount > 0 ? (
+                      <Circle
+                        cx={x}
+                        cy={point.count > 0 ? Math.max(y - 10, 16) : 100}
+                        r={3.5}
+                        fill="none"
+                        stroke="#94A3B8"
+                        strokeWidth="2"
+                      />
+                    ) : null}
+                  </React.Fragment>
+                );
               })}
             </Svg>
             <View className="flex-row justify-between mt-1">
@@ -276,15 +316,22 @@ export default function PersonalAnalyticsScreen() {
           </Animated.View>
 
           <Animated.View entering={FadeInDown.delay(280).springify()} className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
-            <Text className="text-white font-semibold mb-3">Weekly Minutes</Text>
+            <Text className="text-white font-semibold mb-3">Weekly Minutes & Excusals</Text>
             {analytics.weeklyMinutesSeries.length === 0 ? (
-              <Text className="text-af-silver text-sm">No workout minutes logged this month yet.</Text>
+              <Text className="text-af-silver text-sm">No workout minutes or excused sessions logged this month yet.</Text>
             ) : (
               analytics.weeklyMinutesSeries.map((item) => (
                 <View key={item.label} className="mb-3">
                   <View className="flex-row items-center justify-between mb-1">
                     <Text className="text-white text-sm">{item.label}</Text>
-                    <Text className="text-af-silver text-xs">{item.minutes} min</Text>
+                    <View className="flex-row items-center">
+                      {item.excusedCount > 0 ? (
+                        <View className="mr-2 rounded-full border border-slate-400/40 bg-slate-400/15 px-2 py-0.5">
+                          <Text className="text-[11px] text-slate-300">{item.excusedCount} excused</Text>
+                        </View>
+                      ) : null}
+                      <Text className="text-af-silver text-xs">{item.minutes} min</Text>
+                    </View>
                   </View>
                   <View className="h-3 overflow-hidden rounded-full bg-white/10">
                     <View className="h-full rounded-full bg-af-accent" style={{ width: `${(item.minutes / maxWeeklyMinutes) * 100}%` }} />

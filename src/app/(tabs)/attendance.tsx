@@ -1681,9 +1681,9 @@ export default function AttendanceScreen() {
         </Modal>
 
         <Modal visible={showScheduledSessionsModal} transparent animationType="fade" onRequestClose={() => setShowScheduledSessionsModal(false)}>
-          <View className="flex-1 bg-black/80 items-center justify-center p-6">
+            <View className="flex-1 bg-black/80 items-center justify-center p-6">
             <ThemeChrome theme={theme} variant="feature" style={{ width: '100%', maxWidth: 560, maxHeight: '80%' }} fill>
-            <View className="p-6">
+              <View className="p-6 flex-1">
             <View className="flex-row items-center justify-between mb-4">
               <View className="flex-1 pr-3">
                 <Text style={getThemeHeadingStyle(theme, 20)}>Scheduled PT Sessions</Text>
@@ -1709,7 +1709,7 @@ export default function AttendanceScreen() {
                 <Text className="text-center font-semibold" style={getThemeButtonTextStyle(theme, 'secondary')}>{canManagePrograms ? 'Schedule PT Session' : 'Schedule Personal PT'}</Text>
               </Pressable>
 
-              <ScrollView style={{ flex: 1, minHeight: 0 }} showsVerticalScrollIndicator={false}>
+              <ScrollView style={{ flex: 1, minHeight: 0 }} contentContainerStyle={{ paddingBottom: 8 }} showsVerticalScrollIndicator={false}>
                 {scheduledSessionsThisWeek.length === 0 ? (
                   <Text style={[getThemeBodyStyle(theme, 14, theme.textMuted), { textAlign: 'center', paddingVertical: 32 }]}>No upcoming PT sessions for this week.</Text>
                 ) : (

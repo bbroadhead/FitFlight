@@ -1,4 +1,4 @@
-import type { Member, MonthlyLeaderboardEntry, PTSession, Workout } from '@/lib/store';
+import type { AttendanceSource, Member, MonthlyLeaderboardEntry, PTSession, Workout } from '@/lib/store';
 
 export const ATTENDANCE_CHECK_IN_POINTS = 10;
 export const WORKOUT_POINTS_PER_MINUTE = 1;
@@ -18,6 +18,13 @@ const getAttendanceAliases = (member: Pick<Member, 'id' | 'rank' | 'firstName' |
   aliases.add(buildLegacyRosterId(member));
   return aliases;
 };
+
+export interface MemberAttendanceRecord {
+  id: string;
+  date: string;
+  flight: string;
+  source: AttendanceSource;
+}
 
 export function getCompetitionPosition(scores: number[], index: number): number {
   if (index <= 0) {
@@ -56,32 +63,48 @@ export function monthKeyFromDateString(dateValue: string) {
   return dateValue.slice(0, 7);
 }
 
+export function getMemberAttendanceRecords(
+  member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight'>,
+  ptSessions: Pick<PTSession, 'id' | 'date' | 'flight' | 'attendees' | 'attendeeSources'>[] = []
+): MemberAttendanceRecord[] {
+  const attendanceAliases = getAttendanceAliases(member);
+
+  return ptSessions.flatMap((session) => {
+    const matchedAttendeeId = session.attendees.find((attendeeId) => attendanceAliases.has(attendeeId));
+    if (!matchedAttendeeId) {
+      return [];
+    }
+
+    return [{
+      id: session.id,
+      date: session.date,
+      flight: session.flight,
+      source: session.attendeeSources?.[matchedAttendeeId] ?? 'manual',
+    }];
+  });
+}
+
 export function getMemberEffectiveWorkouts(
   member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight' | 'workouts'>,
-  ptSessions: Pick<PTSession, 'id' | 'date' | 'flight' | 'attendees'>[] = []
+  ptSessions: Pick<PTSession, 'id' | 'date' | 'flight' | 'attendees' | 'attendeeSources'>[] = []
 ) {
-  const attendanceAliases = getAttendanceAliases(member);
   const datesWithRealWorkouts = new Set(
     member.workouts
       .filter((workout) => workout.source !== 'attendance')
       .map((workout) => workout.date)
   );
 
-  const attendanceWorkouts: Workout[] = ptSessions
-    .filter(
-      (session) =>
-        session.attendees.some((attendeeId) => attendanceAliases.has(attendeeId)) &&
-        !datesWithRealWorkouts.has(session.date)
-    )
-    .map((session) => ({
-      id: `attendance-${session.id}-${member.id}`,
-      externalId: session.id,
-      date: session.date,
+  const attendanceWorkouts: Workout[] = getMemberAttendanceRecords(member, ptSessions)
+    .filter((record) => record.source !== 'excused' && !datesWithRealWorkouts.has(record.date))
+    .map((record) => ({
+      id: `attendance-${record.id}-${member.id}`,
+      externalId: record.id,
+      date: record.date,
       type: 'Other',
       duration: 0,
       distance: 0,
       source: 'attendance',
-      title: `Attendance - ${session.flight}`,
+      title: `Attendance - ${record.flight}`,
       isPrivate: false,
     }));
 
@@ -132,6 +155,7 @@ export function getAvailableMonthKeys(
   ptSessions: Pick<PTSession, 'date'>[]
 ) {
   const keys = new Set<string>();
+  const currentMonthKey = getMonthKey();
 
   members.forEach((member) => {
     member.workouts.forEach((workout) => keys.add(monthKeyFromDateString(workout.date)));
@@ -139,9 +163,11 @@ export function getAvailableMonthKeys(
   });
 
   ptSessions.forEach((session) => keys.add(monthKeyFromDateString(session.date)));
-  keys.add(getMonthKey());
+  keys.add(currentMonthKey);
 
-  return Array.from(keys).sort((left, right) => right.localeCompare(left));
+  return Array.from(keys)
+    .filter((monthKey) => monthKey <= currentMonthKey)
+    .sort((left, right) => right.localeCompare(left));
 }
 
 export function buildLeaderboardHistory(
@@ -149,29 +175,33 @@ export function buildLeaderboardHistory(
   ptSessions: Pick<PTSession, 'id' | 'date' | 'flight' | 'attendees'>[]
 ) {
   const currentMonthKey = getMonthKey();
-  const monthKeys = getAvailableMonthKeys(members, ptSessions).filter((monthKey) => monthKey !== currentMonthKey);
+  const monthKeys = getAvailableMonthKeys(members, ptSessions).filter((monthKey) => monthKey < currentMonthKey);
   const historyByMember = new Map<string, MonthlyLeaderboardEntry[]>();
 
   members.forEach((member) => {
     historyByMember.set(member.id, []);
   });
 
-  monthKeys.forEach((monthKey) => {
-    const monthSummaries = members.map((member) => ({
-      member,
-      summary: getMemberMonthSummary(member, monthKey, ptSessions),
-    }));
+    monthKeys.forEach((monthKey) => {
+      const monthSummaries = members.map((member) => ({
+        member,
+        summary: getMemberMonthSummary(member, monthKey, ptSessions),
+      }));
 
-    if (!monthSummaries.some(({ summary }) => summary.score > 0 || summary.workoutCount > 0)) {
-      return;
-    }
-
-    const ordered = [...monthSummaries].sort((left, right) => {
-      if (right.summary.score !== left.summary.score) {
-        return right.summary.score - left.summary.score;
+      if (!monthSummaries.some(({ summary }) => summary.score > 0 || summary.workoutCount > 0)) {
+        return;
       }
 
-      return `${left.member.lastName} ${left.member.firstName}`.localeCompare(`${right.member.lastName} ${right.member.firstName}`);
+      const activeMonthSummaries = monthSummaries.filter(
+        ({ summary }) => summary.score > 0 || summary.workoutCount > 0
+      );
+
+      const ordered = [...activeMonthSummaries].sort((left, right) => {
+        if (right.summary.score !== left.summary.score) {
+          return right.summary.score - left.summary.score;
+        }
+
+        return `${left.member.lastName} ${left.member.firstName}`.localeCompare(`${right.member.lastName} ${right.member.firstName}`);
     });
 
     const scores = ordered.map((entry) => entry.summary.score);
