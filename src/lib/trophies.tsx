@@ -21,7 +21,7 @@ import {
   Zap,
 } from 'lucide-react-native';
 import type { Achievement, Member } from '@/lib/store';
-import { getEffectiveAchievementIds } from '@/lib/store';
+import { getClosedMonthPlacements, getEffectiveAchievementIds } from '@/lib/store';
 
 type TrophyVisual = {
   Icon: ElementType;
@@ -82,7 +82,7 @@ export function buildTrophyStats(
   return achievements.map((achievement) => {
     const earnCount = members.filter((member) => {
       if (achievement.id === 'top_3_month') {
-        return member.trophyCount > 0 || member.monthlyPlacements.length > 0;
+        return getClosedMonthPlacements(member).length > 0;
       }
 
       return getEffectiveAchievementIds(member).includes(achievement.id);

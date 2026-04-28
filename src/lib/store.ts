@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { buildLeaderboardHistory } from '@/lib/monthlyStats';
+import { buildLeaderboardHistory, getMonthKey } from '@/lib/monthlyStats';
 
 // Types
 export type Flight = 'Apex' | 'Bomber' | 'Cryptid' | 'Doom' | 'Ewok' | 'Foxhound' | 'DO' | 'ADF' | 'DET';
@@ -336,6 +336,11 @@ export const getEffectiveAchievementIds = (
     (achievementId) => !REMOVED_TROPHY_IDS.has(achievementId) && TROPHY_IDS.has(achievementId)
   );
 };
+
+export const getClosedMonthPlacements = (
+  member: Pick<Member, 'monthlyPlacements'> | { monthlyPlacements?: MonthlyPlacement[] },
+  currentMonthKey = getMonthKey()
+) => (member.monthlyPlacements ?? []).filter((placement) => placement.month < currentMonthKey);
 
 const withCompletionist = (member: Pick<Member, 'achievements' | 'trophyCount' | 'monthlyPlacements'>) => {
   return Array.from(new Set(getEffectiveAchievementIds(member)));

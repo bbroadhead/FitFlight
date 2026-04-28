@@ -5,6 +5,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { Asset } from 'expo-asset';
+import * as FileSystem from 'expo-file-system';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { ArrowLeft, ExternalLink, FileText } from 'lucide-react-native';
 import { WebView } from 'react-native-webview';
@@ -50,8 +51,119 @@ export default function ResourcesScreen() {
   const router = useRouter();
   const { width } = useWindowDimensions();
   const [openingId, setOpeningId] = useState<string | null>(null);
-  const [activeWebDocument, setActiveWebDocument] = useState<{ title: string; uri: string } | null>(null);
+  const [activeWebDocument, setActiveWebDocument] = useState<{ title: string; uri: string; html?: string } | null>(null);
   const contentMaxWidth = width >= 1440 ? 1120 : width >= 1180 ? 980 : 860;
+
+  const buildMobilePdfViewerHtml = async (title: string, uri: string) => {
+    const base64 = await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+
+    const escapedTitle = title.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes" />
+    <title>${escapedTitle}</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0;
+        padding: 0 0 32px;
+        background: #07131f;
+        color: #f5f7fb;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      #status {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        padding: 12px 16px;
+        background: rgba(7, 19, 31, 0.92);
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+        font-size: 14px;
+      }
+      #pages {
+        padding: 12px;
+      }
+      .page {
+        margin: 0 auto 16px;
+        width: fit-content;
+        max-width: 100%;
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 16px;
+        overflow: hidden;
+        box-shadow: 0 16px 40px rgba(0,0,0,0.28);
+      }
+      canvas {
+        display: block;
+        max-width: 100%;
+        height: auto;
+      }
+      .page-label {
+        padding: 8px 12px;
+        font-size: 12px;
+        color: rgba(255,255,255,0.72);
+        border-top: 1px solid rgba(255,255,255,0.08);
+        text-align: center;
+      }
+      .hint {
+        margin-top: 4px;
+        font-size: 12px;
+        color: rgba(255,255,255,0.6);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="status">
+      Loading document...
+      <div class="hint">Scroll to view every page. Pinch to zoom.</div>
+    </div>
+    <div id="pages"></div>
+    <script type="module">
+      import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.7.76/pdf.min.mjs';
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.7.76/pdf.worker.min.mjs';
+
+      const status = document.getElementById('status');
+      const pages = document.getElementById('pages');
+      const base64 = '${base64}';
+
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+
+      const pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
+      status.firstChild.textContent = 'Loaded ${escapedTitle}';
+
+      for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+        const page = await pdf.getPage(pageNumber);
+        const viewport = page.getViewport({ scale: 1.45 });
+        const wrapper = document.createElement('div');
+        wrapper.className = 'page';
+
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d', { alpha: false });
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        wrapper.appendChild(canvas);
+
+        const label = document.createElement('div');
+        label.className = 'page-label';
+        label.textContent = 'Page ' + pageNumber + ' of ' + pdf.numPages;
+        wrapper.appendChild(label);
+        pages.appendChild(wrapper);
+
+        await page.render({ canvasContext: context, viewport }).promise;
+      }
+    </script>
+  </body>
+</html>`;
+  };
 
   const openResource = async (resource: ResourceItem) => {
     try {
@@ -68,10 +180,16 @@ export default function ResourcesScreen() {
         throw new Error('Missing document URI');
       }
 
-      setActiveWebDocument({
+      const nextDocument = {
         title: resource.title,
         uri,
-      });
+      } as { title: string; uri: string; html?: string };
+
+      if (Platform.OS !== 'web') {
+        nextDocument.html = await buildMobilePdfViewerHtml(resource.title, uri);
+      }
+
+      setActiveWebDocument(nextDocument);
     } catch (error) {
       Alert.alert(
         'Unable to Open Document',
@@ -117,12 +235,15 @@ export default function ResourcesScreen() {
             ) : (
               <View style={{ flex: 1, overflow: 'hidden', borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)' }}>
                 <WebView
-                  source={{ uri: activeWebDocument.uri }}
+                  source={activeWebDocument.html ? { html: activeWebDocument.html, baseUrl: activeWebDocument.uri } : { uri: activeWebDocument.uri }}
                   style={{ flex: 1, backgroundColor: theme.background }}
                   allowsBackForwardNavigationGestures
-                  scalesPageToFit
-                  setBuiltInZoomControls
+                  scalesPageToFit={false}
                   setDisplayZoomControls={false}
+                  originWhitelist={['*']}
+                  javaScriptEnabled
+                  domStorageEnabled
+                  allowingReadAccessToURL={activeWebDocument.uri}
                 />
               </View>
             )}
@@ -162,7 +283,7 @@ export default function ResourcesScreen() {
             <ThemeChrome theme={theme} variant="feature">
               <View className="p-4">
                 <Text style={[getThemeBodyStyle(theme, 11, theme.textMuted), { textTransform: 'uppercase', marginBottom: 8 }]}>Official Documents</Text>
-                <Text style={getThemeBodyStyle(theme, 14)}>These PDFs open in the in-app document viewer with full-page scrolling.</Text>
+                <Text style={getThemeBodyStyle(theme, 14)}>These PDFs open in the in-app document viewer.</Text>
               </View>
             </ThemeChrome>
           </Animated.View>

@@ -7,7 +7,7 @@ import { Trophy, Timer, ChevronDown, ChevronUp, Crown, Medal, Search, X, Activit
 import Animated, { FadeInDown, FadeInRight, useAnimatedStyle, useSharedValue, withDelay, withSpring } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import { ALL_ACHIEVEMENTS, FLIGHTS, formatFlightDisplay, getEffectiveAchievementIds, getShortDisplayName, type Flight, useAuthStore, useMemberStore, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
+import { ALL_ACHIEVEMENTS, FLIGHTS, formatFlightDisplay, getClosedMonthPlacements, getEffectiveAchievementIds, getShortDisplayName, type Flight, useAuthStore, useMemberStore, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { ATTENDANCE_CHECK_IN_POINTS, getMemberMonthSummary, getMonthKey, WORKOUT_POINTS_PER_MILE, WORKOUT_POINTS_PER_MINUTE } from '@/lib/monthlyStats';
@@ -91,6 +91,7 @@ interface LeaderboardMember {
   workoutCount: number;
   totalScore: number;
   trophyCount: number;
+  monthlyPlacements?: { month: string; position: 1 | 2 | 3 }[];
   hardAchievements: { id: string; name: string }[];
 }
 
@@ -199,10 +200,10 @@ function LeaderboardCard({
           <View className="flex-1">
             <View className="flex-row items-center flex-wrap">
               <Text style={[getThemeBodyStyle(theme, 16, theme.textPrimary), { fontWeight: '600' }]}>{displayName}</Text>
-              {member.trophyCount > 0 && (
+              {getClosedMonthPlacements(member).length > 0 && (
                 <View className="ml-2 flex-row items-center px-1.5 py-0.5 rounded border" style={{ backgroundColor: rankAccent.bg, borderColor: rankAccent.border }}>
                   <Trophy size={10} color={rankAccent.text} />
-                  <Text className="text-xs font-bold ml-0.5" style={{ color: rankAccent.text }}>{member.trophyCount}</Text>
+                  <Text className="text-xs font-bold ml-0.5" style={{ color: rankAccent.text }}>{getClosedMonthPlacements(member).length}</Text>
                 </View>
               )}
             </View>
@@ -334,6 +335,7 @@ export function LeaderboardContent({
           workoutCount: summary.workoutCount,
           totalScore: summary.score,
           trophyCount: m.trophyCount,
+          monthlyPlacements: m.monthlyPlacements,
           hardAchievements: ALL_ACHIEVEMENTS
             .filter(a => a.isHard && getEffectiveAchievementIds(m).includes(a.id))
             .map(a => ({ id: a.id, name: a.name })),

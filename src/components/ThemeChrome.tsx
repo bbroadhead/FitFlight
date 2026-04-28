@@ -23,8 +23,9 @@ export function ThemeChrome({
 }: ThemeChromeProps) {
   const chromeStyle = getThemeChromeStyle(theme, variant);
   const cardStyle = getThemeCardStyle(theme, variant);
+  const isOverlayShell = fill || forceBlur;
   const shouldBlur =
-    forceBlur ||
+    isOverlayShell ||
     theme.id === 'dark' ||
     theme.id === 'space' ||
     theme.id === 'flowery' ||
@@ -32,21 +33,49 @@ export function ThemeChrome({
   const blurTint = 'dark';
   const pixelBorderColor = variant === 'feature' ? theme.borderStrong : theme.border;
   const blurOverlayColor =
-    theme.id === 'dark'
-      ? 'rgba(5, 7, 11, 0.18)'
-      : theme.id === 'space'
-        ? 'rgba(5, 8, 20, 0.16)'
-        : theme.id === 'flowery'
-        ? 'rgba(36, 16, 43, 0.14)'
+    isOverlayShell
+      ? theme.id === 'dark'
+        ? 'rgba(5, 7, 11, 0.34)'
+        : theme.id === 'space'
+          ? 'rgba(5, 8, 20, 0.30)'
+          : theme.id === 'flowery'
+            ? 'rgba(36, 16, 43, 0.28)'
+            : theme.id === 'pixel'
+              ? 'rgba(8, 12, 18, 0.34)'
+              : theme.id === 'cyber'
+                ? 'rgba(2, 8, 13, 0.34)'
+                : 'rgba(10, 22, 40, 0.30)'
+      : theme.id === 'dark'
+        ? 'rgba(5, 7, 11, 0.18)'
+        : theme.id === 'space'
+          ? 'rgba(5, 8, 20, 0.16)'
+          : theme.id === 'flowery'
+            ? 'rgba(36, 16, 43, 0.14)'
+            : theme.id === 'pixel'
+              ? 'rgba(8, 12, 18, 0.20)'
+              : theme.id === 'cyber'
+                ? 'rgba(2, 8, 13, 0.18)'
+                : 'rgba(10, 22, 40, 0.16)';
+  const resolvedBlurIntensity = blurIntensity
+    ?? (isOverlayShell
+      ? theme.id === 'dark'
+        ? 46
         : theme.id === 'pixel'
-          ? 'rgba(8, 12, 18, 0.20)'
-          : 'rgba(10, 22, 40, 0.16)';
+          ? 36
+          : theme.id === 'cyber'
+            ? 40
+            : 38
+      : theme.id === 'dark'
+        ? 30
+        : theme.id === 'pixel'
+          ? 22
+          : 24);
 
   return (
     <View {...props} style={[chromeStyle, style]}>
       {shouldBlur ? (
         <BlurView
-          intensity={blurIntensity ?? (theme.id === 'dark' ? 30 : theme.id === 'pixel' ? 22 : 24)}
+          intensity={resolvedBlurIntensity}
           tint={blurTint}
           style={[cardStyle, fill ? { flex: 1 } : null, { overflow: 'hidden' }]}
         >

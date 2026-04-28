@@ -17,7 +17,7 @@ import { requestRegisteredSync } from '@/lib/appSync';
 import { useErrorLogScreenContext } from '@/lib/errorLog';
 import { getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
 import { fetchDashboardLayoutPreference, saveDashboardLayoutPreference } from '@/lib/supabaseData';
-import { canManagePFRARecords, canManagePTPrograms, getShortDisplayName, useAuthStore, useMemberStore } from '@/lib/store';
+import { canManagePFRARecords, canManagePTPrograms, getShortDisplayName, type ScheduledPTSession, useAuthStore, useMemberStore } from '@/lib/store';
 import { getThemeBodyStyle, getThemeCardStyle, getThemeControlStyle, getThemeHeadingStyle, getThemeIconWellStyle, getThemeLabelStyle, useAppTheme } from '@/lib/theme';
 
 function getCompetitionPosition(scores: number[], index: number): number {
@@ -257,8 +257,11 @@ export default function HomeScreen() {
   const [showingLeaderboard, setShowingLeaderboard] = useState(false);
   const [showInstallHelp, setShowInstallHelp] = useState(false);
   const [selectedRoleHighlightId, setSelectedRoleHighlightId] = useState<string | null>(null);
+  const [selectedDashboardSession, setSelectedDashboardSession] = useState<ScheduledPTSession | null>(null);
   const homeOverlayLabel = showingLeaderboard
     ? 'Leaderboard'
+    : selectedDashboardSession
+      ? 'Upcoming PT Session Detail'
     : selectedRoleHighlightId
       ? 'Role Dashboard Detail'
     : showInstallHelp
@@ -377,7 +380,7 @@ export default function HomeScreen() {
         id: 'sessions',
         title: 'Upcoming PT',
         value: String(scheduledSessions.filter((s) => isVisibleScheduledSession(s.date, s.time)).length),
-        note: 'Sessions still on the calendar',
+        note: 'Upcoming scheduled PT sessions',
         icon: Calendar,
         accent: '#4A90D9',
       });
@@ -385,7 +388,7 @@ export default function HomeScreen() {
         id: 'accountability',
         title: 'Below 5 Workouts',
         value: String(belowTargetCount),
-        note: 'Members currently under weekly expectation',
+        note: 'Members below weekly workout compliance',
         icon: Users,
         accent: '#F59E0B',
       });
@@ -393,9 +396,9 @@ export default function HomeScreen() {
     if (canManagePFRARecords(userAccountType)) {
       cards.push({
         id: 'pfra',
-        title: 'Recent PFRAs',
+        title: 'Logged PFRAs',
         value: String(squadronMembers.reduce((count, m) => count + m.fitnessAssessments.length, 0)),
-        note: 'PFRA records attached to squadron accounts',
+        note: 'PFRA records logged to squadron accounts',
         icon: Activity,
         accent: '#A78BFA',
       });
@@ -405,7 +408,7 @@ export default function HomeScreen() {
         id: 'owner',
         title: 'Roster Size',
         value: String(squadronMembers.length),
-        note: 'Active members currently synced',
+        note: 'Members currently synced to the roster',
         icon: Shield,
         accent: '#FFD700',
       });
@@ -1116,7 +1119,7 @@ export default function HomeScreen() {
               ) : (
                 <Text style={getThemeBodyStyle(theme, 14, theme.textSecondary)}>
                   {roleHighlights[0]?.title
-                    ? `${roleDashboardTitle.replace(/\s+Dashboard$/, '')} Overview`
+                    ? `${roleDashboardTitle.replace(/\s+Dashboard$/, '')} priorities ready`
                     : 'Role-specific information available'}
                 </Text>
               )}
@@ -1180,20 +1183,99 @@ export default function HomeScreen() {
 
                 <ThemeChrome theme={theme} variant="alt" style={{ marginTop: 16 }}>
                   <View className="p-4">
-                    <Text style={getThemeBodyStyle(theme, 12, theme.textMuted)}>Current Value</Text>
-                    <Text style={[getThemeHeadingStyle(theme, 28), { marginTop: 6 }]}>{roleHighlightDetail?.value ?? '--'}</Text>
+                    <Text style={getThemeHeadingStyle(theme, 28)}>{roleHighlightDetail?.value ?? '--'}</Text>
                   </View>
                 </ThemeChrome>
 
                 <ScrollView style={{ flex: 1, minHeight: 0, marginTop: 16 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 12 }}>
-                  {(roleHighlightDetail?.lines ?? []).map((line, index) => (
-                    <ThemeChrome key={`${roleHighlightDetail?.id ?? 'detail'}-${index}`} theme={theme} variant="alt" style={{ marginBottom: 10 }}>
+                  {selectedRoleHighlightId === 'sessions'
+                    ? upcomingSessions.map((session) => (
+                        <Pressable
+                          key={session.id}
+                          onPress={() => setSelectedDashboardSession(session)}
+                          className="active:opacity-90"
+                          style={{ marginBottom: 10 }}
+                        >
+                          <ThemeChrome theme={theme} variant="alt">
+                            <View className="p-4">
+                              <View className="flex-row items-center justify-between">
+                                <View className="flex-1 pr-3">
+                                  <Text style={[getThemeBodyStyle(theme, 14, theme.textPrimary), { fontWeight: '700' }]}>
+                                    {session.description}
+                                  </Text>
+                                  <Text style={[getThemeBodyStyle(theme, 12, theme.textSecondary), { marginTop: 6 }]}>
+                                    {session.date} at {session.time}
+                                  </Text>
+                                </View>
+                                <Text style={getThemeBodyStyle(theme, 11, theme.accent)}>Open</Text>
+                              </View>
+                            </View>
+                          </ThemeChrome>
+                        </Pressable>
+                      ))
+                    : (roleHighlightDetail?.lines ?? []).map((line, index) => (
+                        <ThemeChrome key={`${roleHighlightDetail?.id ?? 'detail'}-${index}`} theme={theme} variant="alt" style={{ marginBottom: 10 }}>
+                          <View className="p-4">
+                            <Text style={getThemeBodyStyle(theme, 14, theme.textPrimary)}>{line}</Text>
+                          </View>
+                        </ThemeChrome>
+                      ))}
+                </ScrollView>
+              </View>
+            </ThemeChrome>
+          </View>
+        </Modal>
+        <Modal visible={!!selectedDashboardSession} transparent animationType="fade" onRequestClose={() => setSelectedDashboardSession(null)}>
+          <View className="flex-1 justify-center px-6" style={{ backgroundColor: 'rgba(0, 0, 0, 0.72)' }}>
+            <ThemeChrome theme={theme} variant="feature" fill blurIntensity={30} style={{ maxHeight: '72%', borderRadius: 24 }}>
+              <View className="flex-1 p-6">
+                <View className="flex-row items-start justify-between">
+                  <View className="flex-1 pr-4">
+                    <Text style={getThemeHeadingStyle(theme, 22)}>Scheduled PT Details</Text>
+                    <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>
+                      Review the full details for this upcoming session.
+                    </Text>
+                  </View>
+                  <Pressable
+                    onPress={() => setSelectedDashboardSession(null)}
+                    className="h-9 w-9 items-center justify-center rounded-full"
+                    style={getThemeControlStyle(theme)}
+                  >
+                    <X size={18} color={theme.textSecondary} />
+                  </Pressable>
+                </View>
+
+                {selectedDashboardSession ? (
+                  <>
+                    <ThemeChrome theme={theme} variant="alt" style={{ marginTop: 16 }}>
                       <View className="p-4">
-                        <Text style={getThemeBodyStyle(theme, 14, theme.textPrimary)}>{line}</Text>
+                        <Text style={getThemeHeadingStyle(theme, 20)}>{selectedDashboardSession.description}</Text>
+                        <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 10 }]}>
+                          {selectedDashboardSession.date} at {selectedDashboardSession.time}
+                        </Text>
+                        <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 8 }]}>
+                          Scope: {selectedDashboardSession.scope === 'squadron'
+                            ? 'Squadron'
+                            : selectedDashboardSession.scope === 'personal'
+                              ? 'Personal'
+                              : selectedDashboardSession.flights.join(', ')}
+                        </Text>
                       </View>
                     </ThemeChrome>
-                  ))}
-                </ScrollView>
+
+                    <Pressable
+                      onPress={() => {
+                        setSelectedDashboardSession(null);
+                        setSelectedRoleHighlightId(null);
+                        navigation.navigate('attendance' as never);
+                      }}
+                      className="mt-4 rounded-2xl px-4 py-3 items-center"
+                      style={getThemeControlStyle(theme, true)}
+                    >
+                      <Text style={[getThemeBodyStyle(theme, 14, theme.textPrimary), { fontWeight: '700' }]}>Open Attendance</Text>
+                    </Pressable>
+                  </>
+                ) : null}
               </View>
             </ThemeChrome>
           </View>

@@ -2222,6 +2222,31 @@ export async function fetchUnreadAppUpdateNotes(params: {
     .filter((note) => !seenNoteIds.has(note.id));
 }
 
+export async function fetchAppUpdateNoteHistory(accessToken?: string) {
+  const query = new URLSearchParams();
+  query.set(
+    'select',
+    'id,title,body,note_type,version_label,published_by_email,published_by_name,is_published,published_at,created_at,updated_at'
+  );
+  query.set('order', 'published_at.desc.nullslast,created_at.desc');
+
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/app_update_notes?${query.toString()}`, {
+    method: 'GET',
+    headers: await getHeaders(accessToken),
+  });
+
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to load update note history.';
+    throw new Error(message);
+  }
+
+  return (payload as AppUpdateNoteRow[]).map(normalizeAppUpdateNoteRow);
+}
+
 export async function publishAppUpdateNote(params: {
   title: string;
   body: string;

@@ -3,7 +3,7 @@ import { View, Text, Pressable, ScrollView, Alert, Platform, Modal, ActivityIndi
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { ChevronLeft, FileSpreadsheet, FileText, Users, Activity, TrendingUp, Calendar, BarChart3, Dumbbell, X } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, FileSpreadsheet, FileText, Users, Activity, TrendingUp, Calendar, BarChart3, Dumbbell, X } from 'lucide-react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Animated, { FadeInDown, useAnimatedStyle, useSharedValue, withSpring, withDelay } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
@@ -11,13 +11,13 @@ import * as FileSystem from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import Svg, { Circle } from 'react-native-svg';
-import { format, startOfWeek, addDays } from 'date-fns';
+import { format, startOfMonth, startOfWeek, addDays, endOfWeek } from 'date-fns';
 import { useMemberStore, useAuthStore, formatFlightDisplay, getDisplayName, type Flight, type PFRARecordType, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { fetchPFRABatchMembers, fetchPFRABatches, fetchWeeklyAttendanceExcusals, type PFRABatchMemberEntry, type PFRABatchSummary } from '@/lib/supabaseData';
 import ExcelJS from 'exceljs';
-import { formatMonthLabel, getAvailableMonthKeys, getMemberMonthSummary, getMonthKey, getMonthSessions } from '@/lib/monthlyStats';
+import { formatMonthLabel, getAvailableMonthKeys, getMemberEffectiveWorkouts, getMemberMonthSummary, getMonthKey, getMonthSessions, monthKeyFromDateString } from '@/lib/monthlyStats';
 import { useAppTheme } from '@/lib/theme';
 import { PageContainer } from '@/components/PageContainer';
 import { ThemeBackdrop } from '@/components/ThemeBackdrop';
@@ -59,6 +59,7 @@ async function downloadWebFile(filename: string, blob: Blob) {
 
 type OverviewCardKey = 'members' | 'workouts' | 'sessions' | 'pfra';
 type PFRALeadershipFilter = 'all' | 'self' | 'mock' | 'diagnostic' | 'official';
+type AnalyticsTimeframeView = 'week' | 'month' | 'all_time';
 
 function formatPFRALabel(value: PFRALeadershipFilter) {
   if (value === 'all') return 'All';
@@ -87,6 +88,17 @@ function didPassAssessment(assessment: { overallScore: number; components: {
     (assessment.components.situps.exempt || assessment.components.situps.score >= PFRA_MINIMUM_COMPONENT_POINTS.core) &&
     (assessment.components.waist?.exempt || (assessment.components.waist?.score ?? PFRA_MINIMUM_COMPONENT_POINTS.waist) >= PFRA_MINIMUM_COMPONENT_POINTS.waist)
   );
+}
+
+function formatAnalyticsViewLabel(view: AnalyticsTimeframeView) {
+  switch (view) {
+    case 'week':
+      return 'Week';
+    case 'month':
+      return 'Month';
+    default:
+      return 'All-Time';
+  }
 }
 
 function ComplianceCircle({
@@ -194,7 +206,9 @@ export default function AnalyticsScreen() {
   const accessToken = useAuthStore(s => s.accessToken);
   const [isExporting, setIsExporting] = useState(false);
   const [expandedOverviewCard, setExpandedOverviewCard] = useState<OverviewCardKey | null>(null);
+  const [analyticsView, setAnalyticsView] = useState<AnalyticsTimeframeView>('month');
   const [selectedMonthKey, setSelectedMonthKey] = useState(getMonthKey());
+  const [selectedWeekStart, setSelectedWeekStart] = useState(() => startOfWeek(new Date(), { weekStartsOn: 1 }));
   const [selectedPFRARecordType, setSelectedPFRARecordType] = useState<PFRALeadershipFilter>('all');
   const [pfraBatches, setPfraBatches] = useState<PFRABatchSummary[]>([]);
   const [weeklyExcusedMemberIds, setWeeklyExcusedMemberIds] = useState<string[]>([]);
@@ -216,9 +230,13 @@ export default function AnalyticsScreen() {
     () => getAvailableMonthKeys(members, ptSessions),
     [members, ptSessions]
   );
-  const activeMonthKey = availableMonthKeys.includes(selectedMonthKey)
-    ? selectedMonthKey
-    : availableMonthKeys[0] ?? getMonthKey();
+  const selectedWeekMonthKey = getMonthKey(selectedWeekStart);
+  const visibleMonthKey = analyticsView === 'week'
+    ? selectedWeekMonthKey
+    : availableMonthKeys.includes(selectedMonthKey)
+      ? selectedMonthKey
+      : availableMonthKeys[0] ?? getMonthKey();
+  const activeMonthKey = visibleMonthKey;
 
   useEffect(() => {
     trackAnalyticsEvent('view_analytics_dashboard', {
@@ -267,40 +285,92 @@ export default function AnalyticsScreen() {
     };
   }, [accessToken, userSquadron]);
 
+  const navigateWeek = (direction: 'prev' | 'next') => {
+    const nextWeekStart = addDays(selectedWeekStart, direction === 'next' ? 7 : -7);
+    setSelectedWeekStart(nextWeekStart);
+    setSelectedMonthKey(getMonthKey(nextWeekStart));
+  };
+
   // Calculate analytics
   const analytics = useMemo(() => {
-    const currentWeekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
-    const currentWeekDates = new Set(
-      Array.from({ length: 7 }, (_, index) => format(addDays(currentWeekStart, index), 'yyyy-MM-dd'))
+    const weekDates = new Set(
+      Array.from({ length: 7 }, (_, index) => format(addDays(selectedWeekStart, index), 'yyyy-MM-dd'))
     );
     const totalMembers = members.length;
-    const totalPFLs = members.filter(m => m.accountType === 'pfl' || m.accountType === 'ptl').length;
+    const totalPFLs = members.filter((member) => member.accountType === 'pfl' || member.accountType === 'ptl').length;
+    const selectedWeekSessions = ptSessions.filter((session) => weekDates.has(session.date));
     const monthSessions = getMonthSessions(ptSessions, activeMonthKey);
-    const totalSessions = monthSessions.length;
-    const totalMinutes = members.reduce((acc, m) => acc + getMemberMonthSummary(m, activeMonthKey).minutes, 0);
-    const totalMiles = members.reduce((acc, m) => acc + getMemberMonthSummary(m, activeMonthKey).miles, 0);
-    const currentWeekSessions = ptSessions.filter((session) => currentWeekDates.has(session.date));
+    const periodSessions =
+      analyticsView === 'week'
+        ? selectedWeekSessions
+        : analyticsView === 'month'
+          ? monthSessions
+          : ptSessions;
+
+    const matchesTimeframe = (dateValue: string) => {
+      if (analyticsView === 'week') {
+        return weekDates.has(dateValue);
+      }
+      if (analyticsView === 'month') {
+        return monthKeyFromDateString(dateValue) === activeMonthKey;
+      }
+      return true;
+    };
+
     const getMemberWeeklyAttendance = (memberId: string) =>
-      currentWeekSessions.reduce((count, session) => {
+      selectedWeekSessions.reduce((count, session) => {
         const source = session.attendeeSources?.[memberId];
         return source && source !== 'excused' ? count + 1 : count;
       }, 0);
+
     const getMemberWeeklyDailyExcusals = (memberId: string) =>
-      currentWeekSessions.reduce((count, session) => (
+      selectedWeekSessions.reduce((count, session) => (
         session.attendeeSources?.[memberId] === 'excused' ? count + 1 : count
       ), 0);
+
     const getMemberWeeklyRequiredSessions = (memberId: string) =>
       weeklyExcusedMemberIds.includes(memberId)
         ? 0
         : Math.max(WEEKLY_ATTENDANCE_TARGET - getMemberWeeklyDailyExcusals(memberId), 0);
-    const totalAttendanceMarksThisWeek = currentWeekSessions.reduce((acc, session) => (
+
+    const memberPeriodSummaries = members.map((member) => {
+      const effectiveWorkouts = getMemberEffectiveWorkouts(member, ptSessions);
+      const periodWorkouts = effectiveWorkouts.filter((workout) => matchesTimeframe(workout.date));
+      const selectedWeekWorkouts = effectiveWorkouts.filter((workout) => weekDates.has(workout.date));
+      const periodMinutes = periodWorkouts.reduce((sum, workout) => sum + workout.duration, 0);
+      const periodMiles = periodWorkouts.reduce((sum, workout) => sum + (workout.distance ?? 0), 0);
+      const weeklyMinutes = selectedWeekWorkouts.reduce((sum, workout) => sum + workout.duration, 0);
+      const weeklyMiles = selectedWeekWorkouts.reduce((sum, workout) => sum + (workout.distance ?? 0), 0);
+
+      return {
+        id: member.id,
+        displayName: getDisplayName(member),
+        firstName: member.firstName,
+        lastName: member.lastName,
+        flight: member.flight,
+        attendance: getMemberWeeklyAttendance(member.id),
+        weeklyRequired: getMemberWeeklyRequiredSessions(member.id),
+        isExcused: weeklyExcusedMemberIds.includes(member.id),
+        workouts: selectedWeekWorkouts.length,
+        minutes: weeklyMinutes,
+        miles: Number(weeklyMiles.toFixed(2)),
+        periodMinutes,
+        periodMiles: Number(periodMiles.toFixed(2)),
+        periodWorkoutCount: periodWorkouts.length,
+      };
+    }).sort((left, right) => left.lastName.localeCompare(right.lastName) || left.firstName.localeCompare(right.firstName));
+
+    const totalSessions = periodSessions.length;
+    const totalMinutes = memberPeriodSummaries.reduce((sum, member) => sum + member.periodMinutes, 0);
+    const totalMiles = memberPeriodSummaries.reduce((sum, member) => sum + member.periodMiles, 0);
+    const totalWorkouts = memberPeriodSummaries.reduce((sum, member) => sum + member.periodWorkoutCount, 0);
+
+    const totalAttendanceMarksThisWeek = selectedWeekSessions.reduce((acc, session) => (
       acc + Object.values(session.attendeeSources ?? {}).filter((source) => source && source !== 'excused').length
     ), 0);
     const excusedThisWeekCount = members.filter((member) => weeklyExcusedMemberIds.includes(member.id)).length;
     const weeklyComplianceEligibleMembers = Math.max(totalMembers - excusedThisWeekCount, 0);
-    const totalRequiredSessionsThisWeek = members.reduce((sum, member) => (
-      sum + getMemberWeeklyRequiredSessions(member.id)
-    ), 0);
+    const totalRequiredSessionsThisWeek = members.reduce((sum, member) => sum + getMemberWeeklyRequiredSessions(member.id), 0);
     const membersMeetingWeeklyTarget = members.filter((member) => {
       if (weeklyExcusedMemberIds.includes(member.id)) {
         return true;
@@ -310,32 +380,31 @@ export default function AnalyticsScreen() {
     const weeklyCompliancePercent = weeklyComplianceEligibleMembers > 0
       ? Math.round(((membersMeetingWeeklyTarget - excusedThisWeekCount) / weeklyComplianceEligibleMembers) * 100)
       : 0;
-    const averageWeeklyAttendance = totalMembers > 0
-      ? totalAttendanceMarksThisWeek / totalMembers
-      : 0;
-    const averageWeeklyRequiredSessions = weeklyComplianceEligibleMembers > 0
-      ? totalRequiredSessionsThisWeek / weeklyComplianceEligibleMembers
-      : 0;
+    const averageWeeklyAttendance = totalMembers > 0 ? totalAttendanceMarksThisWeek / totalMembers : 0;
+    const averageWeeklyRequiredSessions = weeklyComplianceEligibleMembers > 0 ? totalRequiredSessionsThisWeek / weeklyComplianceEligibleMembers : 0;
 
-    // Flight breakdown
-    const flightStats = FLIGHTS.map(flight => {
-      const flightMembers = members.filter(m => m.flight === flight);
-      const flightSessions = monthSessions.filter(s => s.flight === flight);
-      const excusedMemberCount = flightMembers.filter((member) => weeklyExcusedMemberIds.includes(member.id)).length;
-      const eligibleMembers = Math.max(flightMembers.length - excusedMemberCount, 0);
-      const compliantMembers = flightMembers.filter((member) => (
+    const flightStats = FLIGHTS.map((flight) => {
+      const flightMembers = memberPeriodSummaries.filter((member) => member.flight === flight);
+      const rawFlightMembers = members.filter((member) => member.flight === flight);
+      const flightSessions = periodSessions.filter((session) => session.flight === flight);
+      const excusedMemberCount = rawFlightMembers.filter((member) => weeklyExcusedMemberIds.includes(member.id)).length;
+      const eligibleMembers = Math.max(rawFlightMembers.length - excusedMemberCount, 0);
+      const compliantMembers = rawFlightMembers.filter((member) => (
         !weeklyExcusedMemberIds.includes(member.id) &&
         getMemberWeeklyAttendance(member.id) >= getMemberWeeklyRequiredSessions(member.id)
       )).length;
       const avgAttendance = flightSessions.length > 0
-        ? flightSessions.reduce((acc, s) => acc + s.attendees.length, 0) / flightSessions.length
+        ? flightSessions.reduce((sum, session) => sum + session.attendees.filter((attendeeId) => {
+          const source = session.attendeeSources?.[attendeeId];
+          return source && source !== 'excused';
+        }).length, 0) / flightSessions.length
         : 0;
 
       return {
         flight,
-        memberCount: flightMembers.length,
-        totalMinutes: flightMembers.reduce((acc, m) => acc + getMemberMonthSummary(m, activeMonthKey).minutes, 0),
-        totalMiles: flightMembers.reduce((acc, m) => acc + getMemberMonthSummary(m, activeMonthKey).miles, 0),
+        memberCount: rawFlightMembers.length,
+        totalMinutes: flightMembers.reduce((sum, member) => sum + member.periodMinutes, 0),
+        totalMiles: Number(flightMembers.reduce((sum, member) => sum + member.periodMiles, 0).toFixed(2)),
         avgAttendance: Math.round(avgAttendance * 10) / 10,
         sessions: flightSessions.length,
         weeklyCompliancePercent: eligibleMembers > 0 ? Math.round((compliantMembers / eligibleMembers) * 100) : 0,
@@ -345,39 +414,35 @@ export default function AnalyticsScreen() {
     });
 
     const pfraEntries = members.flatMap((member) =>
-      member.fitnessAssessments.map((assessment) => ({
-        id: assessment.id,
-        memberId: member.id,
-        memberName: getDisplayName(member),
-        flight: member.flight,
-        assessment,
-      }))
+      member.fitnessAssessments
+        .filter((assessment) => matchesTimeframe(assessment.date))
+        .map((assessment) => ({
+          id: assessment.id,
+          memberId: member.id,
+          memberName: getDisplayName(member),
+          flight: member.flight,
+          assessment,
+        }))
     );
     const filteredPFRAEntries = pfraEntries.filter((entry) => {
       const recordType = entry.assessment.recordType ?? 'self';
-      if (selectedPFRARecordType === 'all') {
-        return true;
-      }
-
-      return recordType === selectedPFRARecordType;
+      return selectedPFRARecordType === 'all' ? true : recordType === selectedPFRARecordType;
     });
     const membersWithFA = new Set(filteredPFRAEntries.map((entry) => entry.memberId));
     const avgPFRAScore = filteredPFRAEntries.length > 0
       ? filteredPFRAEntries.reduce((sum, entry) => sum + entry.assessment.overallScore, 0) / filteredPFRAEntries.length
       : 0;
 
-    // Workout type breakdown
     const workoutTypeCounts = new Map<string, number>();
-    WORKOUT_TYPES.forEach(type => { workoutTypeCounts.set(type, 0); });
+    WORKOUT_TYPES.forEach((type) => workoutTypeCounts.set(type, 0));
     workoutTypeCounts.set('Attendance', 0);
-
-    let totalWorkouts = 0;
-    members.forEach(member => {
-      getMemberMonthSummary(member, activeMonthKey).workouts.forEach(workout => {
-        const label = workout.source === 'attendance' ? 'Attendance' : workout.type;
-        workoutTypeCounts.set(label, (workoutTypeCounts.get(label) ?? 0) + 1);
-        totalWorkouts++;
-      });
+    members.forEach((member) => {
+      getMemberEffectiveWorkouts(member, ptSessions)
+        .filter((workout) => matchesTimeframe(workout.date))
+        .forEach((workout) => {
+          const label = workout.source === 'attendance' ? 'Attendance' : workout.type;
+          workoutTypeCounts.set(label, (workoutTypeCounts.get(label) ?? 0) + 1);
+        });
     });
 
     const workoutTypeBreakdown = Array.from(workoutTypeCounts.entries())
@@ -386,72 +451,56 @@ export default function AnalyticsScreen() {
         count,
         percentage: totalWorkouts > 0 ? (count / totalWorkouts) * 100 : 0,
       }))
-      .filter(item => item.count > 0)
-      .sort((a, b) => b.count - a.count);
-
-    const memberWeeklySummaries = members
-      .map((member) => {
-        const weeklyAttendance = getMemberWeeklyAttendance(member.id);
-        const weeklyRequired = getMemberWeeklyRequiredSessions(member.id);
-        const weeklyWorkouts = member.workouts.filter((workout) => currentWeekDates.has(workout.date));
-        const weeklyMinutes = weeklyWorkouts.reduce((count, workout) => count + workout.duration, 0);
-        const weeklyMiles = weeklyWorkouts.reduce((count, workout) => count + (workout.distance ?? 0), 0);
-
-        return {
-          id: member.id,
-          displayName: getDisplayName(member),
-          firstName: member.firstName,
-          lastName: member.lastName,
-          flight: member.flight,
-          attendance: weeklyAttendance,
-          weeklyRequired,
-          isExcused: weeklyExcusedMemberIds.includes(member.id),
-          workouts: weeklyWorkouts.length,
-          minutes: weeklyMinutes,
-        miles: Number(weeklyMiles.toFixed(2)),
-        };
-      })
-      .sort((left, right) =>
-        left.lastName.localeCompare(right.lastName) ||
-        left.firstName.localeCompare(right.firstName)
-      );
+      .filter((item) => item.count > 0)
+      .sort((left, right) => right.count - left.count);
 
     const workoutsByType = WORKOUT_TYPES
-      .map((type) => ({
-        type,
-        count: workoutTypeCounts.get(type) ?? 0,
-      }))
+      .map((type) => ({ type, count: workoutTypeCounts.get(type) ?? 0 }))
       .filter((item) => item.count > 0)
       .sort((left, right) => right.count - left.count);
 
     const longestWorkout = members
-      .flatMap((member) => getMemberMonthSummary(member, activeMonthKey).workouts.map((workout) => ({ member, workout })))
+      .flatMap((member) => getMemberEffectiveWorkouts(member, ptSessions)
+        .filter((workout) => matchesTimeframe(workout.date))
+        .map((workout) => ({ member, workout })))
       .sort((left, right) => right.workout.duration - left.workout.duration)[0] ?? null;
 
-    const pfraTimeline = Array.from({ length: 3 }, (_, index) => {
-      const date = new Date();
-      date.setMonth(date.getMonth() - (2 - index));
-      const year = date.getFullYear();
-      const month = date.getMonth();
-      const monthLabel = date.toLocaleString('en-US', { month: 'short' });
-
-      const monthScores = filteredPFRAEntries
-        .filter(({ assessment }) => {
-          const assessmentDate = new Date(assessment.date);
-          return assessmentDate.getFullYear() === year && assessmentDate.getMonth() === month;
-        })
-        .map(({ assessment }) => assessment.overallScore);
-
-      const average = monthScores.length > 0
-        ? monthScores.reduce((sum, score) => sum + score, 0) / monthScores.length
-        : 0;
-
-      return {
-        label: monthLabel,
-        average: Math.round(average * 10) / 10,
-        count: monthScores.length,
-      };
-    });
+    const pfraTimeline = analyticsView === 'week'
+      ? []
+      : analyticsView === 'month'
+        ? (() => {
+            const monthStart = startOfMonth(new Date(`${activeMonthKey}-01T00:00:00`));
+            const firstWeekStart = startOfWeek(monthStart, { weekStartsOn: 1 });
+            return Array.from({ length: 6 }, (_, index) => addDays(firstWeekStart, index * 7))
+              .filter((weekStart) => monthKeyFromDateString(format(weekStart, 'yyyy-MM-dd')) <= activeMonthKey)
+              .map((weekStart) => {
+                const rangeDates = new Set(Array.from({ length: 7 }, (_, index) => format(addDays(weekStart, index), 'yyyy-MM-dd')));
+                const weekScores = filteredPFRAEntries
+                  .filter(({ assessment }) => monthKeyFromDateString(assessment.date) === activeMonthKey && rangeDates.has(assessment.date))
+                  .map(({ assessment }) => assessment.overallScore);
+                const average = weekScores.length > 0 ? weekScores.reduce((sum, score) => sum + score, 0) / weekScores.length : 0;
+                return {
+                  label: format(weekStart, 'MMM d'),
+                  average: Math.round(average * 10) / 10,
+                  count: weekScores.length,
+                };
+              });
+          })()
+        : availableMonthKeys
+            .slice()
+            .reverse()
+            .slice(-6)
+            .map((monthKey) => {
+              const monthScores = filteredPFRAEntries
+                .filter(({ assessment }) => monthKeyFromDateString(assessment.date) === monthKey)
+                .map(({ assessment }) => assessment.overallScore);
+              const average = monthScores.length > 0 ? monthScores.reduce((sum, score) => sum + score, 0) / monthScores.length : 0;
+              return {
+                label: formatMonthLabel(monthKey).replace(' 20', ' '),
+                average: Math.round(average * 10) / 10,
+                count: monthScores.length,
+              };
+            });
 
     const maxPFRAAverage = Math.max(...pfraTimeline.map((entry) => entry.average), 100);
     const recentPFRARecords = filteredPFRAEntries
@@ -481,9 +530,7 @@ export default function AnalyticsScreen() {
       : { waist: 0, strength: 0, core: 0, cardio: 0 };
 
     const passedEntries = filteredPFRAEntries.filter((entry) => didPassAssessment(entry.assessment));
-    const overallPassRate = filteredPFRAEntries.length > 0
-      ? passedEntries.length / filteredPFRAEntries.length
-      : 0;
+    const overallPassRate = filteredPFRAEntries.length > 0 ? passedEntries.length / filteredPFRAEntries.length : 0;
     const componentPassRates = filteredPFRAEntries.length > 0
       ? {
           waist: filteredPFRAEntries.filter((entry) => (entry.assessment.components.waist?.score ?? 0) >= PFRA_MINIMUM_COMPONENT_POINTS.waist || entry.assessment.components.waist?.exempt).length / filteredPFRAEntries.length,
@@ -492,13 +539,28 @@ export default function AnalyticsScreen() {
           cardio: filteredPFRAEntries.filter((entry) => entry.assessment.components.cardio.score >= PFRA_MINIMUM_COMPONENT_POINTS.cardio || entry.assessment.components.cardio.exempt).length / filteredPFRAEntries.length,
         }
       : { waist: 0, strength: 0, core: 0, cardio: 0 };
-    const pfraBatchesForFilter = pfraBatches.filter((batch) => (
-      selectedPFRARecordType === 'all' ? true : batch.recordType === selectedPFRARecordType
-    ));
+
+    const pfraBatchesForFilter = pfraBatches
+      .filter((batch) => (selectedPFRARecordType === 'all' ? true : batch.recordType === selectedPFRARecordType))
+      .filter((batch) => matchesTimeframe(batch.assessmentDate));
     const latestSelectedBatch = pfraBatchesForFilter
+      .slice()
       .sort((left, right) => right.assessmentDate.localeCompare(left.assessmentDate))[0] ?? null;
 
     return {
+      timeframeView: analyticsView,
+      timeframeLabel: analyticsView === 'week'
+        ? `${format(selectedWeekStart, 'MMM d')} - ${format(endOfWeek(selectedWeekStart, { weekStartsOn: 1 }), 'MMM d, yyyy')}`
+        : analyticsView === 'month'
+          ? formatMonthLabel(activeMonthKey)
+          : 'All-Time',
+      timeframeSubtitle: analyticsView === 'week'
+        ? 'All visible data reflects this selected week.'
+        : analyticsView === 'month'
+          ? 'All visible data reflects the full selected month.'
+          : 'Cumulative squadron data across all available history.',
+      showWeekSelector: analyticsView === 'week',
+      showTrendCharts: analyticsView !== 'week',
       totalMembers,
       totalPFLs,
       totalSessions,
@@ -512,7 +574,8 @@ export default function AnalyticsScreen() {
       weeklyCompliancePercent,
       averageWeeklyAttendance: Math.round(averageWeeklyAttendance * 10) / 10,
       averageWeeklyRequiredSessions: Math.round(averageWeeklyRequiredSessions * 10) / 10,
-      memberWeeklySummaries,
+      memberWeeklySummaries: memberPeriodSummaries,
+      memberPeriodSummaries,
       workoutsByType,
       longestWorkout,
       pfraTimeline,
@@ -531,8 +594,11 @@ export default function AnalyticsScreen() {
       workoutTypeBreakdown,
       totalWorkouts,
       activeMonthKey,
+      exportHelperText: analyticsView === 'all_time'
+        ? 'Exports include all available data in the all-time view.'
+        : `Exports include only the currently selected ${formatAnalyticsViewLabel(analyticsView).toLowerCase()} view.`,
     };
-  }, [activeMonthKey, members, pfraBatches, ptSessions, selectedPFRARecordType, weeklyExcusedMemberIds]);
+  }, [activeMonthKey, analyticsView, availableMonthKeys, members, pfraBatches, ptSessions, selectedPFRARecordType, selectedWeekStart, weeklyExcusedMemberIds]);
 
   const buildPdfHtml = () => {
     const generatedAt = new Date().toLocaleString();
@@ -577,7 +643,7 @@ export default function AnalyticsScreen() {
         <body>
           <div class="shell">
             <h1>${userSquadron} Squadron Analytics</h1>
-            <div class="subtitle">Generated ${generatedAt}${user ? ` by ${getDisplayName(user)}` : ''} for ${formatMonthLabel(activeMonthKey)}</div>
+            <div class="subtitle">Generated ${generatedAt}${user ? ` by ${getDisplayName(user)}` : ''} for ${analytics.timeframeLabel}</div>
             <div class="grid">
               <div class="card"><div class="label">Members</div><div class="value">${analytics.totalMembers}</div></div>
               <div class="card"><div class="label">Workouts</div><div class="value">${analytics.totalWorkouts}</div></div>
@@ -616,7 +682,8 @@ export default function AnalyticsScreen() {
       { metric: 'Squadron', value: userSquadron },
       { metric: 'Total Members', value: analytics.totalMembers },
       { metric: 'Total PFLs', value: analytics.totalPFLs },
-      { metric: 'Report Month', value: formatMonthLabel(activeMonthKey) },
+      { metric: 'Report View', value: formatAnalyticsViewLabel(analyticsView) },
+      { metric: 'Selected Range', value: analytics.timeframeLabel },
       { metric: 'Total Workouts', value: analytics.totalWorkouts },
       { metric: 'Total PT Sessions Logged', value: analytics.totalSessions },
       { metric: 'Total Minutes', value: analytics.totalMinutes },
@@ -643,9 +710,12 @@ export default function AnalyticsScreen() {
       { header: 'Attendance This Week', key: 'attendance', width: 18 },
       { header: 'Latest PFRA', key: 'pfra', width: 14 },
     ];
-    members.forEach((member) => {
+    analytics.memberPeriodSummaries.forEach((memberSummary) => {
+      const member = members.find((entry) => entry.id === memberSummary.id);
+      if (!member) {
+        return;
+      }
       const latestPFRA = member.fitnessAssessments[member.fitnessAssessments.length - 1];
-      const weeklySummary = analytics.memberWeeklySummaries.find((item) => item.id === member.id);
       membersSheet.addRow({
         rank: member.rank,
         firstName: member.firstName,
@@ -661,10 +731,10 @@ export default function AnalyticsScreen() {
                 : member.accountType === 'ufpm'
                 ? 'UFPM'
                 : member.accountType,
-        minutes: member.exerciseMinutes,
-        miles: member.distanceRun,
-        workouts: member.workouts.length,
-        attendance: weeklySummary?.attendance ?? 0,
+        minutes: memberSummary.periodMinutes,
+        miles: memberSummary.periodMiles,
+        workouts: memberSummary.periodWorkoutCount,
+        attendance: memberSummary.attendance,
         pfra: latestPFRA?.overallScore ?? '',
       });
     });
@@ -694,13 +764,15 @@ export default function AnalyticsScreen() {
       });
     });
 
-    const pfraSheet = workbook.addWorksheet('PFRA Trend');
-    pfraSheet.columns = [
-      { header: 'Month', key: 'label', width: 12 },
-      { header: 'Avg PFRA', key: 'average', width: 14 },
-      { header: 'Entries', key: 'count', width: 10 },
-    ];
-    analytics.pfraTimeline.forEach((entry) => pfraSheet.addRow(entry));
+    if (analytics.pfraTimeline.length > 0) {
+      const pfraSheet = workbook.addWorksheet('PFRA Trend');
+      pfraSheet.columns = [
+        { header: 'Period', key: 'label', width: 18 },
+        { header: 'Avg PFRA', key: 'average', width: 14 },
+        { header: 'Entries', key: 'count', width: 10 },
+      ];
+      analytics.pfraTimeline.forEach((entry) => pfraSheet.addRow(entry));
+    }
 
     const pfraBatchSheet = workbook.addWorksheet('PFRA Batches');
     pfraBatchSheet.columns = [
@@ -724,7 +796,15 @@ export default function AnalyticsScreen() {
       });
     });
 
-    [overviewSheet, membersSheet, flightsSheet, workoutsSheet, pfraSheet, pfraBatchSheet].forEach((sheet) => {
+    const sheets = [overviewSheet, membersSheet, flightsSheet, workoutsSheet, pfraBatchSheet];
+    if (analytics.pfraTimeline.length > 0) {
+      const trendSheet = workbook.getWorksheet('PFRA Trend');
+      if (trendSheet) {
+        sheets.push(trendSheet);
+      }
+    }
+
+    sheets.forEach((sheet) => {
       sheet.getRow(1).font = { bold: true };
       sheet.views = [{ state: 'frozen', ySplit: 1 }];
     });
@@ -1097,29 +1177,78 @@ export default function AnalyticsScreen() {
             entering={FadeInDown.delay(125).springify()}
             className="mt-4"
           >
-            <Text className="text-white/60 text-xs uppercase tracking-wider mb-2">Report Month</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingRight: 12 }}>
-              {availableMonthKeys.map((monthKey) => (
-                <Pressable
-                  key={monthKey}
-                  onPress={() => {
-                    Haptics.selectionAsync();
-                    setSelectedMonthKey(monthKey);
-                  }}
-                  className={cn(
-                    "px-3 py-2 rounded-full mr-2 border",
-                    activeMonthKey === monthKey ? "bg-af-accent border-af-accent" : "bg-white/5 border-white/10"
-                  )}
-                >
-                  <Text className={cn(
-                    "text-xs",
-                    activeMonthKey === monthKey ? "text-white font-semibold" : "text-af-silver"
-                  )}>
-                    {formatMonthLabel(monthKey)}
-                  </Text>
-                </Pressable>
-              ))}
-            </ScrollView>
+            <Text className="text-white/60 text-xs uppercase tracking-wider mb-2">Analytics View</Text>
+            <View className="flex-row">
+              {(['week', 'month', 'all_time'] as const).map((view) => {
+                const active = analyticsView === view;
+                return (
+                  <Pressable
+                    key={view}
+                    onPress={() => {
+                      Haptics.selectionAsync();
+                      setAnalyticsView(view);
+                    }}
+                    className={cn('mr-2 rounded-full border px-3 py-2', active ? 'bg-af-accent border-af-accent' : 'bg-white/5 border-white/10')}
+                  >
+                    <Text className={cn('text-xs', active ? 'font-semibold text-white' : 'text-af-silver')}>
+                      {formatAnalyticsViewLabel(view)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </Animated.View>
+
+          {analytics.showWeekSelector ? (
+            <Animated.View entering={FadeInDown.delay(132).springify()} className="mt-4 flex-row items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+              <Pressable onPress={() => navigateWeek('prev')} className="h-10 w-10 items-center justify-center rounded-full bg-white/10">
+                <ChevronLeft size={20} color="#C0C0C0" />
+              </Pressable>
+              <View className="items-center px-3">
+                <Text className="text-white font-semibold text-base">
+                  {format(selectedWeekStart, 'MMM d')} - {format(endOfWeek(selectedWeekStart, { weekStartsOn: 1 }), 'MMM d, yyyy')}
+                </Text>
+                <Text className="mt-1 text-af-silver text-xs">
+                  All visible data reflects this week
+                </Text>
+              </View>
+              <Pressable onPress={() => navigateWeek('next')} className="h-10 w-10 items-center justify-center rounded-full bg-white/10">
+                <ChevronRight size={20} color="#C0C0C0" />
+              </Pressable>
+            </Animated.View>
+          ) : null}
+
+          {analyticsView === 'month' ? (
+            <Animated.View entering={FadeInDown.delay(138).springify()} className="mt-4">
+              <Text className="text-white/60 text-xs uppercase tracking-wider mb-2">Report Month</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingRight: 12 }}>
+                {availableMonthKeys.map((monthKey) => (
+                  <Pressable
+                    key={monthKey}
+                    onPress={() => {
+                      Haptics.selectionAsync();
+                      setSelectedMonthKey(monthKey);
+                      setSelectedWeekStart(startOfWeek(startOfMonth(new Date(`${monthKey}-01T00:00:00`)), { weekStartsOn: 1 }));
+                    }}
+                    className={cn(
+                      "px-3 py-2 rounded-full mr-2 border",
+                      activeMonthKey === monthKey ? "bg-af-accent border-af-accent" : "bg-white/5 border-white/10"
+                    )}
+                  >
+                    <Text className={cn(
+                      "text-xs",
+                      activeMonthKey === monthKey ? "text-white font-semibold" : "text-af-silver"
+                    )}>
+                      {formatMonthLabel(monthKey)}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </Animated.View>
+          ) : null}
+
+          <Animated.View entering={FadeInDown.delay(144).springify()} className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+            <Text className="text-af-silver text-xs">{analytics.exportHelperText}</Text>
           </Animated.View>
 
           {/* Export Buttons */}
@@ -1165,7 +1294,7 @@ export default function AnalyticsScreen() {
             <View className="flex-row items-start justify-between mb-3">
               <View className="flex-1 pr-3">
                 <Text className="text-white font-semibold text-lg mb-1">Squadron Overview</Text>
-                <Text className="text-af-silver text-xs">{formatMonthLabel(activeMonthKey)}</Text>
+                <Text className="text-af-silver text-xs">{analytics.timeframeLabel}</Text>
               </View>
             </View>
             <View className="flex-row flex-wrap">
@@ -1211,7 +1340,7 @@ export default function AnalyticsScreen() {
               </View>
             </View>
             <View className="mt-3 pt-3 border-t border-white/10 flex-row items-center justify-between">
-              <Text className="text-af-silver text-xs">Attendance this week</Text>
+              <Text className="text-af-silver text-xs">Attendance in selected week</Text>
               <Text className="text-white font-semibold text-sm">
                 {analytics.totalAttendanceMarksThisWeek} check-ins
               </Text>
@@ -1230,7 +1359,7 @@ export default function AnalyticsScreen() {
             ) : null}
             {expandedOverviewCard === 'members' && (
               <View className="mt-4 pt-4 border-t border-white/10">
-                <Text className="text-white font-semibold mb-3">Squadron Members This Week</Text>
+                    <Text className="text-white font-semibold mb-3">Squadron Members</Text>
                 {analytics.memberWeeklySummaries.map((member) => (
                   <View key={member.id} className="flex-row items-center justify-between py-2 border-b border-white/5">
                     <View className="flex-1 pr-3">
@@ -1275,7 +1404,7 @@ export default function AnalyticsScreen() {
                 <Text className="text-white font-semibold mb-3">PT Session Details</Text>
                 <View className="flex-row justify-between mb-3">
                   <View>
-                    <Text className="text-af-silver text-xs">Attendance Marks This Week</Text>
+                    <Text className="text-af-silver text-xs">Attendance Marks in Selected Week</Text>
                     <Text className="text-white font-semibold">{analytics.totalAttendanceMarksThisWeek}</Text>
                   </View>
                   <View className="items-end">
@@ -1298,25 +1427,31 @@ export default function AnalyticsScreen() {
             )}
             {expandedOverviewCard === 'pfra' && (
               <View className="mt-4 pt-4 border-t border-white/10">
-                <Text className="text-white font-semibold mb-3">PFRA Trend: Last 3 Months</Text>
-                <View className="flex-row items-end justify-between h-36">
-                  {analytics.pfraTimeline.map((entry) => {
-                    const heightPercent = analytics.maxPFRAAverage > 0 ? (entry.average / analytics.maxPFRAAverage) * 100 : 0;
-                    return (
-                      <View key={entry.label} className="flex-1 items-center">
-                        <Text className="text-af-silver text-[11px] mb-2">{entry.average ? entry.average.toFixed(2) : '--'}</Text>
-                        <View className="h-24 w-12 justify-end">
-                          <View
-                            className="w-12 rounded-t-xl bg-af-accent/80 border border-af-accent/30"
-                            style={{ height: `${Math.max(heightPercent, entry.count > 0 ? 12 : 0)}%` }}
-                          />
-                        </View>
-                        <Text className="text-white text-xs font-medium mt-2">{entry.label}</Text>
-                        <Text className="text-af-silver text-[11px]">{entry.count} entries</Text>
-                      </View>
-                    );
-                  })}
-                </View>
+                {analytics.showTrendCharts ? (
+                  <>
+                    <Text className="text-white font-semibold mb-3">PFRA Trend</Text>
+                    <View className="flex-row items-end justify-between h-36">
+                      {analytics.pfraTimeline.map((entry) => {
+                        const heightPercent = analytics.maxPFRAAverage > 0 ? (entry.average / analytics.maxPFRAAverage) * 100 : 0;
+                        return (
+                          <View key={entry.label} className="flex-1 items-center">
+                            <Text className="text-af-silver text-[11px] mb-2">{entry.average ? entry.average.toFixed(2) : '--'}</Text>
+                            <View className="h-24 w-12 justify-end">
+                              <View
+                                className="w-12 rounded-t-xl bg-af-accent/80 border border-af-accent/30"
+                                style={{ height: `${Math.max(heightPercent, entry.count > 0 ? 12 : 0)}%` }}
+                              />
+                            </View>
+                            <Text className="text-white text-xs font-medium mt-2">{entry.label}</Text>
+                            <Text className="text-af-silver text-[11px]">{entry.count} entries</Text>
+                          </View>
+                        );
+                      })}
+                    </View>
+                  </>
+                ) : (
+                  <Text className="text-af-silver text-sm">Trend charts appear in Month and All-Time views.</Text>
+                )}
               </View>
             )}
           </Animated.View>
@@ -1326,7 +1461,10 @@ export default function AnalyticsScreen() {
             entering={FadeInDown.delay(250).springify()}
             className="mt-4 p-4 bg-white/5 rounded-2xl border border-white/10"
           >
-            <Text className="text-white font-semibold text-lg mb-4">Activity Summary</Text>
+            <View className="mb-4 flex-row items-center justify-between">
+              <Text className="text-white font-semibold text-lg">Activity Summary</Text>
+              <Text className="text-af-silver text-xs">{analytics.timeframeLabel}</Text>
+            </View>
             <View className="flex-row justify-between">
               <View className="items-center flex-1">
                 <Dumbbell size={20} color="#A855F7" />
@@ -1357,7 +1495,7 @@ export default function AnalyticsScreen() {
               </View>
             </View>
             <View className="mt-3 pt-3 border-t border-white/10 flex-row items-center justify-between">
-              <Text className="text-af-silver text-xs">Avg attendance per member this week</Text>
+              <Text className="text-af-silver text-xs">Avg attendance per member in selected week</Text>
               <Text className="text-white font-semibold text-sm">
                 {analytics.averageWeeklyAttendance.toFixed(1)}/{analytics.averageWeeklyRequiredSessions.toFixed(1)}
               </Text>
@@ -1401,7 +1539,11 @@ export default function AnalyticsScreen() {
                 <Text className="text-af-accent text-xs font-semibold">Open</Text>
               </View>
               <Text className="mt-1 text-af-silver text-xs">Use these filters for PFRA analytics.</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingTop: 12, paddingRight: 8 }}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ paddingTop: 12, paddingHorizontal: 8, flexGrow: 1, justifyContent: 'center' }}
+              >
                 {getPFRALeadershipFilters().map((value) => (
                   <Pressable
                     key={value}

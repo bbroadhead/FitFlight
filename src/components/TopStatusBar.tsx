@@ -26,13 +26,17 @@ export function TopStatusBar({
   const squadronLabel = (subtitle ?? 'FitFlight').replace(/\s+Squadron$/i, '');
   const canViewErrorLog = user?.accountType === 'fitflight_creator' || user?.accountType === 'ufpm';
   const reversedErrorEntries = useMemo(() => [...errorEntries].reverse(), [errorEntries]);
+  const isDefaultTheme = theme.id === 'default';
+  const statusSecondaryColor = isDefaultTheme ? theme.accent : theme.textSecondary;
+  const statusPrimaryColor = isDefaultTheme ? theme.textSecondary : theme.textPrimary;
+  const statusMutedColor = isDefaultTheme ? theme.accent : theme.textMuted;
 
   const statusContent = (() => {
     if (!isOnline) {
       return (
         <View className="flex-row items-center">
-          <WifiOff size={12} color={theme.textSecondary} />
-          <Text style={[getThemeBodyStyle(theme, 11, theme.textSecondary), { marginLeft: 5 }]}>
+          <WifiOff size={12} color={statusSecondaryColor} />
+          <Text style={[getThemeBodyStyle(theme, 11, statusSecondaryColor), { marginLeft: 5 }]}>
             {queuedActions.length > 0 ? `Offline · ${queuedActions.length} queued` : 'Offline'}
           </Text>
         </View>
@@ -61,8 +65,8 @@ export function TopStatusBar({
 
     return (
       <View className="flex-row items-center">
-        <Text style={getThemeBodyStyle(theme, 11, theme.textMuted)}>Last synced at: </Text>
-        <Text style={[getThemeBodyStyle(theme, 11, theme.textPrimary), { fontWeight: '600' }]}>
+        <Text style={getThemeBodyStyle(theme, 11, statusMutedColor)}>Last synced at: </Text>
+        <Text style={[getThemeBodyStyle(theme, 11, statusPrimaryColor), { fontWeight: '600' }]}>
           {formatMilitarySyncTime(lastSyncedAt)}
         </Text>
       </View>
@@ -84,8 +88,8 @@ export function TopStatusBar({
       >
         <View className="flex-row items-center justify-between" style={{ gap: 12 }}>
           <View className="flex-1 flex-row items-center">
-            <Building2 size={12} color={theme.textSecondary} />
-            <Text style={[getThemeBodyStyle(theme, 11, theme.textSecondary), { marginLeft: 6, fontWeight: '600' }]}>
+            <Building2 size={12} color={statusSecondaryColor} />
+            <Text style={[getThemeBodyStyle(theme, 11, statusSecondaryColor), { marginLeft: 6, fontWeight: '600' }]}>
               {squadronLabel}
             </Text>
           </View>

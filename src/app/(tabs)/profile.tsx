@@ -29,6 +29,7 @@ import { APP_THEMES, useAppTheme } from '@/lib/theme';
 import { getThemeBodyStyle, getThemeCardStyle, getThemeControlStyle, getThemeHeadingStyle } from '@/lib/theme';
 import {
   fetchAppNotifications,
+  fetchAppUpdateNoteHistory,
   publishAppUpdateNote,
   fetchApprovedManualWorkouts,
   fetchAttendanceSessions,
@@ -53,6 +54,7 @@ import {
   logAdminAuditAction,
   setAttendanceStatus,
   type AdminAuditAction,
+  type AppUpdateNote,
   type AppNotification,
   type ManualWorkoutSubmission,
   type SupportMessage,
@@ -299,6 +301,10 @@ export default function ProfileScreen() {
   const [showInstallModal, setShowInstallModal] = useState(false);
   const [showUFPMModal, setShowUFPMModal] = useState(false);
   const [showUpdateNotesModal, setShowUpdateNotesModal] = useState(false);
+  const [showUpdateNotesHistoryModal, setShowUpdateNotesHistoryModal] = useState(false);
+  const [publishedUpdateNotes, setPublishedUpdateNotes] = useState<AppUpdateNote[]>([]);
+  const [updateNotesHistoryLoading, setUpdateNotesHistoryLoading] = useState(false);
+  const [updateNotesHistoryError, setUpdateNotesHistoryError] = useState<string | null>(null);
   const [memberPendingDeleteId, setMemberPendingDeleteId] = useState<string | null>(null);
   const [showUFPMConfirmModal, setShowUFPMConfirmModal] = useState(false);
   const [showResetUserPasswordModal, setShowResetUserPasswordModal] = useState(false);
@@ -378,6 +384,7 @@ export default function ProfileScreen() {
     if (showAddModal) return 'Add Member';
     if (showUFPMModal) return 'Select UFPM';
     if (showUpdateNotesModal) return 'Publish Update Notes';
+    if (showUpdateNotesHistoryModal) return 'Published Update Notes';
     if (showSupportInboxModal) return 'Support Inbox';
     if (showDeveloperMessageModal || showDeveloperContact) return 'Message the FitFlight Team';
     if (showWorkoutReviewModal) return 'Manual Workout Review';
@@ -412,6 +419,7 @@ export default function ProfileScreen() {
     showSettingsModal,
     showSupportInboxModal,
     showUpdateNotesModal,
+    showUpdateNotesHistoryModal,
     showUFPMConfirmModal,
     showUFPMModal,
     showUpcomingPTSessionsModal,
@@ -909,6 +917,27 @@ export default function ProfileScreen() {
       setUpdateNoteError(error instanceof Error ? error.message : 'Unable to publish update notes.');
       setUpdateNotePublishState('error');
       setTimeout(() => setUpdateNotePublishState('idle'), 2200);
+    }
+  };
+
+  const handleOpenUpdateNotesHistory = async () => {
+    if (!accessToken) {
+      setUpdateNotesHistoryError('You must be signed in to view published update notes.');
+      setShowUpdateNotesHistoryModal(true);
+      return;
+    }
+
+    setShowUpdateNotesHistoryModal(true);
+    setUpdateNotesHistoryLoading(true);
+    setUpdateNotesHistoryError(null);
+    try {
+      const history = await fetchAppUpdateNoteHistory(accessToken);
+      setPublishedUpdateNotes(history);
+    } catch (error) {
+      setUpdateNotesHistoryError(error instanceof Error ? error.message : 'Unable to load update note history.');
+      setPublishedUpdateNotes([]);
+    } finally {
+      setUpdateNotesHistoryLoading(false);
     }
   };
 
@@ -4619,9 +4648,17 @@ export default function ProfileScreen() {
                   </Pressable>
                 </View>
 
-                <Text style={getThemeBodyStyle(themePalette, 13, themePalette.textSecondary)}>
-                  Publish a one-time update or hotfix note. Members will see it once on their next login or full refresh, and FitFlight will save when they&apos;ve seen it.
-                </Text>
+                {isOwnerUser ? (
+                  <Pressable
+                    onPress={() => {
+                      void handleOpenUpdateNotesHistory();
+                    }}
+                    className="self-start rounded-full border px-3 py-2"
+                    style={getThemeControlStyle(themePalette)}
+                  >
+                    <Text style={getThemeBodyStyle(themePalette, 12, themePalette.accent)}>View Previous Update / Hotfix Notes</Text>
+                  </Pressable>
+                ) : null}
 
                 <View className="flex-1 min-h-0 mt-4">
                   <ScrollView
@@ -4747,6 +4784,71 @@ export default function ProfileScreen() {
             </ThemeChrome>
           </Animated.View>
         </Animated.View>
+      </Modal>
+
+      <Modal visible={showUpdateNotesHistoryModal} transparent animationType="fade" onRequestClose={() => setShowUpdateNotesHistoryModal(false)}>
+        <View className="flex-1 bg-black/80 items-center justify-center p-6">
+          <ThemeChrome
+            theme={themePalette}
+            variant="feature"
+            blurIntensity={modalBlurIntensity + 8}
+            style={{ width: '100%', maxWidth: 760, maxHeight: '86%', borderRadius: 24 }}
+            fill
+          >
+            <View className="p-6 flex-1">
+              <View className="flex-row items-center justify-between mb-4">
+                <View className="flex-1 pr-4">
+                  <Text style={getThemeHeadingStyle(themePalette, 22)}>Published Update Notes</Text>
+                  <Text style={[getThemeBodyStyle(themePalette, 14, themePalette.textSecondary), { marginTop: 4 }]}>
+                    Previous update and hotfix notes published to FitFlight members.
+                  </Text>
+                </View>
+                <Pressable
+                  onPress={() => setShowUpdateNotesHistoryModal(false)}
+                  className="w-8 h-8 rounded-full items-center justify-center"
+                  style={getThemeControlStyle(themePalette)}
+                >
+                  <X size={20} color={themePalette.textSecondary} />
+                </Pressable>
+              </View>
+
+              <ScrollView style={{ flex: 1, minHeight: 0 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 16 }}>
+                {updateNotesHistoryLoading ? (
+                  <Text style={getThemeBodyStyle(themePalette, 14, themePalette.textSecondary)}>Loading update note history...</Text>
+                ) : updateNotesHistoryError ? (
+                  <Text style={getThemeBodyStyle(themePalette, 14, '#FCA5A5')}>{updateNotesHistoryError}</Text>
+                ) : publishedUpdateNotes.length === 0 ? (
+                  <Text style={getThemeBodyStyle(themePalette, 14, themePalette.textSecondary)}>No published update or hotfix notes yet.</Text>
+                ) : (
+                  publishedUpdateNotes.map((note) => (
+                    <ThemeChrome key={note.id} theme={themePalette} variant={note.isPublished ? 'feature' : 'alt'} style={{ marginBottom: 12 }}>
+                      <View className="p-4">
+                        <View className="flex-row items-start justify-between">
+                          <View className="flex-1 pr-4">
+                            <Text style={getThemeHeadingStyle(themePalette, 16)}>{note.title}</Text>
+                            <Text style={[getThemeBodyStyle(themePalette, 13, themePalette.textSecondary), { marginTop: 4 }]}>
+                              {(note.noteType === 'hotfix' ? 'Hotfix' : 'Update')}
+                              {note.versionLabel ? ` • ${note.versionLabel}` : ''}
+                              {note.publishedAt ? ` • ${new Date(note.publishedAt).toLocaleString([], { hour: '2-digit', minute: '2-digit', hour12: false, year: 'numeric', month: 'short', day: '2-digit' })}` : ''}
+                            </Text>
+                          </View>
+                          <View className="rounded-full border px-3 py-1" style={{ borderColor: `${themePalette.accent}55`, backgroundColor: note.isPublished ? `${themePalette.accent}18` : 'rgba(255,255,255,0.06)' }}>
+                            <Text style={getThemeBodyStyle(themePalette, 11, note.isPublished ? themePalette.accent : themePalette.textSecondary)}>
+                              {note.isPublished ? 'Current' : 'Archived'}
+                            </Text>
+                          </View>
+                        </View>
+                        <Text style={[getThemeBodyStyle(themePalette, 13, themePalette.textPrimary), { marginTop: 10 }]}>
+                          {note.body}
+                        </Text>
+                      </View>
+                    </ThemeChrome>
+                  ))
+                )}
+              </ScrollView>
+            </View>
+          </ThemeChrome>
+        </View>
       </Modal>
 
       {/* PFL Request Review Modal */}
@@ -4915,54 +5017,67 @@ export default function ProfileScreen() {
               contentContainerStyle={{ paddingBottom: 16 }}
               style={{ flexGrow: 0 }}
             >
-              <Pressable
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  setSelectedRank(user?.rank ?? 'SSgt');
-                  setShowSettingsModal(false);
-                  setShowChangeRankModal(true);
-                }}
-                className="flex-row items-center rounded-xl border border-white/20 bg-white/10 p-4 mt-3"
-              >
-                <User size={20} color="#C0C0C0" />
-                <View className="ml-3 flex-1">
-                  <Text className="text-white font-semibold">Change My Rank</Text>
-                  <Text className="text-af-silver text-xs mt-1">Update how your rank appears on your Account and Profile.</Text>
-                </View>
-              </Pressable>
+              <View className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
+                <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">App Preferences</Text>
 
-              <Pressable
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  setShowSettingsModal(false);
-                  setSelectedSquadron(user?.squadron ?? 'Hawks');
-                  setShowChangeSquadronModal(true);
-                }}
-                className="mt-3 flex-row items-center rounded-xl border border-white/20 bg-white/10 p-4"
-              >
-                <Building2 size={20} color="#C0C0C0" />
-                <View className="ml-3 flex-1">
-                  <Text className="text-white font-semibold">Change My Squadron</Text>
-                  <Text className="text-af-silver text-xs mt-1">Update the squadron tied to this account.</Text>
-                </View>
-              </Pressable>
-
-              {isWeb ? (
-                <Pressable
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    setShowSettingsModal(false);
-                    handleOpenInstallHelp();
-                  }}
-                  className="flex-row items-center rounded-xl border border-white/20 bg-white/10 p-4 mt-3"
-                >
-                  <LogIn size={20} color="#4A90D9" />
-                  <View className="ml-3 flex-1">
-                    <Text className="text-white font-semibold">Add to Home Screen</Text>
-                    <Text className="text-af-silver text-xs mt-1">Install FitFlight on your phone or computer.</Text>
+                <View className="flex-row items-center justify-between py-2">
+                  <View className="flex-1 pr-4">
+                    <Text className="text-white font-semibold">Show Update Notes</Text>
+                    <Text className="text-af-silver text-xs mt-1">Display one-time update and hotfix notes after login or a full app refresh.</Text>
                   </View>
-                </Pressable>
-              ) : null}
+                  <SettingsToggle
+                    value={profileVisibilitySettings.updateNotes}
+                    disabled={isUpdatingProfileSettings}
+                    onPress={() => {
+                      Haptics.selectionAsync();
+                      void persistProfileVisibilitySettings({ showUpdateNotes: !profileVisibilitySettings.updateNotes });
+                    }}
+                  />
+                </View>
+
+                <View className="h-px bg-white/10 my-2" />
+
+                <Text className="text-white/60 text-xs uppercase tracking-wider mb-3 mt-2">Theme</Text>
+                <Text className="text-af-silver text-xs mb-3">Choose how FitFlight looks across your devices.</Text>
+                <View className="flex-row flex-wrap" style={{ gap: 10 }}>
+                  {Object.values(APP_THEMES).map((theme) => {
+                    const isSelected = appTheme === theme.id;
+                    return (
+                      <Pressable
+                        key={theme.id}
+                        onPress={() => {
+                          Haptics.selectionAsync();
+                          void persistAppThemeSetting(theme.id);
+                        }}
+                        className={cn(
+                          "w-[48%] rounded-2xl border p-3",
+                          isSelected ? "border-af-accent bg-af-accent/10" : "border-white/10 bg-black/10"
+                        )}
+                      >
+                        <View className="mb-2 flex-row" style={{ gap: 6 }}>
+                    {theme.gradient.map((color, index) => (
+                      <View key={`${theme.id}-${index}-${color}`} style={{ backgroundColor: color, width: 18, height: 18, borderRadius: 999 }} />
+                    ))}
+                        </View>
+                        <Text className="text-white font-semibold">{theme.label}</Text>
+                        <Text className="mt-1 text-xs text-af-silver">
+                          {theme.id === 'default'
+                            ? 'Current FitFlight look'
+                            : theme.id === 'dark'
+                              ? 'Low-glare dark shell'
+                              : theme.id === 'pixel'
+                                ? 'Retro arcade-inspired'
+                                : theme.id === 'cyber'
+                                  ? 'Neon tactical glow'
+                                  : theme.id === 'space'
+                                    ? 'Deep-space contrast'
+                                    : 'Soft floral glow'}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
 
               <View className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
                 <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">Profile Visibility</Text>
@@ -5017,67 +5132,54 @@ export default function ProfileScreen() {
                 </View>
               </View>
 
-              <View className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
-                <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">Theme</Text>
-                <Text className="text-af-silver text-xs mb-3">Choose how FitFlight looks on this device.</Text>
-                <View className="flex-row flex-wrap" style={{ gap: 10 }}>
-                  {Object.values(APP_THEMES).map((theme) => {
-                    const isSelected = appTheme === theme.id;
-                    return (
-                      <Pressable
-                        key={theme.id}
-                        onPress={() => {
-                          Haptics.selectionAsync();
-                          void persistAppThemeSetting(theme.id);
-                        }}
-                        className={cn(
-                          "w-[48%] rounded-2xl border p-3",
-                          isSelected ? "border-af-accent bg-af-accent/10" : "border-white/10 bg-black/10"
-                        )}
-                      >
-                        <View className="mb-2 flex-row" style={{ gap: 6 }}>
-                    {theme.gradient.map((color, index) => (
-                      <View key={`${theme.id}-${index}-${color}`} style={{ backgroundColor: color, width: 18, height: 18, borderRadius: 999 }} />
-                    ))}
-                        </View>
-                        <Text className="text-white font-semibold">{theme.label}</Text>
-                        <Text className="mt-1 text-xs text-af-silver">
-                          {theme.id === 'default'
-                            ? 'Current FitFlight look'
-                            : theme.id === 'dark'
-                              ? 'Low-glare dark shell'
-                              : theme.id === 'pixel'
-                                ? 'Retro arcade-inspired'
-                                : theme.id === 'cyber'
-                                  ? 'Neon tactical glow'
-                                  : theme.id === 'space'
-                                    ? 'Deep-space contrast'
-                                    : 'Soft floral glow'}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
+              <Pressable
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setSelectedRank(user?.rank ?? 'SSgt');
+                  setShowSettingsModal(false);
+                  setShowChangeRankModal(true);
+                }}
+                className="flex-row items-center rounded-xl border border-white/20 bg-white/10 p-4 mt-4"
+              >
+                <User size={20} color="#C0C0C0" />
+                <View className="ml-3 flex-1">
+                  <Text className="text-white font-semibold">Change My Rank</Text>
+                  <Text className="text-af-silver text-xs mt-1">Update how your rank appears on your Account and Profile.</Text>
                 </View>
-              </View>
+              </Pressable>
 
-              <View className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
-                <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">App Preferences</Text>
+              <Pressable
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setShowSettingsModal(false);
+                  setSelectedSquadron(user?.squadron ?? 'Hawks');
+                  setShowChangeSquadronModal(true);
+                }}
+                className="mt-3 flex-row items-center rounded-xl border border-white/20 bg-white/10 p-4"
+              >
+                <Building2 size={20} color="#C0C0C0" />
+                <View className="ml-3 flex-1">
+                  <Text className="text-white font-semibold">Change My Squadron</Text>
+                  <Text className="text-af-silver text-xs mt-1">Update the squadron tied to this account.</Text>
+                </View>
+              </Pressable>
 
-                <View className="flex-row items-center justify-between py-2">
-                  <View className="flex-1 pr-4">
-                    <Text className="text-white font-semibold">Show Update Notes</Text>
-                    <Text className="text-af-silver text-xs mt-1">Display one-time update and hotfix notes after login or a full app refresh.</Text>
+              {isWeb ? (
+                <Pressable
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setShowSettingsModal(false);
+                    handleOpenInstallHelp();
+                  }}
+                  className="flex-row items-center rounded-xl border border-white/20 bg-white/10 p-4 mt-3"
+                >
+                  <LogIn size={20} color="#4A90D9" />
+                  <View className="ml-3 flex-1">
+                    <Text className="text-white font-semibold">Add to Home Screen</Text>
+                    <Text className="text-af-silver text-xs mt-1">Install FitFlight on your phone or computer.</Text>
                   </View>
-                  <SettingsToggle
-                    value={profileVisibilitySettings.updateNotes}
-                    disabled={isUpdatingProfileSettings}
-                    onPress={() => {
-                      Haptics.selectionAsync();
-                      void persistProfileVisibilitySettings({ showUpdateNotes: !profileVisibilitySettings.updateNotes });
-                    }}
-                  />
-                </View>
-              </View>
+                </Pressable>
+              ) : null}
             </ScrollView>
           </View>
         </View>

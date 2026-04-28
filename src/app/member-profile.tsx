@@ -6,7 +6,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ChevronLeft, Timer, MapPin, Trophy, Lock, Unlock, TrendingUp, Shield, Camera, Dumbbell, Activity, Image as ImageIcon, BarChart3, User, X, FileText } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeInUp, useAnimatedStyle, useSharedValue, withSpring, withDelay } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import { useMemberStore, useAuthStore, formatFlightDisplay, getDisplayName, ALL_ACHIEVEMENTS, canManagePTPrograms, type AccountType, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
+import { useMemberStore, useAuthStore, formatFlightDisplay, getClosedMonthPlacements, getDisplayName, ALL_ACHIEVEMENTS, canManagePTPrograms, type AccountType, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { TrophyCase, CompactTrophyBadges } from '@/components/TrophyCase';
 import { ThemeBackdrop } from '@/components/ThemeBackdrop';
@@ -316,6 +316,7 @@ export default function MemberProfileScreen() {
   const earnedTrophies = trophyStats.filter((trophy) => trophy.isEarned);
   const rarestTrophies = getRarestEarnedTrophies(ALL_ACHIEVEMENTS, members, member, 3);
   const trophyOverflowCount = Math.max(earnedTrophies.length - rarestTrophies.length, 0);
+  const closedMonthPlacements = getClosedMonthPlacements(member);
 
   const getWorkoutIcon = (type: string) => {
     switch (type.toLowerCase()) {
@@ -419,11 +420,11 @@ export default function MemberProfileScreen() {
             </View>
 
             {/* Trophy Count if any */}
-            {member.trophyCount > 0 && (
+            {closedMonthPlacements.length > 0 && (
               <View className="flex-row items-center justify-center mt-3 bg-af-gold/20 rounded-xl p-2">
                 <Trophy size={16} color="#FFD700" />
                 <Text className="text-af-gold font-semibold ml-2">
-                  {member.trophyCount}x Monthly Top 3
+                  {closedMonthPlacements.length}x Monthly Top 3
                 </Text>
               </View>
             )}
