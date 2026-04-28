@@ -194,6 +194,8 @@ export interface Member {
   hasSeenTutorial?: boolean;
   mustChangePassword?: boolean;
   hasLoggedIntoApp?: boolean;
+  showUpdateNotes?: boolean;
+  appTheme?: AppTheme;
 }
 
 export interface PTSession {
@@ -229,6 +231,7 @@ export interface User {
   hasLoggedIntoApp?: boolean;
   keepAwakeEnabled?: boolean;
   appTheme?: AppTheme;
+  showUpdateNotes?: boolean;
 }
 
 export const formatPersonName = (value: string) =>
@@ -472,6 +475,7 @@ interface AuthState {
   refreshToken: string | null;
   keepAwakeEnabled: boolean;
   appTheme: AppTheme;
+  showUpdateNotes: boolean;
   seenAchievementCelebrations: Record<string, string[]>;
   login: (user: User, options?: { rememberSession?: boolean }) => void;
   setSessionTokens: (tokens: { accessToken: string | null; refreshToken: string | null }) => void;
@@ -479,6 +483,7 @@ interface AuthState {
   updateUser: (updates: Partial<User>) => void;
   setKeepAwakeEnabled: (enabled: boolean) => void;
   setAppTheme: (theme: AppTheme) => void;
+  setShowUpdateNotes: (enabled: boolean) => void;
   setHasCheckedAuth: (checked: boolean) => void;
   markAchievementCelebrationSeen: (userEmail: string, achievementId: string) => void;
 }
@@ -648,6 +653,8 @@ const mergeMember = (base: Member, existing?: Member): Member => {
     showWorkoutHistoryOnProfile: base.showWorkoutHistoryOnProfile ?? existing.showWorkoutHistoryOnProfile ?? true,
     showWorkoutUploadsOnProfile: base.showWorkoutUploadsOnProfile ?? existing.showWorkoutUploadsOnProfile ?? true,
     showPFRARecordsOnProfile: base.showPFRARecordsOnProfile ?? existing.showPFRARecordsOnProfile ?? true,
+    showUpdateNotes: base.showUpdateNotes ?? existing.showUpdateNotes ?? true,
+    appTheme: base.appTheme ?? existing.appTheme ?? 'default',
     exerciseMinutes: existing.exerciseMinutes,
     distanceRun: existing.distanceRun,
     connectedApps: existing.connectedApps,
@@ -786,6 +793,7 @@ export const useAuthStore = create<AuthState>()(
         refreshToken: null,
         keepAwakeEnabled: true,
         appTheme: 'default',
+        showUpdateNotes: true,
         seenAchievementCelebrations: {},
         login: (user, options) => set({
           user,
@@ -794,6 +802,7 @@ export const useAuthStore = create<AuthState>()(
           rememberSession: options?.rememberSession ?? false,
           keepAwakeEnabled: user.keepAwakeEnabled ?? true,
           appTheme: user.appTheme ?? 'default',
+          showUpdateNotes: user.showUpdateNotes ?? true,
         }),
       setSessionTokens: (tokens) => set({
         accessToken: tokens.accessToken,
@@ -811,6 +820,8 @@ export const useAuthStore = create<AuthState>()(
           keepAwakeEnabled:
             typeof updates.keepAwakeEnabled === 'boolean' ? updates.keepAwakeEnabled : state.keepAwakeEnabled,
           appTheme: updates.appTheme ?? state.appTheme,
+          showUpdateNotes:
+            typeof updates.showUpdateNotes === 'boolean' ? updates.showUpdateNotes : state.showUpdateNotes,
         })),
         setKeepAwakeEnabled: (enabled) => set((state) => ({
           keepAwakeEnabled: enabled,
@@ -819,6 +830,10 @@ export const useAuthStore = create<AuthState>()(
         setAppTheme: (theme) => set((state) => ({
           appTheme: theme,
           user: state.user ? { ...state.user, appTheme: theme } : state.user,
+        })),
+        setShowUpdateNotes: (enabled) => set((state) => ({
+          showUpdateNotes: enabled,
+          user: state.user ? { ...state.user, showUpdateNotes: enabled } : state.user,
         })),
         setHasCheckedAuth: (checked) => set({ hasCheckedAuth: checked }),
       markAchievementCelebrationSeen: (userEmail, achievementId) =>
@@ -839,7 +854,7 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
         name: 'flighttrack-auth',
-        version: 5,
+        version: 6,
       storage: createJSONStorage(() => AsyncStorage),
       migrate: (persistedState: unknown, version) => {
         if (!persistedState || typeof persistedState !== 'object') {
@@ -884,6 +899,16 @@ export const useAuthStore = create<AuthState>()(
           } as AuthState;
         }
 
+        if (version < 6) {
+          return {
+            ...state,
+            showUpdateNotes:
+              typeof state.user?.showUpdateNotes === 'boolean'
+                ? state.user.showUpdateNotes
+                : (state as Partial<AuthState>).showUpdateNotes ?? true,
+          } as AuthState;
+        }
+
         return persistedState as AuthState;
       },
       partialize: (state) => ({
@@ -895,6 +920,7 @@ export const useAuthStore = create<AuthState>()(
         refreshToken: state.rememberSession ? state.refreshToken : null,
         keepAwakeEnabled: state.keepAwakeEnabled,
         appTheme: state.appTheme,
+        showUpdateNotes: state.showUpdateNotes,
         seenAchievementCelebrations: state.seenAchievementCelebrations,
       }),
       onRehydrateStorage: () => (state) => {

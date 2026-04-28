@@ -10,7 +10,7 @@ import Animated, { FadeIn, FadeInDown, FadeInUp, SlideInDown } from 'react-nativ
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import SmartSlider from '@/components/SmartSlider';
-import { useAuthStore, useMemberStore, formatFlightDisplay, type Flight, type Member, type AccountType, type Squadron, type IntegrationService, type WorkoutType, RANK_GROUPS, getDisplayName, canEditAttendance, canManagePTL, canManagePTPrograms, isAdmin, SQUADRONS, ALL_ACHIEVEMENTS, isPFLAccountType, normalizeAccountType } from '@/lib/store';
+import { useAuthStore, useMemberStore, formatFlightDisplay, type Flight, type Member, type AccountType, type Squadron, type IntegrationService, type WorkoutType, type AppTheme, RANK_GROUPS, getDisplayName, canEditAttendance, canManagePTL, canManagePTPrograms, isAdmin, SQUADRONS, ALL_ACHIEVEMENTS, isPFLAccountType, normalizeAccountType } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { AchievementCelebration } from '@/components/AchievementCelebration';
@@ -264,6 +264,8 @@ export default function ProfileScreen() {
   const accessToken = useAuthStore(s => s.accessToken);
   const appTheme = useAuthStore(s => s.appTheme);
   const setAppTheme = useAuthStore(s => s.setAppTheme);
+  const showUpdateNotes = useAuthStore(s => s.showUpdateNotes);
+  const setShowUpdateNotes = useAuthStore(s => s.setShowUpdateNotes);
   const members = useMemberStore(s => s.members);
   const addMember = useMemberStore(s => s.addMember);
   const removeMember = useMemberStore(s => s.removeMember);
@@ -450,6 +452,7 @@ export default function ProfileScreen() {
     workoutHistory: currentMember?.showWorkoutHistoryOnProfile ?? user?.showWorkoutHistoryOnProfile ?? true,
     workoutUploads: currentMember?.showWorkoutUploadsOnProfile ?? user?.showWorkoutUploadsOnProfile ?? true,
     pfraRecords: currentMember?.showPFRARecordsOnProfile ?? user?.showPFRARecordsOnProfile ?? true,
+    updateNotes: currentMember?.showUpdateNotes ?? user?.showUpdateNotes ?? showUpdateNotes,
   };
   const projectCoordinatorMember = members.find(
     (member) =>
@@ -1577,7 +1580,7 @@ export default function ProfileScreen() {
   };
 
   const persistProfileVisibilitySettings = async (
-    updates: Pick<Member, 'showWorkoutHistoryOnProfile' | 'showWorkoutUploadsOnProfile' | 'showPFRARecordsOnProfile'>
+    updates: Pick<Member, 'showWorkoutHistoryOnProfile' | 'showWorkoutUploadsOnProfile' | 'showPFRARecordsOnProfile' | 'showUpdateNotes'>
   ) => {
     if (!user) {
       return;
@@ -1601,11 +1604,48 @@ export default function ProfileScreen() {
           showWorkoutHistoryOnProfile: updatedMember.showWorkoutHistoryOnProfile,
           showWorkoutUploadsOnProfile: updatedMember.showWorkoutUploadsOnProfile,
           showPFRARecordsOnProfile: updatedMember.showPFRARecordsOnProfile,
+          showUpdateNotes: updatedMember.showUpdateNotes,
         }, accessToken);
       }
 
       updateMember(resolvedMember.id, updates);
       updateUser(updates);
+      if (typeof updates.showUpdateNotes === 'boolean') {
+        setShowUpdateNotes(updates.showUpdateNotes);
+      }
+    } finally {
+      setIsUpdatingProfileSettings(false);
+    }
+  };
+
+  const persistAppThemeSetting = async (nextTheme: AppTheme) => {
+    if (!user) {
+      setAppTheme(nextTheme);
+      return;
+    }
+
+    const resolvedMember = resolveMemberForUser(user);
+    if (!resolvedMember) {
+      updateUser({ appTheme: nextTheme });
+      setAppTheme(nextTheme);
+      return;
+    }
+
+    try {
+      setIsUpdatingProfileSettings(true);
+      if (accessToken) {
+        await updateRosterProfileVisibility(resolvedMember, {
+          showWorkoutHistoryOnProfile: resolvedMember.showWorkoutHistoryOnProfile ?? true,
+          showWorkoutUploadsOnProfile: resolvedMember.showWorkoutUploadsOnProfile ?? true,
+          showPFRARecordsOnProfile: resolvedMember.showPFRARecordsOnProfile ?? true,
+          showUpdateNotes: resolvedMember.showUpdateNotes ?? true,
+          appTheme: nextTheme,
+        }, accessToken);
+      }
+
+      updateMember(resolvedMember.id, { appTheme: nextTheme });
+      updateUser({ appTheme: nextTheme });
+      setAppTheme(nextTheme);
     } finally {
       setIsUpdatingProfileSettings(false);
     }
@@ -4988,7 +5028,7 @@ export default function ProfileScreen() {
                         key={theme.id}
                         onPress={() => {
                           Haptics.selectionAsync();
-                          setAppTheme(theme.id);
+                          void persistAppThemeSetting(theme.id);
                         }}
                         className={cn(
                           "w-[48%] rounded-2xl border p-3",
@@ -5017,6 +5057,25 @@ export default function ProfileScreen() {
                       </Pressable>
                     );
                   })}
+                </View>
+              </View>
+
+              <View className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
+                <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">App Preferences</Text>
+
+                <View className="flex-row items-center justify-between py-2">
+                  <View className="flex-1 pr-4">
+                    <Text className="text-white font-semibold">Show Update Notes</Text>
+                    <Text className="text-af-silver text-xs mt-1">Display one-time update and hotfix notes after login or a full app refresh.</Text>
+                  </View>
+                  <SettingsToggle
+                    value={profileVisibilitySettings.updateNotes}
+                    disabled={isUpdatingProfileSettings}
+                    onPress={() => {
+                      Haptics.selectionAsync();
+                      void persistProfileVisibilitySettings({ showUpdateNotes: !profileVisibilitySettings.updateNotes });
+                    }}
+                  />
                 </View>
               </View>
             </ScrollView>

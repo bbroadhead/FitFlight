@@ -1,5 +1,6 @@
 import type {
   AccountType,
+  AppTheme,
   AttendanceSource,
   FitnessAssessment,
   Flight,
@@ -37,6 +38,8 @@ type RosterColumnName =
   | 'SHOW_WORKOUT_HISTORY_ON_PROFILE'
   | 'SHOW_WORKOUT_UPLOADS_ON_PROFILE'
   | 'SHOW_PFRA_RECORDS_ON_PROFILE'
+  | 'SHOW_UPDATE_NOTES'
+  | 'APP_THEME'
   | 'MUST_CHANGE_PASSWORD'
   | 'HAS_LOGGED_INTO_APP';
 type MemberRoleRow = {
@@ -1249,6 +1252,8 @@ function getRosterPayload(
     SHOW_WORKOUT_HISTORY_ON_PROFILE: member.showWorkoutHistoryOnProfile ?? true,
     SHOW_WORKOUT_UPLOADS_ON_PROFILE: member.showWorkoutUploadsOnProfile ?? true,
     SHOW_PFRA_RECORDS_ON_PROFILE: member.showPFRARecordsOnProfile ?? true,
+    SHOW_UPDATE_NOTES: member.showUpdateNotes ?? true,
+    APP_THEME: member.appTheme ?? 'default',
     MUST_CHANGE_PASSWORD: member.mustChangePassword ?? false,
     HAS_LOGGED_INTO_APP: member.hasLoggedIntoApp ?? false,
   };
@@ -1320,6 +1325,19 @@ function normalizeRosterRow(row: SupabaseRow): Member | null {
     'show_pfra_records_on_profile',
     'SHOW_PFRA_RECORDS_ON_PROFILE',
   ]) ?? true;
+  const showUpdateNotes = getBooleanValue(row, [
+    'show_update_notes',
+    'SHOW_UPDATE_NOTES',
+  ]) ?? true;
+  const appThemeValue = getStringValue(row, ['app_theme', 'APP_THEME'])?.trim().toLowerCase();
+  const appTheme: AppTheme =
+    appThemeValue === 'dark' ||
+    appThemeValue === 'pixel' ||
+    appThemeValue === 'cyber' ||
+    appThemeValue === 'space' ||
+    appThemeValue === 'flowery'
+      ? appThemeValue
+      : 'default';
 
   return {
     id: stableId,
@@ -1349,6 +1367,8 @@ function normalizeRosterRow(row: SupabaseRow): Member | null {
     showWorkoutHistoryOnProfile,
     showWorkoutUploadsOnProfile,
     showPFRARecordsOnProfile,
+    showUpdateNotes,
+    appTheme,
   };
 }
 
@@ -3033,7 +3053,7 @@ export async function updateRosterMember(previousMember: Member, nextMember: Mem
 
 export async function updateRosterProfileVisibility(
   member: Pick<Member, 'firstName' | 'lastName' | 'rank' | 'flight' | 'email' | 'squadron'>,
-  updates: Pick<Member, 'showWorkoutHistoryOnProfile' | 'showWorkoutUploadsOnProfile' | 'showPFRARecordsOnProfile'>,
+  updates: Pick<Member, 'showWorkoutHistoryOnProfile' | 'showWorkoutUploadsOnProfile' | 'showPFRARecordsOnProfile' | 'showUpdateNotes' | 'appTheme'>,
   accessToken?: string
 ) {
   const rosterTable = getRosterTableName(member.squadron);
@@ -3044,6 +3064,8 @@ export async function updateRosterProfileVisibility(
       SHOW_WORKOUT_HISTORY_ON_PROFILE: updates.showWorkoutHistoryOnProfile ?? true,
       SHOW_WORKOUT_UPLOADS_ON_PROFILE: updates.showWorkoutUploadsOnProfile ?? true,
       SHOW_PFRA_RECORDS_ON_PROFILE: updates.showPFRARecordsOnProfile ?? true,
+      SHOW_UPDATE_NOTES: updates.showUpdateNotes ?? true,
+      APP_THEME: updates.appTheme ?? 'default',
     }),
   });
 

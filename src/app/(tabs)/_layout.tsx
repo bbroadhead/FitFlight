@@ -158,6 +158,8 @@ function TabsInner() {
         accountType: member.accountType,
         email: member.email,
         profilePicture: member.profilePicture ?? null,
+        appTheme: member.appTheme ?? 'default',
+        showUpdateNotes: member.showUpdateNotes ?? true,
         achievements: [...member.achievements].sort(),
         mustChangePassword: member.mustChangePassword ?? false,
         hasLoggedIntoApp: member.hasLoggedIntoApp ?? false,
@@ -595,9 +597,11 @@ function TabsInner() {
               squadron: matchingMember.squadron,
               accountType: matchingMember.accountType,
               profilePicture: matchingMember.profilePicture,
+              appTheme: matchingMember.appTheme,
               showWorkoutHistoryOnProfile: matchingMember.showWorkoutHistoryOnProfile,
               showWorkoutUploadsOnProfile: matchingMember.showWorkoutUploadsOnProfile,
               showPFRARecordsOnProfile: matchingMember.showPFRARecordsOnProfile,
+              showUpdateNotes: matchingMember.showUpdateNotes,
             });
           }
         }

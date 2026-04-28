@@ -30,6 +30,7 @@ function RootLayoutNav() {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const user = useAuthStore((state) => state.user);
   const accessToken = useAuthStore((state) => state.accessToken);
+  const showUpdateNotes = useAuthStore((state) => state.showUpdateNotes);
   const theme = useAppTheme();
   const pathname = usePathname();
   const setCurrentRouteLabel = useErrorLogStore((state) => state.setCurrentRouteLabel);
@@ -59,10 +60,10 @@ function RootLayoutNav() {
   }, [pathname, setCurrentRouteLabel]);
 
   useEffect(() => {
-    if (!isAuthenticated || !user?.email || !accessToken) {
+    if (!isAuthenticated || !user?.email || !accessToken || !showUpdateNotes) {
       setPendingUpdateNotes([]);
       setActiveUpdateNote(null);
-      setUpdateNotesLoadedForEmail(null);
+      setUpdateNotesLoadedForEmail(showUpdateNotes ? null : user?.email?.trim().toLowerCase() ?? null);
       setUpdateNotesBusy(false);
       setUpdateNotesError(null);
       return;
@@ -102,7 +103,7 @@ function RootLayoutNav() {
     return () => {
       cancelled = true;
     };
-  }, [accessToken, isAuthenticated, updateNotesLoadedForEmail, user?.email]);
+  }, [accessToken, isAuthenticated, showUpdateNotes, updateNotesLoadedForEmail, user?.email]);
 
   const recentAchievement = recentAchievementId
     ? ALL_ACHIEVEMENTS.find((achievement) => achievement.id === recentAchievementId) ?? null
@@ -165,10 +166,10 @@ function RootLayoutNav() {
             onDismiss={dismissAchievementCelebration}
           />
         ) : null}
-        <Modal visible={isAuthenticated && !!activeUpdateNote} transparent animationType="fade">
+        <Modal visible={isAuthenticated && showUpdateNotes && !!activeUpdateNote} transparent animationType="fade">
           <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.78)', justifyContent: 'center', paddingHorizontal: 24, paddingVertical: 40 }}>
-            <View style={{ width: '100%', maxWidth: 520, maxHeight: '82%', alignSelf: 'center' }}>
-            <ThemeChrome theme={theme} variant="feature" blurIntensity={34} fill>
+            <View style={{ width: '100%', maxWidth: 520, height: '82%', alignSelf: 'center', overflow: 'hidden' }}>
+            <ThemeChrome theme={theme} variant="feature" blurIntensity={34} fill style={{ height: '100%', overflow: 'hidden' }}>
               <View style={{ paddingHorizontal: 24, paddingTop: 24, paddingBottom: 22, flex: 1, minHeight: 0 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
                   <View style={{ flex: 1, paddingRight: 16 }}>
@@ -196,6 +197,8 @@ function RootLayoutNav() {
                   style={{ marginTop: 14, flex: 1, minHeight: 0 }}
                   contentContainerStyle={{ paddingBottom: 8 }}
                   showsVerticalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                  nestedScrollEnabled
                 >
                   <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { lineHeight: 22 }]}>
                     {activeUpdateNote?.body}
