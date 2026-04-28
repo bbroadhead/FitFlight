@@ -645,7 +645,9 @@ const mergeMember = (base: Member, existing?: Member): Member => {
         ? existing.id
         : (existing.id || base.id),
     email: existing.email || base.email,
-    accountType: existing.accountType !== 'standard' ? existing.accountType : base.accountType,
+      // Roster sync should respect the latest server-derived role so role changes
+      // made in Supabase or through admin workflows propagate everywhere in-app.
+      accountType: normalizeAccountType(base.accountType),
     profilePicture: existing.profilePicture ?? base.profilePicture,
     showWorkoutHistoryOnProfile: base.showWorkoutHistoryOnProfile ?? existing.showWorkoutHistoryOnProfile ?? true,
     showWorkoutUploadsOnProfile: base.showWorkoutUploadsOnProfile ?? existing.showWorkoutUploadsOnProfile ?? true,

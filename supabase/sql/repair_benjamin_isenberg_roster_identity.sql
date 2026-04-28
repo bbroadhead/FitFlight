@@ -12,7 +12,7 @@ begin;
 create temp table if not exists target_isenberg_rows as
 with candidates as (
   select
-    ctid,
+    ctid as row_pointer,
     coalesce("FULL_NAME", '') as full_name,
     coalesce("RANK", '') as rank,
     lower(coalesce("EMAIL", '')) as email,
@@ -73,11 +73,11 @@ set
   "FLT-DET" = 'DO',
   "AUTH_USER_ID" = merged.auth_user_id
 from canonical, merged
-where r.ctid = canonical.ctid;
+where r.ctid = canonical.row_pointer;
 
 delete from public.roster r
 using target_isenberg_rows dupes
-where r.ctid = dupes.ctid
+where r.ctid = dupes.row_pointer
   and dupes.priority_rank > 1;
 
 insert into public.member_roles (email, app_role)
