@@ -453,9 +453,7 @@ function TabsInner() {
           didSyncMemberData = true;
         }
 
-        if (didSyncMemberData) {
-          syncLeaderboardHistory();
-        }
+        syncLeaderboardHistory();
 
         const postSyncStoreState = useMemberStore.getState();
         const trophySyncEntries = postSyncStoreState.members.map((member) => {
@@ -478,6 +476,17 @@ function TabsInner() {
             ...Array.from(activeAchievements),
             ...missingAchievements,
           ]);
+          const hasFreshPodiumPlacement = member.monthlyPlacements.some(
+            (placement) => placement.position >= 1 && placement.position <= 3
+          );
+
+          if (hasFreshPodiumPlacement) {
+            desiredAchievements.add('top_3_month');
+            if (!knownAchievements.has('top_3_month')) {
+              missingAchievements.push('top_3_month');
+            }
+          }
+
           const shouldUnlockCompletionist = ALL_ACHIEVEMENTS
             .filter((achievement) => achievement.id !== "completionist")
             .every((achievement) => desiredAchievements.has(achievement.id));

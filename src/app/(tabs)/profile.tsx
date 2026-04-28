@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, View, Text, Pressable, RefreshControl, ScrollView, TextInput, Modal, Image, Platform, useWindowDimensions } from 'react-native';
+import { Alert, View, Text, Pressable, RefreshControl, ScrollView, TextInput, Modal, Image, Platform, useWindowDimensions, ActivityIndicator } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -29,6 +29,7 @@ import { APP_THEMES, useAppTheme } from '@/lib/theme';
 import { getThemeBodyStyle, getThemeCardStyle, getThemeControlStyle, getThemeHeadingStyle } from '@/lib/theme';
 import {
   fetchAppNotifications,
+  publishAppUpdateNote,
   fetchApprovedManualWorkouts,
   fetchAttendanceSessions,
   fetchManualWorkoutProofImageMap,
@@ -295,6 +296,7 @@ export default function ProfileScreen() {
   const [activeSupportContactKey, setActiveSupportContactKey] = useState<SupportContact['key']>('developer');
   const [showInstallModal, setShowInstallModal] = useState(false);
   const [showUFPMModal, setShowUFPMModal] = useState(false);
+  const [showUpdateNotesModal, setShowUpdateNotesModal] = useState(false);
   const [memberPendingDeleteId, setMemberPendingDeleteId] = useState<string | null>(null);
   const [showUFPMConfirmModal, setShowUFPMConfirmModal] = useState(false);
   const [showResetUserPasswordModal, setShowResetUserPasswordModal] = useState(false);
@@ -353,6 +355,12 @@ export default function ProfileScreen() {
   const [appNotificationsLoading, setAppNotificationsLoading] = useState(false);
   const [dismissedNotificationKeys, setDismissedNotificationKeys] = useState<string[]>([]);
   const [showLeaderboardHistoryModal, setShowLeaderboardHistoryModal] = useState(false);
+  const [updateNoteTitle, setUpdateNoteTitle] = useState('');
+  const [updateNoteBody, setUpdateNoteBody] = useState('');
+  const [updateNoteVersionLabel, setUpdateNoteVersionLabel] = useState(FITFLIGHT_VERSION);
+  const [updateNoteType, setUpdateNoteType] = useState<'update' | 'hotfix'>('update');
+  const [updateNotePublishState, setUpdateNotePublishState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [updateNoteError, setUpdateNoteError] = useState<string | null>(null);
   const [expandedUpcomingSessionIds, setExpandedUpcomingSessionIds] = useState<string[]>([]);
   const [demoTrophyEarnedPreview, setDemoTrophyEarnedPreview] = useState(false);
   const [showDemoTrophyCelebration, setShowDemoTrophyCelebration] = useState(false);
@@ -367,6 +375,7 @@ export default function ProfileScreen() {
     if (showManageModal) return 'Manage Members';
     if (showAddModal) return 'Add Member';
     if (showUFPMModal) return 'Select UFPM';
+    if (showUpdateNotesModal) return 'Publish Update Notes';
     if (showSupportInboxModal) return 'Support Inbox';
     if (showDeveloperMessageModal || showDeveloperContact) return 'Message the FitFlight Team';
     if (showWorkoutReviewModal) return 'Manual Workout Review';
@@ -400,6 +409,7 @@ export default function ProfileScreen() {
     showResetUserPasswordModal,
     showSettingsModal,
     showSupportInboxModal,
+    showUpdateNotesModal,
     showUFPMConfirmModal,
     showUFPMModal,
     showUpcomingPTSessionsModal,
@@ -831,6 +841,71 @@ export default function ProfileScreen() {
       setAppNotifications([]);
     } finally {
       setAppNotificationsLoading(false);
+    }
+  };
+
+  const resetUpdateNoteComposer = () => {
+    setUpdateNoteTitle('');
+    setUpdateNoteBody('');
+    setUpdateNoteVersionLabel(FITFLIGHT_VERSION);
+    setUpdateNoteType('update');
+    setUpdateNotePublishState('idle');
+    setUpdateNoteError(null);
+  };
+
+  const handlePublishUpdateNote = async () => {
+    if (!user?.email || !accessToken) {
+      setUpdateNoteError('You must be signed in to publish update notes.');
+      setUpdateNotePublishState('error');
+      setTimeout(() => setUpdateNotePublishState('idle'), 2200);
+      return;
+    }
+
+    const trimmedTitle = updateNoteTitle.trim();
+    const trimmedBody = updateNoteBody.trim();
+    if (!trimmedTitle || !trimmedBody) {
+      setUpdateNoteError('Add both a title and body before publishing.');
+      setUpdateNotePublishState('error');
+      setTimeout(() => setUpdateNotePublishState('idle'), 2200);
+      return;
+    }
+
+    setUpdateNotePublishState('saving');
+    setUpdateNoteError(null);
+    try {
+      const publishedNote = await publishAppUpdateNote({
+        title: trimmedTitle,
+        body: trimmedBody,
+        noteType: updateNoteType,
+        versionLabel: updateNoteVersionLabel,
+        publishedByEmail: user.email,
+        publishedByName: getDisplayName(user),
+        accessToken,
+      });
+      await logAdminAuditAction({
+        actorMemberId: user.id,
+        actorEmail: user.email,
+        actorName: getDisplayName(user),
+        actorRole: user.accountType,
+        actionType: 'publish_update_notes',
+        squadron: user.squadron,
+        details: {
+          noteId: publishedNote.id,
+          noteType: publishedNote.noteType,
+          versionLabel: publishedNote.versionLabel,
+          title: publishedNote.title,
+        },
+        accessToken,
+      }).catch(() => undefined);
+      setUpdateNotePublishState('saved');
+      setTimeout(() => {
+        resetUpdateNoteComposer();
+        setShowUpdateNotesModal(false);
+      }, 1800);
+    } catch (error) {
+      setUpdateNoteError(error instanceof Error ? error.message : 'Unable to publish update notes.');
+      setUpdateNotePublishState('error');
+      setTimeout(() => setUpdateNotePublishState('idle'), 2200);
     }
   };
 
@@ -2406,7 +2481,12 @@ export default function ProfileScreen() {
           title: submission.status === 'approved' ? 'Manual workout approved' : 'Manual workout denied',
           message:
             submission.status === 'approved'
-              ? `${submission.workoutType} was approved and added to your account.`
+              ? `${submission.workoutType} was approved and added to ${
+                  submission.memberId === user?.id ||
+                  submission.memberEmail.trim().toLowerCase() === user?.email?.trim().toLowerCase()
+                    ? 'your account'
+                    : "the user's account"
+                }.`
               : submission.reviewerNote || `${submission.workoutType} was denied.`,
           unread: true,
           submissionId: submission.id,
@@ -2414,7 +2494,7 @@ export default function ProfileScreen() {
           isReview: false,
         })),
     ],
-    [manualWorkoutReviewQueue, manualWorkoutSubmissions]
+    [manualWorkoutReviewQueue, manualWorkoutSubmissions, user?.email, user?.id]
   );
   const backendNotifications = useMemo<BackendNotificationItem[]>(
     () => appNotifications,
@@ -3032,6 +3112,22 @@ export default function ProfileScreen() {
                   <Text className="text-af-silver text-xs">{members.length} members in squadron</Text>
                 </View>
               </Pressable>
+
+              {userAccountType === 'fitflight_creator' && (
+                <Pressable
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setShowUpdateNotesModal(true);
+                  }}
+                  className="flex-row items-center bg-af-accent/10 border border-af-accent/30 rounded-xl p-4 mb-3"
+                >
+                  <Bell size={24} color="#4A90D9" />
+                  <View className="ml-3 flex-1">
+                    <Text className="text-white font-semibold">Publish Update Notes</Text>
+                    <Text className="text-af-silver text-xs">Show one-time update or hotfix notes on each member&apos;s next login</Text>
+                  </View>
+                </Pressable>
+              )}
 
               {canResetUserPasswords && (
                 <TutorialTarget
@@ -4464,6 +4560,155 @@ export default function ProfileScreen() {
         </Animated.View>
       </Modal>
 
+      <Modal visible={showUpdateNotesModal} transparent animationType="none">
+        <Animated.View entering={getWebSafeFadeIn(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View entering={getWebSafeSlideInDown(260)} style={{ height: '82%', overflow: 'hidden' }}>
+            <ThemeChrome theme={themePalette} variant="feature" blurIntensity={modalBlurIntensity} fill style={{ borderTopLeftRadius: 24, borderTopRightRadius: 24, height: '100%', overflow: 'hidden' }}>
+              <View className="flex-1 p-6 pb-6" style={{ backgroundColor: 'rgba(8, 14, 24, 0.34)' }}>
+                <View className="flex-row items-center justify-between mb-4">
+                  <Text style={getThemeHeadingStyle(themePalette, 22)}>Publish Update Notes</Text>
+                  <Pressable
+                    onPress={() => {
+                      resetUpdateNoteComposer();
+                      setShowUpdateNotesModal(false);
+                    }}
+                    className="w-8 h-8 rounded-full items-center justify-center"
+                    style={getThemeControlStyle(themePalette)}
+                  >
+                    <X size={20} color={themePalette.textSecondary} />
+                  </Pressable>
+                </View>
+
+                <Text style={getThemeBodyStyle(themePalette, 13, themePalette.textSecondary)}>
+                  Publish a one-time update or hotfix note. Members will see it once on their next login or full refresh, and FitFlight will save when they&apos;ve seen it.
+                </Text>
+
+                <View className="flex-1 min-h-0 mt-4">
+                  <ScrollView
+                    style={{ flex: 1, minHeight: 0 }}
+                    contentContainerStyle={{ paddingBottom: 12 }}
+                    showsVerticalScrollIndicator={false}
+                    keyboardShouldPersistTaps="handled"
+                    nestedScrollEnabled
+                  >
+                    <View className="mb-4">
+                      <Text style={getThemeBodyStyle(themePalette, 13, themePalette.textSecondary)} className="mb-2">Title</Text>
+                      <View style={getThemeControlStyle(themePalette)}>
+                        <TextInput
+                          value={updateNoteTitle}
+                          onChangeText={setUpdateNoteTitle}
+                          placeholder="e.g. v1.0.8 Update Notes"
+                          placeholderTextColor={themePalette.textMuted}
+                          className="px-4 py-3"
+                          style={{ color: themePalette.textPrimary }}
+                        />
+                      </View>
+                    </View>
+
+                    <View className="mb-4">
+                      <Text style={getThemeBodyStyle(themePalette, 13, themePalette.textSecondary)} className="mb-2">Version</Text>
+                      <View style={getThemeControlStyle(themePalette)}>
+                        <TextInput
+                          value={updateNoteVersionLabel}
+                          onChangeText={setUpdateNoteVersionLabel}
+                          placeholder="e.g. v1.0.8"
+                          placeholderTextColor={themePalette.textMuted}
+                          className="px-4 py-3"
+                          style={{ color: themePalette.textPrimary }}
+                        />
+                      </View>
+                    </View>
+
+                    <View className="mb-4">
+                      <Text style={getThemeBodyStyle(themePalette, 13, themePalette.textSecondary)} className="mb-2">Type</Text>
+                      <View className="flex-row">
+                        {(['update', 'hotfix'] as const).map((typeOption, index) => {
+                          const active = updateNoteType === typeOption;
+                          return (
+                            <Pressable
+                              key={typeOption}
+                              onPress={() => setUpdateNoteType(typeOption)}
+                              className={index === 0 ? 'mr-3 flex-1' : 'flex-1'}
+                              style={[getThemeControlStyle(themePalette, active), { paddingVertical: 12, alignItems: 'center' }]}
+                            >
+                              <Text style={getThemeBodyStyle(themePalette, 13, active ? themePalette.accent : themePalette.textSecondary)}>
+                                {typeOption === 'update' ? 'Update' : 'Hotfix'}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                    </View>
+
+                    <View className="mb-4">
+                      <Text style={getThemeBodyStyle(themePalette, 13, themePalette.textSecondary)} className="mb-2">Notes</Text>
+                      <View style={getThemeControlStyle(themePalette)}>
+                        <TextInput
+                          value={updateNoteBody}
+                          onChangeText={setUpdateNoteBody}
+                          placeholder="Summarize what changed, what members should notice, and any actions they need to take."
+                          placeholderTextColor={themePalette.textMuted}
+                          multiline
+                          textAlignVertical="top"
+                          style={{ color: themePalette.textPrimary, minHeight: 220, paddingHorizontal: 16, paddingVertical: 14 }}
+                        />
+                      </View>
+                    </View>
+
+                    {updateNoteError ? (
+                      <Text style={getThemeBodyStyle(themePalette, 12, '#FCA5A5')}>{updateNoteError}</Text>
+                    ) : null}
+                  </ScrollView>
+                </View>
+
+                <Pressable
+                  onPress={() => {
+                    void handlePublishUpdateNote();
+                  }}
+                  disabled={updateNotePublishState === 'saving'}
+                  className="mt-4 rounded-xl px-4 py-3 flex-row items-center justify-center"
+                  style={{
+                    backgroundColor:
+                      updateNotePublishState === 'error'
+                        ? 'rgba(239,68,68,0.20)'
+                        : updateNotePublishState === 'saved'
+                          ? 'rgba(34,197,94,0.20)'
+                          : 'rgba(74,144,217,0.22)',
+                    borderWidth: 1,
+                    borderColor:
+                      updateNotePublishState === 'error'
+                        ? 'rgba(239,68,68,0.38)'
+                        : updateNotePublishState === 'saved'
+                          ? 'rgba(34,197,94,0.38)'
+                          : 'rgba(74,144,217,0.38)',
+                    opacity: updateNotePublishState === 'saving' ? 0.88 : 1,
+                  }}
+                >
+                  {updateNotePublishState === 'saving' ? (
+                    <>
+                      <ActivityIndicator size="small" color={themePalette.textPrimary} />
+                      <Text style={[getThemeBodyStyle(themePalette, 14, themePalette.textPrimary), { marginLeft: 8, fontWeight: '600' }]}>Publishing</Text>
+                    </>
+                  ) : updateNotePublishState === 'saved' ? (
+                    <>
+                      <Check size={18} color="#22C55E" />
+                      <Text style={[getThemeBodyStyle(themePalette, 14, themePalette.textPrimary), { marginLeft: 8, fontWeight: '600' }]}>Published</Text>
+                    </>
+                  ) : updateNotePublishState === 'error' ? (
+                    <>
+                      <AlertTriangle size={18} color="#F87171" />
+                      <Text style={[getThemeBodyStyle(themePalette, 14, themePalette.textPrimary), { marginLeft: 8, fontWeight: '600' }]}>Error</Text>
+                    </>
+                  ) : (
+                    <Text style={[getThemeBodyStyle(themePalette, 14, themePalette.textPrimary), { fontWeight: '600' }]}>Publish</Text>
+                  )}
+                </Pressable>
+              </View>
+            </ThemeChrome>
+          </Animated.View>
+        </Animated.View>
+      </Modal>
+
       {/* PFL Request Review Modal */}
       <Modal visible={showPTLRequestModal} transparent animationType="fade">
         <View className="flex-1 bg-black/80 items-center justify-center p-6">
@@ -4964,6 +5209,12 @@ export default function ProfileScreen() {
                   <View className="flex-row justify-between mb-2">
                     <Text className="text-af-silver">Workout</Text>
                     <Text className="text-white font-semibold">{activeWorkoutSubmission.workoutType}</Text>
+                  </View>
+                  <View className="flex-row justify-between mb-2">
+                    <Text className="text-af-silver">Workout Date</Text>
+                    <Text className="text-white font-semibold">
+                      {new Date(`${activeWorkoutSubmission.workoutDate}T00:00:00`).toLocaleDateString()}
+                    </Text>
                   </View>
                   <View className="flex-row justify-between mb-2">
                     <Text className="text-af-silver">Duration</Text>

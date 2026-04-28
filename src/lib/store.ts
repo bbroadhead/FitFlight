@@ -401,10 +401,6 @@ export const getAutomaticAchievementIds = (
     automaticAchievements.add('perfect_fa');
   }
 
-  if (member.trophyCount > 0 || member.monthlyPlacements.length > 0) {
-    automaticAchievements.add('top_3_month');
-  }
-
   if (sharedWorkouts.some((workout) => workout.createdBy === member.id && workout.squadron === member.squadron)) {
     automaticAchievements.add('shared_workout_creator');
   }

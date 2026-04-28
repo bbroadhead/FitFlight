@@ -5,13 +5,15 @@ import { StatusBar } from 'expo-status-bar';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
-import { useEffect } from 'react';
-import { Image, ScrollView, Text, TextInput, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, Image, Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useAuthStore, useMemberStore, ALL_ACHIEVEMENTS } from '@/lib/store';
 import { formatErrorLogRouteLabel, recordAppError, useErrorLogStore } from '@/lib/errorLog';
-import { getAppThemePalette, useAppTheme } from '@/lib/theme';
+import { getAppThemePalette, getThemeBodyStyle, getThemeControlStyle, getThemeHeadingStyle, useAppTheme } from '@/lib/theme';
 import { AchievementCelebration } from '@/components/AchievementCelebration';
+import { ThemeChrome } from '@/components/ThemeChrome';
 import { TutorialTourProvider } from '@/contexts/TutorialTourContext';
+import { fetchUnreadAppUpdateNotes, markAppUpdateNoteSeen, type AppUpdateNote } from '@/lib/supabaseData';
 
 export const unstable_settings = {
   initialRouteName: 'login',
@@ -26,9 +28,16 @@ function RootLayoutNav() {
   const recentAchievementId = useMemberStore((state) => state.recentAchievementId);
   const dismissAchievementCelebration = useMemberStore((state) => state.dismissAchievementCelebration);
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const user = useAuthStore((state) => state.user);
+  const accessToken = useAuthStore((state) => state.accessToken);
   const theme = useAppTheme();
   const pathname = usePathname();
   const setCurrentRouteLabel = useErrorLogStore((state) => state.setCurrentRouteLabel);
+  const [pendingUpdateNotes, setPendingUpdateNotes] = useState<AppUpdateNote[]>([]);
+  const [activeUpdateNote, setActiveUpdateNote] = useState<AppUpdateNote | null>(null);
+  const [updateNotesLoadedForEmail, setUpdateNotesLoadedForEmail] = useState<string | null>(null);
+  const [updateNotesBusy, setUpdateNotesBusy] = useState(false);
+  const [updateNotesError, setUpdateNotesError] = useState<string | null>(null);
 
   const navigationTheme = {
     ...DarkTheme,
@@ -49,9 +58,82 @@ function RootLayoutNav() {
     setCurrentRouteLabel(formatErrorLogRouteLabel(pathname));
   }, [pathname, setCurrentRouteLabel]);
 
+  useEffect(() => {
+    if (!isAuthenticated || !user?.email || !accessToken) {
+      setPendingUpdateNotes([]);
+      setActiveUpdateNote(null);
+      setUpdateNotesLoadedForEmail(null);
+      setUpdateNotesBusy(false);
+      setUpdateNotesError(null);
+      return;
+    }
+
+    const normalizedEmail = user.email.trim().toLowerCase();
+    if (updateNotesLoadedForEmail === normalizedEmail) {
+      return;
+    }
+
+    let cancelled = false;
+    const loadUnreadUpdateNotes = async () => {
+      try {
+        const unreadNotes = await fetchUnreadAppUpdateNotes({
+          memberEmail: normalizedEmail,
+          accessToken,
+        });
+        if (cancelled) {
+          return;
+        }
+        setPendingUpdateNotes(unreadNotes);
+        setActiveUpdateNote(unreadNotes[0] ?? null);
+        setUpdateNotesError(null);
+        setUpdateNotesLoadedForEmail(normalizedEmail);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        setPendingUpdateNotes([]);
+        setActiveUpdateNote(null);
+        setUpdateNotesError(error instanceof Error ? error.message : 'Unable to load update notes.');
+        setUpdateNotesLoadedForEmail(normalizedEmail);
+      }
+    };
+
+    void loadUnreadUpdateNotes();
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, isAuthenticated, updateNotesLoadedForEmail, user?.email]);
+
   const recentAchievement = recentAchievementId
     ? ALL_ACHIEVEMENTS.find((achievement) => achievement.id === recentAchievementId) ?? null
     : null;
+
+  const handleDismissUpdateNote = async () => {
+    if (!activeUpdateNote || !user?.email || !accessToken) {
+      setActiveUpdateNote(null);
+      setPendingUpdateNotes([]);
+      return;
+    }
+
+    setUpdateNotesBusy(true);
+    try {
+      await markAppUpdateNoteSeen({
+        noteId: activeUpdateNote.id,
+        memberEmail: user.email,
+        accessToken,
+      });
+      setPendingUpdateNotes((current) => {
+        const next = current.filter((note) => note.id !== activeUpdateNote.id);
+        setActiveUpdateNote(next[0] ?? null);
+        return next;
+      });
+      setUpdateNotesError(null);
+    } catch (error) {
+      setUpdateNotesError(error instanceof Error ? error.message : 'Unable to save update note status.');
+    } finally {
+      setUpdateNotesBusy(false);
+    }
+  };
 
   return (
     <ThemeProvider value={navigationTheme}>
@@ -83,6 +165,78 @@ function RootLayoutNav() {
             onDismiss={dismissAchievementCelebration}
           />
         ) : null}
+        <Modal visible={isAuthenticated && !!activeUpdateNote} transparent animationType="fade">
+          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.78)', justifyContent: 'center', paddingHorizontal: 24, paddingVertical: 40 }}>
+            <View style={{ width: '100%', maxWidth: 520, maxHeight: '82%', alignSelf: 'center' }}>
+            <ThemeChrome theme={theme} variant="feature" blurIntensity={34} fill>
+              <View style={{ paddingHorizontal: 24, paddingTop: 24, paddingBottom: 22, flex: 1, minHeight: 0 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                  <View style={{ flex: 1, paddingRight: 16 }}>
+                    <Text style={getThemeHeadingStyle(theme, 22)}>
+                      {activeUpdateNote?.noteType === 'hotfix' ? 'Hotfix Notes' : 'Update Notes'}
+                    </Text>
+                    {activeUpdateNote?.versionLabel ? (
+                      <Text style={[getThemeBodyStyle(theme, 13, theme.textSecondary), { marginTop: 6 }]}>
+                        {activeUpdateNote.versionLabel}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <View style={[getThemeControlStyle(theme, true), { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999 }]}>
+                    <Text style={getThemeBodyStyle(theme, 12, theme.accent)}>
+                      {activeUpdateNote?.noteType === 'hotfix' ? 'Hotfix' : 'Update'}
+                    </Text>
+                  </View>
+                </View>
+
+                <Text style={[getThemeHeadingStyle(theme, 18), { marginTop: 18 }]}>
+                  {activeUpdateNote?.title}
+                </Text>
+
+                <ScrollView
+                  style={{ marginTop: 14, flex: 1, minHeight: 0 }}
+                  contentContainerStyle={{ paddingBottom: 8 }}
+                  showsVerticalScrollIndicator={false}
+                >
+                  <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { lineHeight: 22 }]}>
+                    {activeUpdateNote?.body}
+                  </Text>
+                  {updateNotesError ? (
+                    <Text style={[getThemeBodyStyle(theme, 12, '#FCA5A5'), { marginTop: 14 }]}>
+                      {updateNotesError}
+                    </Text>
+                  ) : null}
+                </ScrollView>
+
+                <Pressable
+                  onPress={() => {
+                    void handleDismissUpdateNote();
+                  }}
+                  disabled={updateNotesBusy}
+                  style={[
+                    getThemeControlStyle(theme, true),
+                    {
+                      marginTop: 20,
+                      paddingVertical: 14,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexDirection: 'row',
+                    },
+                  ]}
+                >
+                  {updateNotesBusy ? (
+                    <>
+                      <ActivityIndicator size="small" color={theme.textPrimary} />
+                      <Text style={[getThemeBodyStyle(theme, 14, theme.textPrimary), { marginLeft: 8, fontWeight: '600' }]}>Saving</Text>
+                    </>
+                  ) : (
+                    <Text style={[getThemeBodyStyle(theme, 14, theme.textPrimary), { fontWeight: '600' }]}>Close</Text>
+                  )}
+                </Pressable>
+              </View>
+            </ThemeChrome>
+            </View>
+          </View>
+        </Modal>
       </TutorialTourProvider>
     </ThemeProvider>
   );

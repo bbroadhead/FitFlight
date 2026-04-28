@@ -7,7 +7,7 @@ import { Trophy, Timer, ChevronDown, ChevronUp, Crown, Medal, Search, X, Activit
 import Animated, { FadeInDown, FadeInRight, useAnimatedStyle, useSharedValue, withDelay, withSpring } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import { ALL_ACHIEVEMENTS, formatFlightDisplay, getEffectiveAchievementIds, getShortDisplayName, type Flight, useAuthStore, useMemberStore, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
+import { ALL_ACHIEVEMENTS, FLIGHTS, formatFlightDisplay, getEffectiveAchievementIds, getShortDisplayName, type Flight, useAuthStore, useMemberStore, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { ATTENDANCE_CHECK_IN_POINTS, getMemberMonthSummary, getMonthKey, WORKOUT_POINTS_PER_MILE, WORKOUT_POINTS_PER_MINUTE } from '@/lib/monthlyStats';
@@ -180,6 +180,9 @@ function LeaderboardCard({
 
   const displayName = getShortDisplayName({ rank: member.rank, lastName: member.lastName });
   const rankAccent = getRankAccent();
+  const leaderboardAchievementBadges = member.hardAchievements
+    .filter((achievement) => achievement.id !== 'top_3_month')
+    .slice(0, 2);
 
   return (
     <Pressable onPress={onPress}>
@@ -205,7 +208,7 @@ function LeaderboardCard({
             </View>
             <View className="flex-row items-center">
               <Text className="text-xs" style={{ color: theme.textSecondary }}>{formatFlightDisplay(member.flight)}</Text>
-              {member.hardAchievements.slice(0, 2).map((achievement) => (
+              {leaderboardAchievementBadges.map((achievement) => (
                 <View
                   key={achievement.id}
                   className="ml-1.5 flex-row items-center px-1.5 py-0.5 rounded border"
@@ -277,8 +280,11 @@ export function LeaderboardContent({
   const [searchQuery, setSearchQuery] = useState('');
   const [showScoringHelp, setShowScoringHelp] = useState(false);
   const [showFlightRankings, setShowFlightRankings] = useState(false);
+  const [showWorkoutTypesModal, setShowWorkoutTypesModal] = useState(false);
   const leaderboardOverlayLabel = showFlightRankings
     ? 'Flight Rankings'
+    : showWorkoutTypesModal
+      ? 'Workout Types'
     : showScoringHelp
       ? 'How Points Work'
       : null;
@@ -291,6 +297,7 @@ export function LeaderboardContent({
 
   const userName = user ? getShortDisplayName(user) : 'Airman';
   const userSquadron = user?.squadron ?? 'Hawks';
+  const normalizedSearchQuery = searchQuery.trim().toLowerCase();
 
   useEffect(() => {
     trackAnalyticsEvent('open_leaderboard', {
@@ -312,16 +319,43 @@ export function LeaderboardContent({
     );
   }, [currentMonthKey, ptSessions, squadronMembers]);
 
-  const sortedMembers = useMemo<LeaderboardMember[]>(() => {
-    let filtered = squadronMembers;
+  const allRankedMembers = useMemo<LeaderboardMember[]>(() => {
+    return squadronMembers
+      .map(m => {
+        const summary = currentMonthSummaries.get(m.id) ?? getMemberMonthSummary(m, currentMonthKey, ptSessions);
+        return {
+          id: m.id,
+          rank: m.rank,
+          firstName: m.firstName,
+          lastName: m.lastName,
+          flight: m.flight,
+          exerciseMinutes: summary.minutes,
+          distanceRun: summary.miles,
+          workoutCount: summary.workoutCount,
+          totalScore: summary.score,
+          trophyCount: m.trophyCount,
+          hardAchievements: ALL_ACHIEVEMENTS
+            .filter(a => a.isHard && getEffectiveAchievementIds(m).includes(a.id))
+            .map(a => ({ id: a.id, name: a.name })),
+        };
+      })
+      .sort((a, b) => b.totalScore - a.totalScore);
+  }, [currentMonthKey, currentMonthSummaries, ptSessions, squadronMembers]);
 
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
+  const isFlightSearch = useMemo(
+    () => normalizedSearchQuery.length > 0 && FLIGHTS.some((flight) => flight.toLowerCase() === normalizedSearchQuery),
+    [normalizedSearchQuery]
+  );
+
+  const sortedMembers = useMemo<LeaderboardMember[]>(() => {
+    let filtered = allRankedMembers;
+
+    if (normalizedSearchQuery) {
       filtered = filtered.filter(m =>
-        m.firstName.toLowerCase().includes(query) ||
-        m.lastName.toLowerCase().includes(query) ||
-        m.flight.toLowerCase().includes(query) ||
-        `${m.rank} ${m.firstName} ${m.lastName}`.toLowerCase().includes(query)
+        m.firstName.toLowerCase().includes(normalizedSearchQuery) ||
+        m.lastName.toLowerCase().includes(normalizedSearchQuery) ||
+        m.flight.toLowerCase().includes(normalizedSearchQuery) ||
+        `${m.rank} ${m.firstName} ${m.lastName}`.toLowerCase().includes(normalizedSearchQuery)
       );
     }
 
@@ -329,33 +363,61 @@ export function LeaderboardContent({
       filtered = filtered.filter(m => m.flight === selectedFlight);
     }
 
-    return filtered
-      .map(m => {
-        const summary = currentMonthSummaries.get(m.id) ?? getMemberMonthSummary(m, currentMonthKey, ptSessions);
-        return {
-        id: m.id,
-        rank: m.rank,
-        firstName: m.firstName,
-        lastName: m.lastName,
-        flight: m.flight,
-        exerciseMinutes: summary.minutes,
-        distanceRun: summary.miles,
-        workoutCount: summary.workoutCount,
-        totalScore: summary.score,
-        trophyCount: m.trophyCount,
-        hardAchievements: ALL_ACHIEVEMENTS
-          .filter(a => a.isHard && getEffectiveAchievementIds(m).includes(a.id))
-          .map(a => ({ id: a.id, name: a.name })),
-        };
-      })
-      .sort((a, b) => b.totalScore - a.totalScore);
-  }, [currentMonthKey, currentMonthSummaries, ptSessions, searchQuery, selectedFlight, squadronMembers]);
+    return filtered;
+  }, [allRankedMembers, normalizedSearchQuery, selectedFlight]);
+
+  const overallPositionsByMemberId = useMemo(() => {
+    const scores = allRankedMembers.map((member) => member.totalScore);
+    return new Map(allRankedMembers.map((member, index) => [member.id, getCompetitionPosition(scores, index)]));
+  }, [allRankedMembers]);
 
   const maxValues = useMemo(() => ({
     minutes: Math.max(...squadronMembers.map(m => currentMonthSummaries.get(m.id)?.minutes ?? 0), 1),
     distance: Math.max(...squadronMembers.map(m => currentMonthSummaries.get(m.id)?.miles ?? 0), 1),
     workouts: Math.max(...squadronMembers.map(m => currentMonthSummaries.get(m.id)?.workoutCount ?? 0), 1),
   }), [currentMonthSummaries, squadronMembers]);
+
+  const squadronTotals = useMemo(() => ({
+    hours: (squadronMembers.reduce((acc, member) => acc + (currentMonthSummaries.get(member.id)?.minutes ?? 0), 0) / 60),
+    miles: squadronMembers.reduce((acc, member) => acc + (currentMonthSummaries.get(member.id)?.miles ?? 0), 0),
+    workouts: squadronMembers.reduce((acc, member) => acc + (currentMonthSummaries.get(member.id)?.workoutCount ?? 0), 0),
+  }), [currentMonthSummaries, squadronMembers]);
+
+  const squadronLeaders = useMemo(() => {
+    const categories = {
+      hours: squadronMembers.map((member) => ({
+        member,
+        value: (currentMonthSummaries.get(member.id)?.minutes ?? 0) / 60,
+      })),
+      miles: squadronMembers.map((member) => ({
+        member,
+        value: currentMonthSummaries.get(member.id)?.miles ?? 0,
+      })),
+      workouts: squadronMembers.map((member) => ({
+        member,
+        value: currentMonthSummaries.get(member.id)?.workoutCount ?? 0,
+      })),
+    } as const;
+
+    const getLeader = (entries: Array<{ member: typeof squadronMembers[number]; value: number }>) => {
+      const sorted = [...entries].sort((left, right) => {
+        if (right.value !== left.value) {
+          return right.value - left.value;
+        }
+        return `${left.member.lastName} ${left.member.firstName}`.localeCompare(`${right.member.lastName} ${right.member.firstName}`);
+      });
+      const leader = sorted[0];
+      return leader && leader.value > 0
+        ? getShortDisplayName({ rank: leader.member.rank, lastName: leader.member.lastName })
+        : 'None';
+    };
+
+    return {
+      hours: getLeader(categories.hours),
+      miles: getLeader(categories.miles),
+      workouts: getLeader(categories.workouts),
+    };
+  }, [currentMonthSummaries, squadronMembers]);
 
   const squadronWorkoutBreakdown = useMemo(() => {
     const counts = new Map<string, number>();
@@ -406,13 +468,28 @@ export function LeaderboardContent({
     });
   }, [currentMonthKey, currentMonthSummaries, ptSessions, squadronMembers]);
 
-  const topFlights = flightPointsRanking.slice(0, 2);
+  const topFlights = flightPointsRanking.slice(0, 3);
+  const flightRankingPositions = useMemo(() => {
+    const scores = flightPointsRanking.map((entry) => entry.averagePoints);
+    return scores.map((_, index) => getCompetitionPosition(scores, index));
+  }, [flightPointsRanking]);
 
   const displayedMembers = isExpanded ? sortedMembers : sortedMembers.slice(0, 10);
   const displayedPositions = useMemo(() => {
+    if (normalizedSearchQuery && !isFlightSearch) {
+      return displayedMembers.map((member) => overallPositionsByMemberId.get(member.id) ?? 0);
+    }
+
     const scores = displayedMembers.map((member) => member.totalScore);
     return scores.map((_, index) => getCompetitionPosition(scores, index));
-  }, [displayedMembers]);
+  }, [displayedMembers, isFlightSearch, normalizedSearchQuery, overallPositionsByMemberId]);
+
+  const currentUserRank = useMemo(() => {
+    if (!user) {
+      return null;
+    }
+    return overallPositionsByMemberId.get(user.id) ?? null;
+  }, [overallPositionsByMemberId, user]);
 
   const toggleExpand = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -435,6 +512,7 @@ export function LeaderboardContent({
 
   return (
     <View className="flex-1" style={{ backgroundColor: theme.background }}>
+      <LinearGradient colors={theme.gradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }} />
       <ThemeBackdrop />
 
       <SafeAreaView edges={['top']} className="flex-1">
@@ -448,8 +526,8 @@ export function LeaderboardContent({
             <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} tintColor={theme.accent} />
           }
         >
-          <Animated.View entering={FadeInDown.delay(100).springify()} className="px-6 pt-4 pb-2">
-            <View className="flex-row items-center justify-between mb-4">
+          <Animated.View entering={FadeInDown.delay(100).springify()} className="px-6 pt-4 mb-3">
+            <View className="flex-row items-center justify-between mb-3">
               {showBackButton ? (
                 <Pressable
                   onPress={onBack}
@@ -465,7 +543,17 @@ export function LeaderboardContent({
 
             <View className="flex-row items-center justify-between">
             <View className="flex-1 mr-3">
-              <Text style={getThemeHeadingStyle(theme, 22)} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72}>{userName}</Text>
+              <View className="flex-row items-center">
+                <Text style={getThemeHeadingStyle(theme, 22)} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72}>{userName}</Text>
+                {typeof currentUserRank === 'number' && currentUserRank > 0 ? (
+                  <View
+                    className="ml-2 px-2.5 py-1 rounded-full border"
+                    style={{ backgroundColor: theme.accentSoft, borderColor: `${theme.accent}55` }}
+                  >
+                    <Text style={[getThemeBodyStyle(theme, 12, theme.accent), { fontWeight: '700' }]}>#{currentUserRank}</Text>
+                  </View>
+                ) : null}
+              </View>
             </View>
             <View className="flex-row items-center flex-shrink-0">
               <Pressable
@@ -486,7 +574,217 @@ export function LeaderboardContent({
           </View>
         </Animated.View>
 
-          <Animated.View entering={FadeInDown.delay(150).springify()} className="mx-6 mt-2">
+          <Animated.View entering={FadeInDown.delay(200).springify()} className="mx-6">
+            <ThemeChrome theme={theme} variant="feature">
+              <View className="px-4 py-3">
+                <Text style={[getThemeBodyStyle(theme, 11, theme.textMuted), { textTransform: 'uppercase', marginBottom: 8 }]}>Squadron Totals This Month</Text>
+                <View className="flex-row justify-between items-center">
+                  <View className="flex-1 flex-row items-center">
+                    <Timer size={18} color="#4A90D9" />
+                    <Text className="text-white font-bold text-lg ml-2">{squadronTotals.hours.toFixed(2)}</Text>
+                    <Text className="text-af-silver text-xs ml-1">Hours</Text>
+                  </View>
+                  <View className="w-px h-8 bg-white/10 mx-3" />
+                  <View className="flex-1 flex-row items-center">
+                    <RunningIcon size={18} color="#22C55E" />
+                    <Text className="text-white font-bold text-lg ml-2">{squadronTotals.miles.toFixed(2)}</Text>
+                    <Text className="text-af-silver text-xs ml-1">Miles</Text>
+                  </View>
+                  <View className="w-px h-8 bg-white/10 mx-3" />
+                  <View className="flex-1 flex-row items-center">
+                    <Dumbbell size={18} color="#A855F7" />
+                    <Text className="text-white font-bold text-lg ml-2">{squadronTotals.workouts}</Text>
+                    <Text className="text-af-silver text-xs ml-1">Workouts</Text>
+                  </View>
+                </View>
+              </View>
+            </ThemeChrome>
+          </Animated.View>
+
+          <Animated.View entering={FadeInDown.delay(225).springify()} className="mx-6 mt-3">
+            <ThemeChrome theme={theme} variant="feature">
+              <View className="px-4 py-3">
+                <Text style={[getThemeBodyStyle(theme, 11, theme.textMuted), { textTransform: 'uppercase', marginBottom: 8 }]}>Current Leaders This Month</Text>
+                <View className="flex-row justify-between items-center">
+                  <View className="flex-1 flex-row items-center">
+                    <Timer size={18} color="#4A90D9" />
+                    <Text
+                      style={[getThemeBodyStyle(theme, 13, theme.textPrimary), { fontWeight: '700', marginLeft: 8, flexShrink: 1 }]}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.72}
+                    >
+                      {squadronLeaders.hours}
+                    </Text>
+                  </View>
+                  <View className="w-px h-8 bg-white/10 mx-3" />
+                  <View className="flex-1 flex-row items-center">
+                    <RunningIcon size={18} color="#22C55E" />
+                    <Text
+                      style={[getThemeBodyStyle(theme, 13, theme.textPrimary), { fontWeight: '700', marginLeft: 8, flexShrink: 1 }]}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.72}
+                    >
+                      {squadronLeaders.miles}
+                    </Text>
+                  </View>
+                  <View className="w-px h-8 bg-white/10 mx-3" />
+                  <View className="flex-1 flex-row items-center">
+                    <Dumbbell size={18} color="#A855F7" />
+                    <Text
+                      style={[getThemeBodyStyle(theme, 13, theme.textPrimary), { fontWeight: '700', marginLeft: 8, flexShrink: 1 }]}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.72}
+                    >
+                      {squadronLeaders.workouts}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            </ThemeChrome>
+          </Animated.View>
+
+          {(squadronWorkoutBreakdown.totalWorkouts > 0 || flightPointsRanking.length > 0) && (
+            <Animated.View entering={FadeInDown.delay(250).springify()} className="mx-6 mt-3">
+              <View className="flex-row items-stretch">
+                {squadronWorkoutBreakdown.totalWorkouts > 0 ? (
+                  <View className="flex-1 mr-2">
+                    <Pressable
+                      disabled={squadronWorkoutBreakdown.breakdown.length <= 3}
+                      onPress={() => {
+                        Haptics.selectionAsync();
+                        setShowWorkoutTypesModal(true);
+                      }}
+                    >
+                      <ThemeChrome theme={theme} variant="feature">
+                        <View className="p-4 justify-between" style={{ height: 194 }}>
+                          <View className="mb-3">
+                            <View className="flex-row items-center justify-between">
+                              <View className="flex-row items-center flex-1 pr-2">
+                                <BarChart3 size={16} color={theme.accent} />
+                                <Text style={[getThemeBodyStyle(theme, 11, theme.textMuted), { textTransform: 'uppercase', marginLeft: 8 }]}>Workout Types</Text>
+                              </View>
+                              {squadronWorkoutBreakdown.breakdown.length > 3 ? (
+                                <Text style={getThemeBodyStyle(theme, 11, theme.accent)}>Open</Text>
+                              ) : null}
+                            </View>
+                            <Text
+                              style={[getThemeBodyStyle(theme, 12), { marginTop: 8, textAlign: 'left', flexShrink: 1 }]}
+                              numberOfLines={2}
+                              adjustsFontSizeToFit
+                              minimumFontScale={0.68}
+                            >
+                              {squadronWorkoutBreakdown.breakdown.length} {squadronWorkoutBreakdown.breakdown.length === 1 ? 'type' : 'types'} | {squadronWorkoutBreakdown.totalWorkouts} total {squadronWorkoutBreakdown.totalWorkouts === 1 ? 'workout' : 'workouts'}
+                            </Text>
+                          </View>
+                          {squadronWorkoutBreakdown.breakdown.slice(0, 3).map((item, index) => (
+                            <WorkoutTypeAnalyticsBar
+                              key={item.label}
+                              label={item.label}
+                              count={item.count}
+                              percentage={item.percentage}
+                              maxPercentage={squadronWorkoutBreakdown.breakdown[0]?.percentage ?? 100}
+                              delay={250 + index * 50}
+                            />
+                          ))}
+                          <View style={{ minHeight: 22, justifyContent: 'flex-end', paddingTop: 8 }}>
+                            {squadronWorkoutBreakdown.breakdown.length > 3 ? (
+                              <Text
+                                style={getThemeBodyStyle(theme, 11, theme.textSecondary)}
+                                numberOfLines={1}
+                                adjustsFontSizeToFit
+                                minimumFontScale={0.75}
+                              >
+                                Tap to view all {squadronWorkoutBreakdown.breakdown.length} types
+                              </Text>
+                            ) : (
+                              <Text style={getThemeBodyStyle(theme, 11, 'transparent')}>
+                                Tap to view all 000 types
+                              </Text>
+                            )}
+                          </View>
+                        </View>
+                      </ThemeChrome>
+                    </Pressable>
+                  </View>
+                ) : null}
+
+                {flightPointsRanking.length > 0 ? (
+                  <View className={squadronWorkoutBreakdown.totalWorkouts > 0 ? "flex-1 ml-2" : "flex-1"}>
+                    <Pressable
+                      onPress={() => {
+                        Haptics.selectionAsync();
+                        setShowFlightRankings(true);
+                      }}
+                    >
+                      <ThemeChrome theme={theme} variant="feature">
+                        <View className="p-4 justify-between" style={{ height: 194 }}>
+                          <View className="mb-3">
+                            <View className="flex-row items-center justify-between">
+                              <View className="flex-row items-center">
+                                <Users size={16} color={theme.accent} />
+                                <Text style={[getThemeBodyStyle(theme, 11, theme.textMuted), { textTransform: 'uppercase', marginLeft: 8 }]}>Flight Rankings</Text>
+                              </View>
+                              <Text style={getThemeBodyStyle(theme, 11, theme.accent)}>Open</Text>
+                            </View>
+                          </View>
+
+                          {topFlights.map((entry, index) => (
+                            <View
+                              key={entry.flight}
+                              className={index === topFlights.length - 1 ? 'flex-row items-center justify-between' : 'flex-row items-center justify-between mb-3'}
+                            >
+                              <View className="flex-row items-center flex-1 pr-2">
+                                {flightRankingPositions[index] === 1 ? (
+                                  <Crown size={14} color="#FFD700" />
+                                ) : flightRankingPositions[index] === 2 ? (
+                                  <Medal size={14} color="#C0C0C0" />
+                                ) : flightRankingPositions[index] === 3 ? (
+                                  <Medal size={14} color="#CD7F32" />
+                                ) : (
+                                  <Text style={[getThemeBodyStyle(theme, 12, theme.textPrimary), { fontWeight: '700' }]}>
+                                    {flightRankingPositions[index]}
+                                  </Text>
+                                )}
+                                <Text
+                                  style={[getThemeBodyStyle(theme, 12, theme.textPrimary), { fontWeight: '600', marginLeft: 6 }]}
+                                  numberOfLines={1}
+                                  adjustsFontSizeToFit
+                                  minimumFontScale={0.72}
+                                >
+                                  {entry.flight}
+                                </Text>
+                              </View>
+                              <View className="items-end">
+                                <Text style={getThemeHeadingStyle(theme, 15)}>{entry.averagePoints.toFixed(1)}</Text>
+                                <Text style={getThemeBodyStyle(theme, 10, theme.textMuted)}>avg</Text>
+                              </View>
+                            </View>
+                          ))}
+
+                          <View style={{ minHeight: 22, justifyContent: 'flex-end', paddingTop: 8 }}>
+                            {flightPointsRanking.length > 2 ? (
+                              <Text style={getThemeBodyStyle(theme, 11, theme.textSecondary)}>
+                                Tap to view all {flightPointsRanking.length} flights
+                              </Text>
+                            ) : (
+                              <Text style={getThemeBodyStyle(theme, 11, 'transparent')}>
+                                Tap to view all 000 flights
+                              </Text>
+                            )}
+                          </View>
+                        </View>
+                      </ThemeChrome>
+                    </Pressable>
+                  </View>
+                ) : null}
+              </View>
+            </Animated.View>
+          )}
+
+          <Animated.View entering={FadeInDown.delay(275).springify()} className="mx-6 mt-3">
             <View className="flex-row items-center rounded-xl px-4 py-3" style={getThemeControlStyle(theme)}>
               <Search size={20} color={theme.textSecondary} />
               <TextInput
@@ -505,132 +803,7 @@ export function LeaderboardContent({
             </View>
           </Animated.View>
 
-          <Animated.View entering={FadeInDown.delay(200).springify()} className="mx-6 mt-4 px-4 py-3 bg-white/5 rounded-2xl border border-white/10">
-            <ThemeChrome theme={theme} variant="feature">
-            <View className="px-4 py-3">
-            <Text style={[getThemeBodyStyle(theme, 11, theme.textMuted), { textTransform: 'uppercase', marginBottom: 8 }]}>Squadron Totals This Month</Text>
-            <View className="flex-row justify-between">
-              <View className="items-center flex-1">
-                <Timer size={20} color="#4A90D9" />
-                <Text className="text-white font-bold text-lg mt-1">{(squadronMembers.reduce((acc, m) => acc + (currentMonthSummaries.get(m.id)?.minutes ?? 0), 0) / 60).toFixed(2)}</Text>
-                <Text className="text-af-silver text-xs">Hours</Text>
-              </View>
-              <View className="w-px bg-white/10" />
-              <View className="items-center flex-1">
-                <RunningIcon size={20} color="#22C55E" />
-                <Text className="text-white font-bold text-lg mt-1">{squadronMembers.reduce((acc, m) => acc + (currentMonthSummaries.get(m.id)?.miles ?? 0), 0).toFixed(2)}</Text>
-                <Text className="text-af-silver text-xs">Miles</Text>
-              </View>
-              <View className="w-px bg-white/10" />
-              <View className="items-center flex-1">
-                <Dumbbell size={20} color="#A855F7" />
-                <Text className="text-white font-bold text-lg mt-1">{squadronMembers.reduce((acc, m) => acc + (currentMonthSummaries.get(m.id)?.workoutCount ?? 0), 0)}</Text>
-                <Text className="text-af-silver text-xs">Workouts</Text>
-              </View>
-            </View>
-            </View>
-            </ThemeChrome>
-          </Animated.View>
-
-          {(squadronWorkoutBreakdown.totalWorkouts > 0 || flightPointsRanking.length > 0) && (
-            <Animated.View entering={FadeInDown.delay(250).springify()} className="mx-6 mt-4">
-              <View className="flex-row items-stretch">
-                {squadronWorkoutBreakdown.totalWorkouts > 0 ? (
-                  <View className="flex-1 mr-2">
-                    <ThemeChrome theme={theme} variant="feature">
-                      <View className="p-4 min-h-[180px] justify-between">
-                        <View className="mb-3">
-                          <View className="flex-row items-center">
-                            <BarChart3 size={16} color={theme.accent} />
-                            <Text style={[getThemeBodyStyle(theme, 11, theme.textMuted), { textTransform: 'uppercase', marginLeft: 8 }]}>Workout Types</Text>
-                          </View>
-                          <Text
-                            style={[getThemeBodyStyle(theme, 12), { marginTop: 8, textAlign: 'left', flexShrink: 1 }]}
-                            numberOfLines={2}
-                            adjustsFontSizeToFit
-                            minimumFontScale={0.68}
-                          >
-                            {squadronWorkoutBreakdown.breakdown.length} {squadronWorkoutBreakdown.breakdown.length === 1 ? 'type' : 'types'} | {squadronWorkoutBreakdown.totalWorkouts} total {squadronWorkoutBreakdown.totalWorkouts === 1 ? 'workout' : 'workouts'}
-                          </Text>
-                        </View>
-                        {squadronWorkoutBreakdown.breakdown.slice(0, 4).map((item, index) => (
-                          <WorkoutTypeAnalyticsBar
-                            key={item.label}
-                            label={item.label}
-                            count={item.count}
-                            percentage={item.percentage}
-                            maxPercentage={squadronWorkoutBreakdown.breakdown[0]?.percentage ?? 100}
-                            delay={250 + index * 50}
-                          />
-                        ))}
-                        {squadronWorkoutBreakdown.breakdown.length > 4 && (
-                          <Text className="text-white/40 text-xs text-center mt-1">
-                            +{squadronWorkoutBreakdown.breakdown.length - 4} more {(squadronWorkoutBreakdown.breakdown.length - 4) === 1 ? 'type' : 'types'}
-                          </Text>
-                        )}
-                      </View>
-                    </ThemeChrome>
-                  </View>
-                ) : null}
-
-                {flightPointsRanking.length > 0 ? (
-                  <View className={squadronWorkoutBreakdown.totalWorkouts > 0 ? "flex-1 ml-2" : "flex-1"}>
-                    <Pressable
-                      onPress={() => {
-                        Haptics.selectionAsync();
-                        setShowFlightRankings(true);
-                      }}
-                    >
-                      <ThemeChrome theme={theme} variant="feature">
-                        <View className="p-4 min-h-[180px] justify-between">
-                          <View className="mb-3">
-                            <View className="flex-row items-center justify-between">
-                              <View className="flex-row items-center">
-                                <Users size={16} color={theme.accent} />
-                                <Text style={[getThemeBodyStyle(theme, 11, theme.textMuted), { textTransform: 'uppercase', marginLeft: 8 }]}>Flight Points</Text>
-                              </View>
-                              <Text style={getThemeBodyStyle(theme, 11, theme.accent)}>Open</Text>
-                            </View>
-                          </View>
-
-                          {topFlights.map((entry, index) => (
-                            <View
-                              key={entry.flight}
-                              className={index === topFlights.length - 1 ? 'flex-row items-center justify-between' : 'flex-row items-center justify-between mb-3'}
-                            >
-                              <View className="flex-row items-center flex-1 pr-2">
-                                {index === 0 ? <Crown size={14} color="#FFD700" /> : <Medal size={14} color="#C0C0C0" />}
-                                <Text
-                                  style={[getThemeBodyStyle(theme, 13, theme.textPrimary), { fontWeight: '600', marginLeft: 6 }]}
-                                  numberOfLines={1}
-                                  adjustsFontSizeToFit
-                                  minimumFontScale={0.72}
-                                >
-                                  {entry.flight}
-                                </Text>
-                              </View>
-                              <View className="items-end">
-                                <Text style={getThemeHeadingStyle(theme, 16)}>{entry.averagePoints.toFixed(1)}</Text>
-                                <Text style={getThemeBodyStyle(theme, 10, theme.textMuted)}>avg</Text>
-                              </View>
-                            </View>
-                          ))}
-
-                          {flightPointsRanking.length > 2 ? (
-                            <Text style={[getThemeBodyStyle(theme, 11, theme.textSecondary), { marginTop: 8 }]}>
-                              Tap to view all {flightPointsRanking.length} flights
-                            </Text>
-                          ) : null}
-                        </View>
-                      </ThemeChrome>
-                    </Pressable>
-                  </View>
-                ) : null}
-              </View>
-            </Animated.View>
-          )}
-
-          <View className="flex-row items-center justify-between px-6 mt-6 mb-3">
+          <View className="flex-row items-center justify-between px-6 mt-3 mb-3">
             <Text style={getThemeHeadingStyle(theme, 20)}>{isExpanded ? 'All Members' : 'Top 10 Performers'}</Text>
             <Pressable onPress={toggleExpand} className="flex-row items-center px-3 py-1.5 rounded-full" style={getThemeControlStyle(theme)}>
               <Text className="text-sm mr-1" style={{ color: theme.textSecondary }}>{isExpanded ? 'Show Less' : 'Show All'}</Text>
@@ -728,6 +901,60 @@ export function LeaderboardContent({
         </Modal>
 
         <Modal
+          visible={showWorkoutTypesModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowWorkoutTypesModal(false)}
+        >
+          <View className="flex-1 bg-black/75 justify-center items-center px-5">
+            <View style={{ width: '100%', maxWidth: 460, height: '78%' }}>
+              <ThemeChrome theme={theme} variant="feature" blurIntensity={40} style={{ width: '100%', height: '100%' }} fill>
+                <View style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                  <View className="flex-row items-center justify-between p-6 pb-0">
+                    <Text style={getThemeHeadingStyle(theme, 20)}>Workout Types</Text>
+                    <Pressable
+                      onPress={() => {
+                        Haptics.selectionAsync();
+                        setShowWorkoutTypesModal(false);
+                      }}
+                      className="w-9 h-9 rounded-full items-center justify-center"
+                      style={getThemeControlStyle(theme)}
+                    >
+                      <X size={18} color={theme.textSecondary} />
+                    </Pressable>
+                  </View>
+
+                  <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 14, paddingHorizontal: 24 }]}>
+                    Full monthly workout-type breakdown.
+                  </Text>
+
+                  <ScrollView
+                    className="mt-5"
+                    style={{ flex: 1, minHeight: 0 }}
+                    contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 24 }}
+                    showsVerticalScrollIndicator={false}
+                  >
+                    {squadronWorkoutBreakdown.breakdown.map((item, index) => (
+                      <ThemeChrome key={item.label} theme={theme} variant={index < 3 ? 'feature' : 'default'}>
+                        <View className={index === squadronWorkoutBreakdown.breakdown.length - 1 ? 'p-4' : 'p-4 mb-3'}>
+                          <WorkoutTypeAnalyticsBar
+                            label={item.label}
+                            count={item.count}
+                            percentage={item.percentage}
+                            maxPercentage={squadronWorkoutBreakdown.breakdown[0]?.percentage ?? 100}
+                            delay={index * 40}
+                          />
+                        </View>
+                      </ThemeChrome>
+                    ))}
+                  </ScrollView>
+                </View>
+              </ThemeChrome>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
           visible={showFlightRankings}
           transparent
           animationType="fade"
@@ -755,24 +982,26 @@ export function LeaderboardContent({
                   Flight score is the average monthly leaderboard points across members in each flight.
                 </Text>
 
-                <ScrollView
-                  className="mt-5"
-                  style={{ flex: 1, minHeight: 0 }}
-                  contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 24 }}
-                  showsVerticalScrollIndicator={false}
-                >
-                  {flightPointsRanking.map((entry, index) => (
-                    <ThemeChrome key={entry.flight} theme={theme} variant={index < 2 ? 'feature' : 'default'}>
+                  <ScrollView
+                    className="mt-5"
+                    style={{ flex: 1, minHeight: 0 }}
+                    contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 24 }}
+                    showsVerticalScrollIndicator={false}
+                  >
+                    {flightPointsRanking.map((entry, index) => (
+                    <ThemeChrome key={entry.flight} theme={theme} variant={(flightRankingPositions[index] ?? 99) <= 3 ? 'feature' : 'default'}>
                       <View className={index === flightPointsRanking.length - 1 ? 'p-4' : 'p-4 mb-3'}>
                         <View className="flex-row items-center justify-between">
                           <View className="flex-row items-center flex-1 pr-3">
-                            <View className="w-8 h-8 rounded-full items-center justify-center mr-3" style={{ backgroundColor: index === 0 ? 'rgba(255,215,0,0.18)' : index === 1 ? 'rgba(192,192,192,0.16)' : theme.surfaceAlt }}>
-                              {index === 0 ? (
+                            <View className="w-8 h-8 rounded-full items-center justify-center mr-3" style={{ backgroundColor: (flightRankingPositions[index] ?? 99) === 1 ? 'rgba(255,215,0,0.18)' : (flightRankingPositions[index] ?? 99) === 2 ? 'rgba(192,192,192,0.16)' : (flightRankingPositions[index] ?? 99) === 3 ? 'rgba(205,127,50,0.16)' : theme.surfaceAlt }}>
+                              {(flightRankingPositions[index] ?? 99) === 1 ? (
                                 <Crown size={15} color="#FFD700" />
-                              ) : index === 1 ? (
+                              ) : (flightRankingPositions[index] ?? 99) === 2 ? (
                                 <Medal size={15} color="#C0C0C0" />
+                              ) : (flightRankingPositions[index] ?? 99) === 3 ? (
+                                <Medal size={15} color="#CD7F32" />
                               ) : (
-                                <Text style={[getThemeBodyStyle(theme, 13, theme.textPrimary), { fontWeight: '700' }]}>{index + 1}</Text>
+                                <Text style={[getThemeBodyStyle(theme, 13, theme.textPrimary), { fontWeight: '700' }]}>{flightRankingPositions[index] ?? index + 1}</Text>
                               )}
                             </View>
                             <View className="flex-1">

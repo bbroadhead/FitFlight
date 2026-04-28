@@ -150,6 +150,24 @@ type AppNotificationRow = {
   read_at: string | null;
   created_at: string;
 };
+type AppUpdateNoteRow = {
+  id: string;
+  title: string;
+  body: string;
+  note_type: 'update' | 'hotfix';
+  version_label: string | null;
+  published_by_email: string;
+  published_by_name: string;
+  is_published: boolean;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+type AppUpdateNoteReadRow = {
+  note_id: string;
+  reader_email: string;
+  seen_at: string;
+};
 type MemberTrophyRow = {
   id: string;
   member_id: string | null;
@@ -312,6 +330,19 @@ export type AppNotification = {
   actionPayload: Record<string, unknown>;
   readAt: string | null;
   createdAt: string;
+};
+export type AppUpdateNote = {
+  id: string;
+  title: string;
+  body: string;
+  noteType: 'update' | 'hotfix';
+  versionLabel: string | null;
+  publishedByEmail: string;
+  publishedByName: string;
+  isPublished: boolean;
+  publishedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type AdminAuditAction = {
@@ -1004,6 +1035,22 @@ function normalizeAppNotificationRow(row: AppNotificationRow): AppNotification {
     actionPayload: row.action_payload ?? {},
     readAt: row.read_at,
     createdAt: row.created_at,
+  };
+}
+
+function normalizeAppUpdateNoteRow(row: AppUpdateNoteRow): AppUpdateNote {
+  return {
+    id: row.id,
+    title: row.title,
+    body: row.body,
+    noteType: row.note_type,
+    versionLabel: row.version_label,
+    publishedByEmail: row.published_by_email,
+    publishedByName: row.published_by_name,
+    isPublished: row.is_published,
+    publishedAt: row.published_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -2096,6 +2143,168 @@ export async function sendAppNotification(params: {
   }
 
   return normalizeAppNotificationRow((payload as AppNotificationRow[])[0]);
+}
+
+export async function fetchUnreadAppUpdateNotes(params: {
+  memberEmail: string;
+  accessToken?: string;
+}) {
+  const notesQuery = new URLSearchParams();
+  notesQuery.set(
+    'select',
+    'id,title,body,note_type,version_label,published_by_email,published_by_name,is_published,published_at,created_at,updated_at'
+  );
+  notesQuery.set('is_published', 'eq.true');
+  notesQuery.set('order', 'published_at.desc');
+  notesQuery.set('limit', '1');
+
+  const readsQuery = new URLSearchParams();
+  readsQuery.set('select', 'note_id,reader_email,seen_at');
+  readsQuery.set('reader_email', `eq.${params.memberEmail.toLowerCase()}`);
+
+  const [notesResponse, readsResponse] = await Promise.all([
+    fetch(`${SUPABASE_URL}/rest/v1/app_update_notes?${notesQuery.toString()}`, {
+      method: 'GET',
+      headers: await getHeaders(params.accessToken),
+    }),
+    fetch(`${SUPABASE_URL}/rest/v1/app_update_note_reads?${readsQuery.toString()}`, {
+      method: 'GET',
+      headers: await getHeaders(params.accessToken),
+    }),
+  ]);
+
+  const notesPayload = await notesResponse.json().catch(() => []);
+  if (!notesResponse.ok) {
+    const message =
+      typeof (notesPayload as { message?: unknown }).message === 'string'
+        ? (notesPayload as { message: string }).message
+        : 'Unable to load app update notes.';
+    throw new Error(message);
+  }
+
+  const readsPayload = await readsResponse.json().catch(() => []);
+  if (!readsResponse.ok) {
+    const message =
+      typeof (readsPayload as { message?: unknown }).message === 'string'
+        ? (readsPayload as { message: string }).message
+        : 'Unable to load update note read status.';
+    throw new Error(message);
+  }
+
+  const seenNoteIds = new Set(
+    (readsPayload as AppUpdateNoteReadRow[])
+      .map((row) => row.note_id)
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+  );
+
+  return (notesPayload as AppUpdateNoteRow[])
+    .map(normalizeAppUpdateNoteRow)
+    .filter((note) => !seenNoteIds.has(note.id));
+}
+
+export async function publishAppUpdateNote(params: {
+  title: string;
+  body: string;
+  noteType: 'update' | 'hotfix';
+  versionLabel?: string | null;
+  publishedByEmail: string;
+  publishedByName: string;
+  accessToken?: string;
+}) {
+  const publishedAt = new Date().toISOString();
+  const deactivatePreviousResponse = await fetch(`${SUPABASE_URL}/rest/v1/app_update_notes?is_published=eq.true`, {
+    method: 'PATCH',
+    headers: {
+      ...(await getHeaders(params.accessToken)),
+      'Content-Type': 'application/json',
+      Prefer: 'return=minimal',
+    },
+    body: JSON.stringify({
+      is_published: false,
+      updated_at: publishedAt,
+    }),
+  });
+
+  if (!deactivatePreviousResponse.ok) {
+    const payload = await deactivatePreviousResponse.json().catch(() => ({}));
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to retire previous update notes.';
+    throw new Error(message);
+  }
+
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/app_update_notes`, {
+    method: 'POST',
+    headers: {
+      ...(await getHeaders(params.accessToken)),
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify({
+      title: params.title.trim(),
+      body: params.body.trim(),
+      note_type: params.noteType,
+      version_label: params.versionLabel?.trim() ? params.versionLabel.trim() : null,
+      published_by_email: params.publishedByEmail.toLowerCase(),
+      published_by_name: params.publishedByName,
+      is_published: true,
+      published_at: publishedAt,
+    }),
+  });
+
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to publish app update notes.';
+    throw new Error(message);
+  }
+
+  return normalizeAppUpdateNoteRow((payload as AppUpdateNoteRow[])[0]);
+}
+
+export async function markAppUpdateNoteSeen(params: {
+  noteId: string;
+  memberEmail: string;
+  accessToken?: string;
+}) {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/app_update_note_reads?on_conflict=note_id,reader_email`, {
+    method: 'POST',
+    headers: {
+      ...(await getHeaders(params.accessToken)),
+      'Content-Type': 'application/json',
+      Prefer: 'resolution=merge-duplicates,return=representation',
+    },
+    body: JSON.stringify({
+      note_id: params.noteId,
+      reader_email: params.memberEmail.toLowerCase(),
+      seen_at: new Date().toISOString(),
+    }),
+  });
+
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to save update note read status.';
+    throw new Error(message);
+  }
+
+  const row = (payload as AppUpdateNoteReadRow[])[0];
+  return row
+    ? {
+        noteId: row.note_id,
+        readerEmail: row.reader_email,
+        seenAt: row.seen_at,
+      }
+    : {
+        noteId: params.noteId,
+        readerEmail: params.memberEmail.toLowerCase(),
+        seenAt: new Date().toISOString(),
+      };
 }
 
 export async function logAdminAuditAction(params: {
