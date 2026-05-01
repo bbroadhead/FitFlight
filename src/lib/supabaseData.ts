@@ -71,6 +71,7 @@ type ScheduledPTSessionRow = {
   session_date: string;
   session_time: string;
   description: string;
+  location: string | null;
   squadron: Squadron;
   flights: Flight[] | null;
   created_by: string;
@@ -909,6 +910,7 @@ function normalizeScheduledPTSessionRow(row: ScheduledPTSessionRow): ScheduledPT
     date: row.session_date,
     time: row.session_time,
     description: row.description,
+    location: row.location ?? '',
     squadron: row.squadron,
     flights: row.flights ?? [],
     createdBy: row.created_by,
@@ -1633,7 +1635,7 @@ export async function fetchScheduledPTSessions(
   options?: { updatedAfter?: string }
 ) {
   const query = new URLSearchParams();
-  query.set('select', 'id,session_date,session_time,description,squadron,flights,created_by,session_scope,session_kind,created_at,updated_at');
+  query.set('select', 'id,session_date,session_time,description,location,squadron,flights,created_by,session_scope,session_kind,created_at,updated_at');
   query.set('order', 'session_date.asc,session_time.asc');
   if (squadron) {
     query.set('squadron', `eq.${squadron}`);
@@ -1672,6 +1674,7 @@ export async function createScheduledPTSession(session: ScheduledPTSession, acce
         session_date: session.date,
         session_time: session.time,
         description: session.description,
+        location: session.location?.trim() || null,
         squadron: session.squadron,
         flights: session.flights,
         created_by: session.createdBy,
@@ -1706,6 +1709,7 @@ export async function updateScheduledPTSession(session: ScheduledPTSession, acce
           session_date: session.date,
           session_time: session.time,
           description: session.description,
+          location: session.location?.trim() || null,
           squadron: session.squadron,
           flights: session.flights,
           session_scope: session.scope,
@@ -2083,6 +2087,40 @@ export async function bulkSavePFRAResults(params: {
     pending_count: number;
     postponed_count: number;
   };
+}
+
+export async function deletePFRABatch(batchId: string, accessToken?: string) {
+  const headers = await getHeaders(accessToken);
+  const deleteTargets = [
+    {
+      url: `${SUPABASE_URL}/rest/v1/pfra_batch_members?batch_id=eq.${encodeURIComponent(batchId)}`,
+      fallbackMessage: 'Unable to delete PFRA batch members.',
+    },
+    {
+      url: `${SUPABASE_URL}/rest/v1/pfra_records?batch_id=eq.${encodeURIComponent(batchId)}`,
+      fallbackMessage: 'Unable to delete PFRA batch records.',
+    },
+    {
+      url: `${SUPABASE_URL}/rest/v1/pfra_batches?id=eq.${encodeURIComponent(batchId)}`,
+      fallbackMessage: 'Unable to delete PFRA batch.',
+    },
+  ] as const;
+
+  for (const target of deleteTargets) {
+    const response = await fetch(target.url, {
+      method: 'DELETE',
+      headers,
+    });
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      const message =
+        typeof (payload as { message?: unknown }).message === 'string'
+          ? (payload as { message: string }).message
+          : target.fallbackMessage;
+      throw new Error(message);
+    }
+  }
 }
 
 export async function fetchAppNotifications(params: {
@@ -3082,23 +3120,59 @@ export async function updateRosterProfileVisibility(
   accessToken?: string
 ) {
   const rosterTable = getRosterTableName(member.squadron);
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/${rosterTable}?${buildRosterFilter(member)}`, {
+  const headers = await getRosterHeaders(accessToken);
+  const requestUrl = `${SUPABASE_URL}/rest/v1/${rosterTable}?${buildRosterFilter(member)}`;
+  const payload = {
+    SHOW_WORKOUT_HISTORY_ON_PROFILE: updates.showWorkoutHistoryOnProfile ?? true,
+    SHOW_WORKOUT_UPLOADS_ON_PROFILE: updates.showWorkoutUploadsOnProfile ?? true,
+    SHOW_PFRA_RECORDS_ON_PROFILE: updates.showPFRARecordsOnProfile ?? true,
+    SHOW_UPDATE_NOTES: updates.showUpdateNotes ?? true,
+    APP_THEME: updates.appTheme ?? 'default',
+  };
+
+  const sendPatch = async (body: Record<string, unknown>) => fetch(requestUrl, {
     method: 'PATCH',
-    headers: await getRosterHeaders(accessToken),
-    body: JSON.stringify({
-      SHOW_WORKOUT_HISTORY_ON_PROFILE: updates.showWorkoutHistoryOnProfile ?? true,
-      SHOW_WORKOUT_UPLOADS_ON_PROFILE: updates.showWorkoutUploadsOnProfile ?? true,
-      SHOW_PFRA_RECORDS_ON_PROFILE: updates.showPFRARecordsOnProfile ?? true,
-      SHOW_UPDATE_NOTES: updates.showUpdateNotes ?? true,
-      APP_THEME: updates.appTheme ?? 'default',
-    }),
+    headers,
+    body: JSON.stringify(body),
   });
 
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
+  const extractMissingRosterColumn = (message: string) => {
+    const lower = message.toLowerCase();
+    if (!lower.includes('schema cache')) {
+      return null;
+    }
+    const match = message.match(/'([A-Z_]+)' column/i);
+    return match?.[1]?.toUpperCase() ?? null;
+  };
+
+  let activePayload: Record<string, unknown> = { ...payload };
+  let response = await sendPatch(activePayload);
+  let errorPayload = await response.json().catch(() => ({}));
+
+  while (!response.ok) {
     const message =
-      typeof (payload as { message?: unknown }).message === 'string'
-        ? (payload as { message: string }).message
+      typeof (errorPayload as { message?: unknown }).message === 'string'
+        ? (errorPayload as { message: string }).message
+        : 'Unable to update profile visibility in Supabase roster.';
+
+    const missingColumn = extractMissingRosterColumn(message);
+    if (
+      !missingColumn ||
+      !(missingColumn in activePayload) ||
+      !['SHOW_UPDATE_NOTES', 'APP_THEME'].includes(missingColumn)
+    ) {
+      break;
+    }
+
+    delete activePayload[missingColumn];
+    response = await sendPatch(activePayload);
+    errorPayload = await response.json().catch(() => ({}));
+  }
+
+  if (!response.ok) {
+    const message =
+      typeof (errorPayload as { message?: unknown }).message === 'string'
+        ? (errorPayload as { message: string }).message
         : 'Unable to update profile visibility in Supabase roster.';
     throw new Error(message);
   }
@@ -4102,9 +4176,20 @@ export type GoogleAnalyticsUsageSummary = {
   activeUsers: number;
   newUsers: number;
   sessions: number;
+  eventCount: number;
   screenPageViews: number;
   engagedSessions: number;
   averageSessionDuration: number;
+};
+
+export type AppUsageRosterSummary = {
+  squadron: Squadron;
+  totalMembers: number;
+  loggedInMembers: number;
+  neverLoggedInMembers: number;
+  linkedAuthMembers: number;
+  stravaConnectedMembers: number;
+  loggedInPercentage: number;
 };
 
 export type GoogleAnalyticsUsageEvent = {
@@ -4124,19 +4209,28 @@ export type GoogleAnalyticsUsageReport = {
   rangeLabel: string;
   measurementId?: string;
   generatedAt: string;
+  rosterSummary: AppUsageRosterSummary;
   summary: GoogleAnalyticsUsageSummary;
   events: GoogleAnalyticsUsageEvent[];
   daily: GoogleAnalyticsUsageDay[];
 };
 
-export async function fetchGoogleAnalyticsUsage(accessToken?: string) {
+export async function fetchGoogleAnalyticsUsage(
+  accessToken?: string,
+  squadron?: Squadron
+) {
   const resolvedAccessToken = await getValidAccessToken(accessToken ?? null);
 
   if (!resolvedAccessToken) {
     throw new Error('Your admin session is missing. Please sign in again.');
   }
 
-  const response = await fetch(`${SUPABASE_URL}/functions/v1/google-analytics-report`, {
+  const query = new URLSearchParams();
+  if (squadron) {
+    query.set('squadron', squadron);
+  }
+
+  const response = await fetch(`${SUPABASE_URL}/functions/v1/google-analytics-report${query.toString() ? `?${query.toString()}` : ''}`, {
     method: 'GET',
     headers: {
       apikey: SUPABASE_ANON_KEY,

@@ -19,6 +19,9 @@ alter table public.scheduled_pt_sessions
   add column if not exists session_kind text not null default 'pt';
 
 alter table public.scheduled_pt_sessions
+  add column if not exists location text;
+
+alter table public.scheduled_pt_sessions
   drop constraint if exists scheduled_pt_sessions_session_scope_check;
 
 alter table public.scheduled_pt_sessions

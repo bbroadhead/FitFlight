@@ -957,6 +957,9 @@ export default function HomeScreen() {
                     <View className="flex-1 pr-3">
                       <Text style={getThemeHeadingStyle(theme, 15)}>{s.time}</Text>
                       <Text style={[getThemeBodyStyle(theme, 13), { marginTop: 4 }]}>{s.description}</Text>
+                      {s.location ? (
+                        <Text style={[getThemeBodyStyle(theme, 12, theme.textSecondary), { marginTop: 6 }]}>Location: {s.location}</Text>
+                      ) : null}
                     </View>
                     <View className="rounded-full px-3 py-1" style={{ backgroundColor: theme.accentSoft }}>
                       <Text style={getThemeBodyStyle(theme, 12, theme.accent)}>
@@ -1041,6 +1044,9 @@ export default function HomeScreen() {
                     {s.date} · {s.time}
                   </Text>
                   <Text style={[getThemeBodyStyle(theme, 14), { fontWeight: '600', marginTop: 4 }]}>{s.description}</Text>
+                  {s.location ? (
+                    <Text style={[getThemeBodyStyle(theme, 12, theme.textSecondary), { marginTop: 6 }]}>Location: {s.location}</Text>
+                  ) : null}
                 </View>
               ))
             ) : (
@@ -1206,6 +1212,11 @@ export default function HomeScreen() {
                                   <Text style={[getThemeBodyStyle(theme, 12, theme.textSecondary), { marginTop: 6 }]}>
                                     {session.date} at {session.time}
                                   </Text>
+                                  {session.location ? (
+                                    <Text style={[getThemeBodyStyle(theme, 12, theme.textSecondary), { marginTop: 6 }]}>
+                                      Location: {session.location}
+                                    </Text>
+                                  ) : null}
                                 </View>
                                 <Text style={getThemeBodyStyle(theme, 11, theme.accent)}>Open</Text>
                               </View>
@@ -1253,6 +1264,11 @@ export default function HomeScreen() {
                         <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 10 }]}>
                           {selectedDashboardSession.date} at {selectedDashboardSession.time}
                         </Text>
+                        {selectedDashboardSession.location ? (
+                          <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 8 }]}>
+                            Location: {selectedDashboardSession.location}
+                          </Text>
+                        ) : null}
                         <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 8 }]}>
                           Scope: {selectedDashboardSession.scope === 'squadron'
                             ? 'Squadron'

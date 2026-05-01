@@ -68,7 +68,7 @@ import { createOfflineActionId, requestRegisteredSync, runOrQueueOfflineMutation
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'DO', 'ADF', 'DET'];
 const OWNER_EMAIL = 'benjamin.broadhead.2@us.af.mil';
 const PROJECT_COORDINATOR_EMAIL = 'jacob.de_la_rosa@us.af.mil';
-const FITFLIGHT_VERSION = 'v1.0.8';
+const FITFLIGHT_VERSION = 'v1.0.9';
 const DEVELOPER_NAME = 'SSgt Benjamin Broadhead';
 const DEVELOPER_TITLE = 'Developer';
 const PROJECT_COORDINATOR_NAME = 'SSgt Jacob De La Rosa';
@@ -283,7 +283,19 @@ export default function ProfileScreen() {
   const themePalette = useAppTheme();
   const modalBlurIntensity = 30;
   const { width } = useWindowDimensions();
-  const contentMaxWidth = width >= 1440 ? 1280 : width >= 1180 ? 1180 : 1024;
+  const contentMaxWidth = width >= 1680 ? 1480 : width >= 1440 ? 1400 : width >= 1180 ? 1180 : 1024;
+  const useDesktopCardGrid = width >= 1180;
+  const desktopGap = 12;
+  const desktopHeroCardWidth = useDesktopCardGrid ? Math.floor((contentMaxWidth - desktopGap) * 0.43) : 0;
+  const desktopTopRailWidth = useDesktopCardGrid ? contentMaxWidth - desktopHeroCardWidth - desktopGap : 0;
+  const desktopCardWidth = useDesktopCardGrid ? Math.floor((desktopTopRailWidth - desktopGap) / 2) : 0;
+  const desktopWideCardWidth = desktopTopRailWidth;
+  const desktopSectionWidth = Math.floor((contentMaxWidth - desktopGap) / 2);
+  const desktopQuickActionGap = 8;
+  const desktopQuickActionButtonWidth = useDesktopCardGrid
+    ? Math.floor((desktopWideCardWidth - 24 - desktopQuickActionGap) / 2)
+    : 0;
+  const mobileActionCardWidth = !useDesktopCardGrid ? Math.floor((width - 48 - 12) / 2) : 0;
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [showManageModal, setShowManageModal] = useState(false);
@@ -302,6 +314,8 @@ export default function ProfileScreen() {
   const [showUFPMModal, setShowUFPMModal] = useState(false);
   const [showUpdateNotesModal, setShowUpdateNotesModal] = useState(false);
   const [showUpdateNotesHistoryModal, setShowUpdateNotesHistoryModal] = useState(false);
+  const [showMobileAdminActions, setShowMobileAdminActions] = useState(false);
+  const [showMobileHelpActions, setShowMobileHelpActions] = useState(false);
   const [publishedUpdateNotes, setPublishedUpdateNotes] = useState<AppUpdateNote[]>([]);
   const [updateNotesHistoryLoading, setUpdateNotesHistoryLoading] = useState(false);
   const [updateNotesHistoryError, setUpdateNotesHistoryError] = useState<string | null>(null);
@@ -2353,7 +2367,10 @@ export default function ProfileScreen() {
     const dayKeys = new Set<string>();
 
     monthlyUserSummary.workouts.forEach((workout) => {
-      const label = workout.source === 'attendance' ? 'Attendance' : workout.type;
+      if (workout.source === 'attendance') {
+        return;
+      }
+      const label = workout.type;
       typeCounts.set(label, (typeCounts.get(label) ?? 0) + 1);
       dayKeys.add(workout.date);
     });
@@ -2695,6 +2712,10 @@ export default function ProfileScreen() {
             )}
           </Animated.View>
 
+          <View
+            className={useDesktopCardGrid ? 'mx-6 flex-row items-start' : ''}
+            style={useDesktopCardGrid ? { gap: 12 } : undefined}
+          >
           {/* User Card */}
           <TutorialTarget
             id="account-summary"
@@ -2704,82 +2725,158 @@ export default function ProfileScreen() {
           >
             <Animated.View
               entering={getWebSafeFadeInDown(150)}
-              className="mx-6 mt-4"
+              className={useDesktopCardGrid ? 'mt-4' : 'mx-6 mt-4'}
+              style={useDesktopCardGrid ? { width: desktopHeroCardWidth } : undefined}
             >
-            <ThemeChrome theme={themePalette} variant="feature">
-            <View className="p-6">
-            <View className="flex-row items-center">
-              <View className="w-16 h-16 bg-af-accent/30 rounded-full items-center justify-center mr-4">
-                {userAccountType === 'fitflight_creator' ? (
-                  <Crown size={32} color="#A855F7" />
-                ) : (
-                  <User size={32} color="#4A90D9" />
-                )}
-              </View>
-              <View className="flex-1 items-center">
-                    <Text className="text-white text-xl font-bold text-center">{userDisplayName}</Text>
-                  <View className="mt-2 items-center">
-                    <CompactTrophyBadges trophies={rarestTrophies} overflowCount={trophyOverflowCount} />
+              <ThemeChrome theme={themePalette} variant="feature">
+                <View className="p-6">
+                  <View className="flex-row items-center">
+                    <View className="w-16 h-16 bg-af-accent/30 rounded-full items-center justify-center mr-4">
+                      {userAccountType === 'fitflight_creator' ? (
+                        <Crown size={32} color="#A855F7" />
+                      ) : (
+                        <User size={32} color="#4A90D9" />
+                      )}
+                    </View>
+                    <View className="flex-1 items-center">
+                      <Text className="text-white text-xl font-bold text-center">{userDisplayName}</Text>
+                      <View className="mt-2 items-center">
+                        <CompactTrophyBadges trophies={rarestTrophies} overflowCount={trophyOverflowCount} />
+                      </View>
+                      <View className="items-center">
+                        <LinearGradient
+                          colors={['rgba(74,144,217,0)', 'rgba(74,144,217,0.8)', 'rgba(74,144,217,0)']}
+                          start={{ x: 0, y: 0.5 }}
+                          end={{ x: 1, y: 0.5 }}
+                          style={{ marginTop: 12, height: 2, width: 144, borderRadius: 999 }}
+                        />
+                      </View>
+                      <Text className="mt-2 text-af-silver text-center">{user?.email}</Text>
+                      <View className="flex-row items-center justify-center mt-1">
+                        <View className={cn(
+                          "px-2 py-0.5 rounded-full mr-2",
+                          accountColors.bg
+                        )}>
+                          <Text className={cn(
+                            "text-xs font-semibold",
+                            accountColors.text
+                          )}>
+                            {getAccountTypeLabel(userAccountType)}
+                          </Text>
+                        </View>
+                        <Text className="text-af-silver text-sm">{user?.flight ? formatFlightDisplay(user.flight) : ''}</Text>
+                      </View>
+                    </View>
                   </View>
-                  <View className="items-center">
-                    <LinearGradient
-                      colors={['rgba(74,144,217,0)', 'rgba(74,144,217,0.8)', 'rgba(74,144,217,0)']}
-                      start={{ x: 0, y: 0.5 }}
-                      end={{ x: 1, y: 0.5 }}
-                      style={{ marginTop: 12, height: 2, width: 144, borderRadius: 999 }}
-                    />
-                  </View>
-                  <Text className="mt-2 text-af-silver text-center">{user?.email}</Text>
-                  <View className="flex-row items-center justify-center mt-1">
-                    <View className={cn(
-                      "px-2 py-0.5 rounded-full mr-2",
-                      accountColors.bg
-                    )}>
-                    <Text className={cn(
-                      "text-xs font-semibold",
-                      accountColors.text
-                    )}>
-                      {getAccountTypeLabel(userAccountType)}
-                    </Text>
-                  </View>
-          <Text className="text-af-silver text-sm">{user?.flight ? formatFlightDisplay(user.flight) : ''}</Text>
-                  </View>
-                </View>
-            </View>
 
-            <TrophyCase
-              expanded={showTrophyCase}
-              onToggle={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                setShowTrophyCase((current) => !current);
-              }}
-              trophies={trophyStats}
-            />
-            {isDemoAccount ? (
-              <Pressable
-                onPress={() => {
-                  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                  setDemoTrophyEarnedPreview(true);
-                  setShowDemoTrophyCelebration(true);
-                }}
-                className="mt-3 rounded-2xl border border-af-gold/35 bg-af-gold/10 px-4 py-3"
-              >
-                <View className="flex-row items-center justify-center">
-                  <Trophy size={18} color="#FFD700" />
-                  <Text className="ml-2 text-af-gold font-semibold">Demo Trophy Celebration</Text>
+                  <TrophyCase
+                    expanded={showTrophyCase}
+                    onToggle={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      setShowTrophyCase((current) => !current);
+                    }}
+                    trophies={trophyStats}
+                  />
+                  {isDemoAccount ? (
+                    <Pressable
+                      onPress={() => {
+                        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                        setDemoTrophyEarnedPreview(true);
+                        setShowDemoTrophyCelebration(true);
+                      }}
+                      className="mt-3 rounded-2xl border border-af-gold/35 bg-af-gold/10 px-4 py-3"
+                    >
+                      <View className="flex-row items-center justify-center">
+                        <Trophy size={18} color="#FFD700" />
+                        <Text className="ml-2 text-af-gold font-semibold">Demo Trophy Celebration</Text>
+                      </View>
+                    </Pressable>
+                  ) : null}
                 </View>
-              </Pressable>
-            ) : null}
-            </View>
-            </ThemeChrome>
+              </ThemeChrome>
+
+              {useDesktopCardGrid ? (
+                <View className="mt-3">
+                  <ThemeChrome theme={themePalette}>
+                    <View className="p-4">
+                      <View className="flex-row items-center justify-between mb-3">
+                        <Text className="text-white/60 text-xs uppercase tracking-wider">Your Monthly Summary</Text>
+                        <Text className="text-af-silver text-xs">{formatMonthLabel(summaryMonth)}</Text>
+                      </View>
+                      {availableSummaryMonths.length > 1 ? (
+                        <ScrollView
+                          horizontal
+                          showsHorizontalScrollIndicator={false}
+                          className="mb-3"
+                          contentContainerStyle={{ paddingRight: 12 }}
+                        >
+                          {availableSummaryMonths.map((monthKey) => (
+                            <Pressable
+                              key={monthKey}
+                              onPress={() => {
+                                Haptics.selectionAsync();
+                                setSelectedSummaryMonth(monthKey);
+                              }}
+                              className={cn(
+                                "px-3 py-1.5 rounded-full mr-2 border",
+                                summaryMonth === monthKey ? "bg-af-accent border-af-accent" : "bg-white/5 border-white/10"
+                              )}
+                            >
+                              <Text className={cn(
+                                "text-xs",
+                                summaryMonth === monthKey ? "text-white font-semibold" : "text-af-silver"
+                              )}>
+                                {formatMonthLabel(monthKey)}
+                              </Text>
+                            </Pressable>
+                          ))}
+                        </ScrollView>
+                      ) : null}
+                      <View className="flex-row justify-between">
+                        <View className="items-center flex-1">
+                          <Dumbbell size={20} color="#A855F7" />
+                          <Text className="text-white font-bold text-lg mt-1">{monthlyUserSummary.workoutCount}</Text>
+                          <Text className="text-af-silver text-xs">Workouts</Text>
+                        </View>
+                        <View className="w-px bg-white/10" />
+                        <View className="items-center flex-1">
+                          <Activity size={20} color="#4A90D9" />
+                          <Text className="text-white font-bold text-lg mt-1">{monthlyUserSummary.minutes}</Text>
+                          <Text className="text-af-silver text-xs">Minutes</Text>
+                        </View>
+                        <View className="w-px bg-white/10" />
+                        <View className="items-center flex-1">
+                          <RunningIcon size={20} color="#22C55E" />
+                          <Text className="text-white font-bold text-lg mt-1">{monthlyUserSummary.miles.toFixed(2)}</Text>
+                          <Text className="text-af-silver text-xs">Miles</Text>
+                        </View>
+                      </View>
+                      <View className="mt-3 pt-3 border-t border-white/10 flex-row justify-between">
+                        <View>
+                          <Text className="text-white/50 text-xs uppercase tracking-wider">Monthly Score</Text>
+                          <Text className="text-white font-semibold mt-1">{monthlyUserSummary.score.toLocaleString()}</Text>
+                        </View>
+                        <View className="items-end">
+                          <Text className="text-white/50 text-xs uppercase tracking-wider">Latest PFRA</Text>
+                          <Text className="text-white font-semibold mt-1">{latestMonthlyPFRA?.overallScore ?? 'N/A'}</Text>
+                        </View>
+                      </View>
+                    </View>
+                  </ThemeChrome>
+                </View>
+              ) : null}
             </Animated.View>
           </TutorialTarget>
 
-          {/* Stats Card */}
+          <View
+            className={useDesktopCardGrid ? 'mt-4' : ''}
+            style={useDesktopCardGrid ? { width: desktopTopRailWidth } : undefined}
+          >
           {isExcusedThisWeek ? (
             <Animated.View
               entering={getWebSafeFadeInDown(185)}
-              className="mx-6 mt-4"
+              className={useDesktopCardGrid ? '' : 'mx-6 mt-4'}
+              style={useDesktopCardGrid ? { width: desktopCardWidth } : undefined}
             >
               <ThemeChrome theme={themePalette}>
               <View className="p-4">
@@ -2790,9 +2887,11 @@ export default function ProfileScreen() {
             </Animated.View>
           ) : null}
 
+          {!useDesktopCardGrid ? (
           <Animated.View
             entering={getWebSafeFadeInDown(200)}
-            className="mx-6 mt-4"
+            className={useDesktopCardGrid ? '' : 'mx-6 mt-4'}
+            style={useDesktopCardGrid ? { width: desktopCardWidth } : undefined}
           >
             <ThemeChrome theme={themePalette}>
             <View className="p-4">
@@ -2867,104 +2966,285 @@ export default function ProfileScreen() {
             </View>
             </ThemeChrome>
           </Animated.View>
+          ) : null}
 
-          <Animated.View
-            entering={getWebSafeFadeInDown(205)}
-            className="mx-6 mt-4"
-          >
-            <Pressable
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                router.push('/personal-analytics');
-              }}
-            >
-              <ThemeChrome theme={themePalette}>
-              <View className="p-4">
-              <View className="flex-row items-center justify-between mb-3">
-                <Text className="text-white/60 text-xs uppercase tracking-wider">Personal Analytics</Text>
-                <Text className="text-af-silver text-xs">Open</Text>
-              </View>
-              <View className="flex-row justify-between">
-                <View className="items-center flex-1">
-                  <Activity size={20} color="#A855F7" />
-                  <Text className="text-white font-bold text-lg mt-1">{personalAnalyticsSummary.topTypeCount}</Text>
-                  <Text className="text-af-silver text-xs text-center">{personalAnalyticsSummary.topType}</Text>
-                </View>
-                <View className="w-px bg-white/10" />
-                <View className="items-center flex-1">
-                  <Calendar size={20} color="#4A90D9" />
-                  <Text className="text-white font-bold text-lg mt-1">{personalAnalyticsSummary.activeDays}</Text>
-                  <Text className="text-af-silver text-xs">Active Days</Text>
-                </View>
-                <View className="w-px bg-white/10" />
-                <View className="items-center flex-1">
-                  <Dumbbell size={20} color="#22C55E" />
-                  <Text className="text-white font-bold text-lg mt-1">{personalAnalyticsSummary.averageMinutes.toFixed(1)}</Text>
-                  <Text className="text-af-silver text-xs">Avg Min</Text>
-                </View>
-              </View>
-              </View>
-              </ThemeChrome>
-            </Pressable>
-          </Animated.View>
+          {useDesktopCardGrid ? (
+            <>
+              <View className="flex-row items-start" style={{ gap: 12 }}>
+                <Animated.View
+                  entering={getWebSafeFadeInDown(205)}
+                  style={{ width: desktopCardWidth }}
+                >
+                  <Pressable
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      router.push('/personal-analytics');
+                    }}
+                    style={{ height: '100%' }}
+                  >
+                    <ThemeChrome theme={themePalette}>
+                    <View className="p-4" style={{ minHeight: 168, justifyContent: 'center' }}>
+                    <View className="flex-row items-center justify-between mb-3">
+                      <Text className="text-white/60 text-xs uppercase tracking-wider">Personal Analytics</Text>
+                      <Text className="text-af-silver text-xs">Open</Text>
+                    </View>
+                    <View className="flex-row justify-between">
+                      <View className="items-center flex-1">
+                        <Activity size={20} color="#A855F7" />
+                        <Text className="text-white font-bold text-lg mt-1">{personalAnalyticsSummary.topTypeCount}</Text>
+                        <Text className="text-af-silver text-xs text-center">{personalAnalyticsSummary.topType}</Text>
+                      </View>
+                      <View className="w-px bg-white/10" />
+                      <View className="items-center flex-1">
+                        <Calendar size={20} color="#4A90D9" />
+                        <Text className="text-white font-bold text-lg mt-1">{personalAnalyticsSummary.activeDays}</Text>
+                        <Text className="text-af-silver text-xs">Active Days</Text>
+                      </View>
+                      <View className="w-px bg-white/10" />
+                      <View className="items-center flex-1">
+                        <Dumbbell size={20} color="#22C55E" />
+                        <Text className="text-white font-bold text-lg mt-1">{personalAnalyticsSummary.averageMinutes.toFixed(1)}</Text>
+                        <Text className="text-af-silver text-xs">Avg Min</Text>
+                      </View>
+                    </View>
+                    </View>
+                    </ThemeChrome>
+                  </Pressable>
+                </Animated.View>
 
-          <TutorialTarget
-            id="account-history"
-            onLayout={(event) => {
-              tutorialTargetYRef.current['account-history'] = event.nativeEvent.layout.y;
-            }}
-          >
-            <Animated.View
-              entering={getWebSafeFadeInDown(210)}
-              className="mx-6 mt-4"
-            >
-              <ThemeChrome theme={themePalette}>
-              <View className="p-4">
-                <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">History</Text>
-                <View className="flex-row flex-wrap" style={{ gap: 12 }}>
+                <TutorialTarget
+                  id="account-history"
+                  onLayout={(event) => {
+                    tutorialTargetYRef.current['account-history'] = event.nativeEvent.layout.y;
+                  }}
+                >
+                  <Animated.View
+                    entering={getWebSafeFadeInDown(210)}
+                    style={{ width: desktopCardWidth }}
+                  >
+                    <ThemeChrome theme={themePalette} style={{ height: '100%' }}>
+                    <View className="p-4" style={{ minHeight: 168 }}>
+                      <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">History</Text>
+                      <View className="flex-row flex-wrap" style={{ gap: 12 }}>
+                          <Pressable
+                            onPress={() => {
+                              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                              setShowWorkoutHistoryModal(true);
+                            }}
+                            className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-black/10 p-3 min-h-[66px] items-center justify-center"
+                          >
+                            <View className="items-center justify-center">
+                              <Activity size={18} color="#A855F7" />
+                              <Text className="mt-2 text-white font-semibold text-center text-sm leading-5">Workout History</Text>
+                            </View>
+                          </Pressable>
+                          <Pressable
+                            onPress={() => {
+                              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                              setShowPFRAHistoryModal(true);
+                            }}
+                            className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-black/10 p-3 min-h-[66px] items-center justify-center"
+                          >
+                            <View className="items-center justify-center">
+                              <FileText size={18} color="#4A90D9" />
+                              <Text className="mt-2 text-white font-semibold text-center text-sm leading-5">PFRA History</Text>
+                            </View>
+                          </Pressable>
+                          <Pressable
+                            onPress={() => {
+                              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                              setShowLeaderboardHistoryModal(true);
+                            }}
+                            className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-black/10 p-3 min-h-[66px] items-center justify-center"
+                          >
+                            <View className="items-center justify-center">
+                              <Trophy size={18} color="#FFD700" />
+                              <Text className="mt-2 text-white font-semibold text-center text-sm leading-5">Leaderboard History</Text>
+                            </View>
+                          </Pressable>
+                        </View>
+                      </View>
+                    </ThemeChrome>
+                  </Animated.View>
+                </TutorialTarget>
+              </View>
+
+              <Animated.View
+                entering={getWebSafeFadeInDown(215)}
+                className="mt-4"
+                style={{ width: desktopWideCardWidth }}
+              >
+                <Text className="text-white font-semibold text-lg mb-2">Quick Actions</Text>
+                <View className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                  <View style={{ gap: desktopQuickActionGap }}>
+                    <View className="flex-row" style={{ gap: desktopQuickActionGap }}>
                     <Pressable
                       onPress={() => {
                         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        setShowWorkoutHistoryModal(true);
+                        router.push('/add-workout');
                       }}
-                      className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-black/10 p-4 min-h-[76px] items-center justify-center"
+                      className="rounded-xl border border-af-accent/50 bg-af-accent/20 px-4 py-3"
+                      style={{ width: desktopQuickActionButtonWidth, minHeight: 78, justifyContent: 'center' }}
                     >
-                      <View className="items-center justify-center">
-                        <Activity size={18} color="#A855F7" />
-                        <Text className="mt-2 text-white font-semibold text-center text-sm leading-5">Workout History</Text>
+                      <View className="flex-row items-center">
+                        <Plus size={20} color="#4A90D9" />
+                        <Text className="ml-3 text-white font-semibold flex-1">Add Manual Workout</Text>
                       </View>
                     </Pressable>
                     <Pressable
                       onPress={() => {
                         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        setShowPFRAHistoryModal(true);
+                        router.push('/upload-fitness');
                       }}
-                      className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-black/10 p-4 min-h-[76px] items-center justify-center"
+                      className="rounded-xl border border-af-success/50 bg-af-success/20 px-4 py-3"
+                      style={{ width: desktopQuickActionButtonWidth, minHeight: 78, justifyContent: 'center' }}
                     >
-                      <View className="items-center justify-center">
-                        <FileText size={18} color="#4A90D9" />
-                        <Text className="mt-2 text-white font-semibold text-center text-sm leading-5">PFRA History</Text>
+                      <View className="flex-row items-center">
+                        <FileText size={20} color="#22C55E" />
+                        <Text className="ml-3 text-white font-semibold flex-1">Add Manual PFRA</Text>
+                      </View>
+                    </Pressable>
+                    </View>
+                    <View className="flex-row" style={{ gap: desktopQuickActionGap }}>
+                    <Pressable
+                      onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        router.push('/schedule-session');
+                      }}
+                      className="rounded-xl border border-af-gold/50 bg-af-gold/20 px-4 py-3"
+                      style={{ width: desktopQuickActionButtonWidth, minHeight: 78, justifyContent: 'center' }}
+                    >
+                      <View className="flex-row items-center">
+                        <Calendar size={20} color="#FFD700" />
+                        <Text className="ml-3 text-white font-semibold flex-1">{canManagePTPrograms(userAccountType) ? 'Schedule PT Session' : 'Schedule Personal PT'}</Text>
                       </View>
                     </Pressable>
                     <Pressable
                       onPress={() => {
                         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        setShowLeaderboardHistoryModal(true);
+                        setShowUpcomingPTSessionsModal(true);
                       }}
-                      className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-black/10 p-4 min-h-[76px] items-center justify-center"
+                      className="rounded-xl border border-white/10 bg-white/5 px-4 py-3"
+                      style={{ width: desktopQuickActionButtonWidth, minHeight: 78, justifyContent: 'center' }}
                     >
-                      <View className="items-center justify-center">
-                        <Trophy size={18} color="#FFD700" />
-                        <Text className="mt-2 text-white font-semibold text-center text-sm leading-5">Leaderboard History</Text>
+                      <View className="flex-row items-center">
+                        <Calendar size={20} color="#FFD700" />
+                        <Text className="ml-3 text-white font-semibold flex-1">Upcoming PT Sessions</Text>
                       </View>
                     </Pressable>
+                    </View>
                   </View>
                 </View>
-              </ThemeChrome>
-            </Animated.View>
-          </TutorialTarget>
+              </Animated.View>
+            </>
+          ) : (
+            <>
+              <Animated.View
+                entering={getWebSafeFadeInDown(205)}
+                className={'mx-6 mt-4'}
+              >
+                <Pressable
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    router.push('/personal-analytics');
+                  }}
+                >
+                  <ThemeChrome theme={themePalette}>
+                  <View className="p-4">
+                  <View className="flex-row items-center justify-between mb-3">
+                    <Text className="text-white/60 text-xs uppercase tracking-wider">Personal Analytics</Text>
+                    <Text className="text-af-silver text-xs">Open</Text>
+                  </View>
+                  <View className="flex-row justify-between">
+                    <View className="items-center flex-1">
+                      <Activity size={20} color="#A855F7" />
+                      <Text className="text-white font-bold text-lg mt-1">{personalAnalyticsSummary.topTypeCount}</Text>
+                      <Text className="text-af-silver text-xs text-center">{personalAnalyticsSummary.topType}</Text>
+                    </View>
+                    <View className="w-px bg-white/10" />
+                    <View className="items-center flex-1">
+                      <Calendar size={20} color="#4A90D9" />
+                      <Text className="text-white font-bold text-lg mt-1">{personalAnalyticsSummary.activeDays}</Text>
+                      <Text className="text-af-silver text-xs">Active Days</Text>
+                    </View>
+                    <View className="w-px bg-white/10" />
+                    <View className="items-center flex-1">
+                      <Dumbbell size={20} color="#22C55E" />
+                      <Text className="text-white font-bold text-lg mt-1">{personalAnalyticsSummary.averageMinutes.toFixed(1)}</Text>
+                      <Text className="text-af-silver text-xs">Avg Min</Text>
+                    </View>
+                  </View>
+                  </View>
+                  </ThemeChrome>
+                </Pressable>
+              </Animated.View>
+
+              <TutorialTarget
+                id="account-history"
+                onLayout={(event) => {
+                  tutorialTargetYRef.current['account-history'] = event.nativeEvent.layout.y;
+                }}
+              >
+                <Animated.View
+                  entering={getWebSafeFadeInDown(210)}
+                  className="mx-6 mt-4"
+                >
+                  <ThemeChrome theme={themePalette}>
+                  <View className="p-4">
+                    <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">History</Text>
+                    <View className="flex-row flex-wrap" style={{ gap: 12 }}>
+                        <Pressable
+                          onPress={() => {
+                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                            setShowWorkoutHistoryModal(true);
+                          }}
+                          className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-black/10 p-4 min-h-[76px] items-center justify-center"
+                        >
+                          <View className="items-center justify-center">
+                            <Activity size={18} color="#A855F7" />
+                            <Text className="mt-2 text-white font-semibold text-center text-sm leading-5">Workout History</Text>
+                          </View>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => {
+                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                            setShowPFRAHistoryModal(true);
+                          }}
+                          className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-black/10 p-4 min-h-[76px] items-center justify-center"
+                        >
+                          <View className="items-center justify-center">
+                            <FileText size={18} color="#4A90D9" />
+                            <Text className="mt-2 text-white font-semibold text-center text-sm leading-5">PFRA History</Text>
+                          </View>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => {
+                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                            setShowLeaderboardHistoryModal(true);
+                          }}
+                          className="min-w-[30%] flex-1 rounded-2xl border border-white/10 bg-black/10 p-4 min-h-[76px] items-center justify-center"
+                        >
+                          <View className="items-center justify-center">
+                            <Trophy size={18} color="#FFD700" />
+                            <Text className="mt-2 text-white font-semibold text-center text-sm leading-5">Leaderboard History</Text>
+                          </View>
+                        </Pressable>
+                      </View>
+                    </View>
+                  </ThemeChrome>
+                </Animated.View>
+              </TutorialTarget>
+            </>
+          )}
+          </View>
+          </View>
 
           {/* Quick Actions */}
+          <View
+            className={useDesktopCardGrid ? 'mx-6 mt-6 flex-row flex-wrap items-start' : ''}
+            style={useDesktopCardGrid ? { gap: 12 } : undefined}
+          >
+          {!useDesktopCardGrid ? (
           <TutorialTarget
             id="account-quick-actions"
             onLayout={(event) => {
@@ -2973,7 +3253,8 @@ export default function ProfileScreen() {
           >
             <Animated.View
               entering={getWebSafeFadeInDown(225)}
-              className="mx-6 mt-4"
+              className={useDesktopCardGrid ? 'mt-0' : 'mx-6 mt-4'}
+              style={useDesktopCardGrid ? { width: desktopWideCardWidth } : undefined}
             >
             <Text className="text-white font-semibold text-lg mb-3">Quick Actions</Text>
               <View className="flex-row">
@@ -3042,106 +3323,7 @@ export default function ProfileScreen() {
               </Pressable>
               </Animated.View>
             </TutorialTarget>
-
-          {/* Connected Apps */}
-          <TutorialTarget
-            id="account-connected-apps"
-            onLayout={(event) => {
-              tutorialTargetYRef.current['account-connected-apps'] = event.nativeEvent.layout.y;
-            }}
-          >
-            <Animated.View
-              entering={getWebSafeFadeInDown(250)}
-              className="mx-6 mt-4"
-            >
-            <Text className="text-white font-semibold text-lg mb-3">Connected Apps</Text>
-            <View className="bg-white/5 rounded-2xl border border-white/10 p-4">
-              {stravaMessage && (
-                <View className="mb-4 rounded-xl border border-af-accent/30 bg-af-accent/10 px-4 py-3">
-                  <Text className="text-af-silver text-sm">{stravaMessage}</Text>
-                </View>
-              )}
-
-              {/* Strava */}
-              <View className="flex-row items-center justify-between py-3">
-                <View className="flex-row items-center flex-1">
-                  <Activity size={20} color="#F97316" />
-                  <View className="ml-3 flex-1">
-                    <Text className="text-white">Strava</Text>
-                    <Text className="text-af-silver text-xs">
-                      {stravaConnection?.lastSyncedAt
-                        ? `Last synced ${new Date(stravaConnection.lastSyncedAt).toLocaleString()}`
-                        : 'Sync running and cycling workouts from Strava'}
-                    </Text>
-                  </View>
-                </View>
-                {connectedIntegrations.includes('strava') ? (
-                  <View className="items-end">
-                    <View className="flex-row items-center">
-                      <View className="bg-af-success/20 px-2 py-1 rounded-full mr-2">
-                        <Text className="text-af-success text-xs">Connected</Text>
-                      </View>
-                      <Pressable
-                        onPress={() => {
-                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                          void handleStravaSync();
-                        }}
-                        disabled={stravaBusyAction !== null}
-                        className={cn(
-                          "rounded-full px-3 py-1 mr-2",
-                          stravaBusyAction !== null ? "bg-white/5" : "bg-white/10"
-                        )}
-                      >
-                        <Text className="text-af-silver text-xs">
-                          {stravaBusyAction === 'sync' ? 'Syncing...' : 'Sync now'}
-                        </Text>
-                      </Pressable>
-                      <Pressable
-                        onPress={() => {
-                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                          setIntegrationToDisconnect('strava');
-                          setShowDisconnectModal(true);
-                        }}
-                        disabled={stravaBusyAction !== null}
-                        className="w-8 h-8 bg-af-danger/20 rounded-full items-center justify-center"
-                      >
-                        <Trash2 size={16} color="#EF4444" />
-                      </Pressable>
-                    </View>
-                    {stravaConnection?.displayName && (
-                      <Text className="text-af-silver text-xs mt-2">
-                        Connected as {stravaConnection.displayName}
-                      </Text>
-                    )}
-                  </View>
-                ) : (
-                  <Pressable
-                    onPress={() => {
-                      void handleStravaConnect();
-                    }}
-                    disabled={!isOwnerReviewer || !canUseStravaSync() || stravaBusyAction !== null}
-                    className={cn(
-                      "px-3 py-1 rounded-full",
-                      !isOwnerReviewer || !canUseStravaSync() || stravaBusyAction !== null ? "bg-white/5" : "bg-white/10"
-                    )}
-                  >
-                    <Text className="text-af-silver text-xs">
-                      {isOwnerReviewer
-                        ? (stravaBusyAction === 'connect' ? 'Connecting...' : 'Connect')
-                        : 'App Under Review by Strava'}
-                    </Text>
-                  </Pressable>
-                )}
-              </View>
-
-            </View>
-            {Platform.OS === 'web' && !canUseStravaSync() && (
-              <Text className="text-af-silver text-xs mt-3">
-                Configure `EXPO_PUBLIC_APP_URL`, `EXPO_PUBLIC_SUPABASE_URL`, and your Supabase Strava Edge Functions to enable Strava sync.
-              </Text>
-            )}
-            </Animated.View>
-          </TutorialTarget>
+          ) : null}
 
           {/* Admin Actions */}
           {hasAdminAccess && (
@@ -3153,141 +3335,170 @@ export default function ProfileScreen() {
             >
               <Animated.View
                 entering={getWebSafeFadeInDown(300)}
-                className="mx-6 mt-6"
+                className={useDesktopCardGrid ? 'mt-0' : 'mx-6 mt-6'}
+                style={useDesktopCardGrid ? { width: contentMaxWidth } : undefined}
               >
-              <Text className="text-white font-semibold text-lg mb-3">Admin Actions</Text>
-
-              <Pressable
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  router.push('/import-roster');
-                }}
-                className="flex-row items-center bg-af-success/20 border border-af-success/50 rounded-xl p-4 mb-3"
-              >
-                <Upload size={24} color="#22C55E" />
-                <View className="ml-3 flex-1">
-                  <Text className="text-white font-semibold">Import Roster</Text>
-                  <Text className="text-af-silver text-xs">Bulk import from CSV or Excel</Text>
-                </View>
-              </Pressable>
-
-              <Pressable
-                onPress={() => { setShowManageModal(true); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
-                className="flex-row items-center bg-white/5 border border-white/10 rounded-xl p-4 mb-3"
-              >
-                <Users size={24} color="#C0C0C0" />
-                <View className="ml-3 flex-1">
-                  <Text className="text-white font-semibold">Manage Members</Text>
-                  <Text className="text-af-silver text-xs">{members.length} members in squadron</Text>
-                </View>
-              </Pressable>
-
-              {userAccountType === 'fitflight_creator' && (
+              {useDesktopCardGrid ? (
+                <Text className="text-white font-semibold text-lg mb-3">Admin Actions</Text>
+              ) : (
                 <Pressable
                   onPress={() => {
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    setShowUpdateNotesModal(true);
+                    setShowMobileAdminActions((current) => !current);
                   }}
-                  className="flex-row items-center bg-af-accent/10 border border-af-accent/30 rounded-xl p-4 mb-3"
+                  className="mb-2 flex-row items-center justify-between rounded-xl border border-purple-500/40 bg-purple-500/15 px-4 py-4"
                 >
-                  <Bell size={24} color="#4A90D9" />
-                  <View className="ml-3 flex-1">
-                    <Text className="text-white font-semibold">Publish Update Notes</Text>
-                    <Text className="text-af-silver text-xs">Show one-time update or hotfix notes on each member&apos;s next login</Text>
-                  </View>
+                  <Text className="text-white font-semibold text-lg">Admin Actions</Text>
+                  {showMobileAdminActions ? (
+                    <ChevronUp size={20} color="#C0C0C0" />
+                  ) : (
+                    <ChevronDown size={20} color="#C0C0C0" />
+                  )}
                 </Pressable>
               )}
-
-              {canResetUserPasswords && (
-                <TutorialTarget
-                  id="account-password-reset"
-                  onLayout={(event) => {
-                    tutorialTargetYRef.current['account-password-reset'] = event.nativeEvent.layout.y;
+              {(useDesktopCardGrid || showMobileAdminActions) ? (
+              <View className="flex-row flex-wrap items-start" style={{ gap: 12 }}>
+                <Pressable
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    router.push('/import-roster');
                   }}
+                  className="flex-row items-center bg-af-success/20 border border-af-success/50 rounded-xl p-4"
+                  style={useDesktopCardGrid ? { width: desktopSectionWidth } : { width: mobileActionCardWidth, minHeight: 108 }}
                 >
-                  <Pressable
-                    onPress={openResetUserPasswordModal}
-                    className="flex-row items-center bg-af-warning/20 border border-af-warning/40 rounded-xl p-4 mb-3"
-                  >
-                    <Shield size={24} color="#F59E0B" />
-                    <View className="ml-3 flex-1">
-                      <Text className="text-white font-semibold">Reset User Password</Text>
-                      <Text className="text-af-silver text-xs">Owner, UFPM, and Demo can set a new password for a member</Text>
-                    </View>
-                  </Pressable>
-                </TutorialTarget>
-              )}
+                  <Upload size={24} color="#22C55E" />
+                  <View className="ml-3 flex-1">
+                    <Text className="text-white font-semibold">Import Roster</Text>
+                    <Text className="text-af-silver text-xs">Bulk import from CSV or Excel</Text>
+                  </View>
+                </Pressable>
 
-              {userAccountType === 'fitflight_creator' && (
-                <TutorialTarget
-                  id="account-analytics"
-                  onLayout={(event) => {
-                    tutorialTargetYRef.current['account-analytics'] = event.nativeEvent.layout.y;
-                  }}
+                <Pressable
+                  onPress={() => { setShowManageModal(true); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
+                  className="flex-row items-center bg-white/5 border border-white/10 rounded-xl p-4"
+                  style={useDesktopCardGrid ? { width: desktopSectionWidth } : { width: mobileActionCardWidth, minHeight: 108 }}
                 >
+                  <Users size={24} color="#C0C0C0" />
+                  <View className="ml-3 flex-1">
+                    <Text className="text-white font-semibold">Manage Members</Text>
+                    <Text className="text-af-silver text-xs">{members.length} members in squadron</Text>
+                  </View>
+                </Pressable>
+
+                {userAccountType === 'fitflight_creator' && (
                   <Pressable
                     onPress={() => {
                       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      router.push('/analytics');
+                      setShowUpdateNotesModal(true);
                     }}
-                    className="flex-row items-center bg-purple-500/20 border border-purple-500/50 rounded-xl p-4 mb-3"
+                    className="flex-row items-center bg-af-accent/10 border border-af-accent/30 rounded-xl p-4"
+                    style={useDesktopCardGrid ? { width: desktopSectionWidth } : { width: mobileActionCardWidth, minHeight: 108 }}
                   >
-                    <Settings size={24} color="#A855F7" />
+                    <Bell size={24} color="#4A90D9" />
                     <View className="ml-3 flex-1">
-                      <Text className="text-white font-semibold">Squadron Analytics</Text>
-                      <Text className="text-af-silver text-xs">View detailed reports & export data</Text>
+                      <Text className="text-white font-semibold">Publish Update Notes</Text>
+                      <Text className="text-af-silver text-xs">Show one-time update or hotfix notes on each member&apos;s next login</Text>
                     </View>
                   </Pressable>
-                </TutorialTarget>
-              )}
+                )}
 
-              {canViewAppUsageAnalytics && (
-                <Pressable
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    router.push('/app-usage-analytics');
-                  }}
-                  className="flex-row items-center bg-sky-500/20 border border-sky-400/50 rounded-xl p-4 mb-3"
-                >
-                  <Activity size={24} color="#7DD3FC" />
-                  <View className="ml-3 flex-1">
-                    <Text className="text-white font-semibold">App Usage Analytics</Text>
-                    <Text className="text-af-silver text-xs">View Google Analytics traffic and event usage</Text>
-                  </View>
-                </Pressable>
-              )}
+                {canResetUserPasswords && (
+                  <TutorialTarget
+                    id="account-password-reset"
+                    onLayout={(event) => {
+                      tutorialTargetYRef.current['account-password-reset'] = event.nativeEvent.layout.y;
+                    }}
+                  >
+                    <Pressable
+                      onPress={openResetUserPasswordModal}
+                      className="flex-row items-center bg-af-warning/20 border border-af-warning/40 rounded-xl p-4"
+                      style={useDesktopCardGrid ? { width: desktopSectionWidth } : { width: mobileActionCardWidth, minHeight: 108 }}
+                    >
+                      <Shield size={24} color="#F59E0B" />
+                      <View className="ml-3 flex-1">
+                        <Text className="text-white font-semibold">Reset User Password</Text>
+                        <Text className="text-af-silver text-xs">Owner, UFPM, and Demo can set a new password for a member</Text>
+                      </View>
+                    </Pressable>
+                  </TutorialTarget>
+                )}
 
-              {canViewAdminAuditTrail && (
-                <Pressable
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    setShowAuditTrailModal(true);
-                  }}
-                  className="flex-row items-center bg-white/5 border border-white/10 rounded-xl p-4 mb-3"
-                >
-                  <FileText size={24} color="#C0C0C0" />
-                  <View className="ml-3 flex-1">
-                    <Text className="text-white font-semibold">Admin Action Audit Trail</Text>
-                    <Text className="text-af-silver text-xs">Log of member and role management actions</Text>
-                  </View>
-                </Pressable>
-              )}
+                {userAccountType === 'fitflight_creator' && (
+                  <TutorialTarget
+                    id="account-analytics"
+                    onLayout={(event) => {
+                      tutorialTargetYRef.current['account-analytics'] = event.nativeEvent.layout.y;
+                    }}
+                  >
+                    <Pressable
+                      onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        router.push('/analytics');
+                      }}
+                      className="flex-row items-center bg-purple-500/20 border border-purple-500/50 rounded-xl p-4"
+                      style={useDesktopCardGrid ? { width: desktopSectionWidth } : { width: mobileActionCardWidth, minHeight: 108 }}
+                    >
+                      <Settings size={24} color="#A855F7" />
+                      <View className="ml-3 flex-1">
+                        <Text className="text-white font-semibold">Squadron Analytics</Text>
+                        <Text className="text-af-silver text-xs">View detailed reports & export data</Text>
+                      </View>
+                    </Pressable>
+                  </TutorialTarget>
+                )}
 
-              {userAccountType === 'fitflight_creator' && (
-                <Pressable
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    router.push('/cross-squadron');
-                  }}
-                  className="flex-row items-center bg-af-gold/20 border border-af-gold/50 rounded-xl p-4"
-                >
-                  <Building2 size={24} color="#FFD700" />
-                  <View className="ml-3 flex-1">
-                    <Text className="text-white font-semibold">View Other Squadrons</Text>
-                    <Text className="text-af-silver text-xs">Access all squadron interfaces & analytics</Text>
-                  </View>
-                </Pressable>
-              )}
+                {canViewAppUsageAnalytics && (
+                  <Pressable
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      router.push('/app-usage-analytics');
+                    }}
+                    className="flex-row items-center bg-sky-500/20 border border-sky-400/50 rounded-xl p-4"
+                    style={useDesktopCardGrid ? { width: desktopSectionWidth } : { width: mobileActionCardWidth, minHeight: 108 }}
+                  >
+                    <Activity size={24} color="#7DD3FC" />
+                    <View className="ml-3 flex-1">
+                      <Text className="text-white font-semibold">App Usage Analytics</Text>
+                      <Text className="text-af-silver text-xs">View Google Analytics traffic and event usage</Text>
+                    </View>
+                  </Pressable>
+                )}
+
+                {canViewAdminAuditTrail && (
+                  <Pressable
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      setShowAuditTrailModal(true);
+                    }}
+                    className="flex-row items-center bg-white/5 border border-white/10 rounded-xl p-4"
+                    style={useDesktopCardGrid ? { width: desktopSectionWidth } : { width: mobileActionCardWidth, minHeight: 108 }}
+                  >
+                    <FileText size={24} color="#C0C0C0" />
+                    <View className="ml-3 flex-1">
+                      <Text className="text-white font-semibold">Admin Action Audit Trail</Text>
+                      <Text className="text-af-silver text-xs">Log of member and role management actions</Text>
+                    </View>
+                  </Pressable>
+                )}
+
+                {userAccountType === 'fitflight_creator' && (
+                  <Pressable
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      router.push('/cross-squadron');
+                    }}
+                    className="flex-row items-center bg-af-gold/20 border border-af-gold/50 rounded-xl p-4"
+                    style={useDesktopCardGrid ? { width: desktopSectionWidth } : { width: mobileActionCardWidth, minHeight: 108 }}
+                  >
+                    <Building2 size={24} color="#FFD700" />
+                    <View className="ml-3 flex-1">
+                      <Text className="text-white font-semibold">View Other Squadrons</Text>
+                      <Text className="text-af-silver text-xs">Access all squadron interfaces & analytics</Text>
+                    </View>
+                  </Pressable>
+                )}
+              </View>
+              ) : null}
               </Animated.View>
             </TutorialTarget>
           )}
@@ -3302,7 +3513,8 @@ export default function ProfileScreen() {
             >
               <Animated.View
                 entering={getWebSafeFadeInDown(300)}
-                className="mx-6 mt-6"
+                className={useDesktopCardGrid ? 'mt-0' : 'mx-6 mt-6'}
+                style={useDesktopCardGrid ? { width: desktopSectionWidth } : undefined}
               >
               <Text className="text-white font-semibold text-lg mb-3">PFL Actions</Text>
               <Pressable
@@ -3328,12 +3540,33 @@ export default function ProfileScreen() {
           >
             <Animated.View
               entering={getWebSafeFadeInDown(325)}
-              className="mx-6 mt-6"
+              className={useDesktopCardGrid ? 'mt-0' : 'mx-6 mt-3'}
+              style={useDesktopCardGrid ? { width: contentMaxWidth } : undefined}
             >
-            <Text className="text-white font-semibold text-lg mb-3">Help</Text>
+            {useDesktopCardGrid ? (
+              <Text className="text-white font-semibold text-lg mb-3">Help</Text>
+            ) : (
+              <Pressable
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setShowMobileHelpActions((current) => !current);
+                }}
+                className="mb-2 flex-row items-center justify-between rounded-xl border border-af-accent/40 bg-af-accent/15 px-4 py-4"
+              >
+                <Text className="text-white font-semibold text-lg">Help</Text>
+                {showMobileHelpActions ? (
+                  <ChevronUp size={20} color="#C0C0C0" />
+                ) : (
+                  <ChevronDown size={20} color="#C0C0C0" />
+                )}
+              </Pressable>
+            )}
+            {(useDesktopCardGrid || showMobileHelpActions) ? (
+            <View className="flex-row flex-wrap items-start" style={{ gap: 12 }}>
             <Pressable
               onPress={handleViewTutorial}
-              className="flex-row items-center bg-white/5 border border-white/10 rounded-xl p-4 mb-3"
+              className="flex-row items-center bg-white/5 border border-white/10 rounded-xl p-4"
+              style={useDesktopCardGrid ? { width: desktopSectionWidth } : { width: mobileActionCardWidth, minHeight: 108 }}
             >
               <HelpCircle size={24} color="#4A90D9" />
               <View className="ml-3 flex-1">
@@ -3344,7 +3577,8 @@ export default function ProfileScreen() {
 
             <Pressable
               onPress={handleOpenResources}
-              className="flex-row items-center bg-white/5 border border-white/10 rounded-xl p-4 mb-3"
+              className="flex-row items-center bg-white/5 border border-white/10 rounded-xl p-4"
+              style={useDesktopCardGrid ? { width: desktopSectionWidth } : { width: mobileActionCardWidth, minHeight: 108 }}
             >
               <FileText size={24} color="#4A90D9" />
               <View className="ml-3 flex-1">
@@ -3356,7 +3590,8 @@ export default function ProfileScreen() {
             {canViewSupportInbox ? (
               <Pressable
                 onPress={handleOpenSupportInbox}
-                className="flex-row items-center bg-af-accent/10 border border-af-accent/30 rounded-xl p-4 mb-3"
+                className="flex-row items-center bg-af-accent/10 border border-af-accent/30 rounded-xl p-4"
+                style={useDesktopCardGrid ? { width: desktopSectionWidth } : { width: mobileActionCardWidth, minHeight: 108 }}
               >
                 <Mail size={24} color="#4A90D9" />
                 <View className="ml-3 flex-1">
@@ -3374,6 +3609,11 @@ export default function ProfileScreen() {
             <Pressable
               onPress={handleToggleDeveloperContact}
               className="bg-white/5 border border-white/10 rounded-xl p-4"
+              style={
+                useDesktopCardGrid
+                  ? { width: desktopSectionWidth }
+                  : { width: showDeveloperContact ? width - 48 : mobileActionCardWidth, minHeight: 108 }
+              }
             >
               <View className="flex-row items-center">
                 <Mail size={24} color="#4A90D9" />
@@ -3438,13 +3678,16 @@ export default function ProfileScreen() {
                 </View>
               )}
             </Pressable>
+            </View>
+            ) : null}
             </Animated.View>
           </TutorialTarget>
 
           {/* Logout */}
           <Animated.View
             entering={getWebSafeFadeInDown(350)}
-            className="mx-6 mt-6"
+            className={useDesktopCardGrid ? 'mt-0' : 'mx-6 mt-6'}
+            style={useDesktopCardGrid ? { width: contentMaxWidth } : undefined}
           >
             {isAuthenticated ? (
               <>
@@ -3469,6 +3712,7 @@ export default function ProfileScreen() {
               </Pressable>
             )}
           </Animated.View>
+          </View>
           </PageContainer>
         </ScrollView>
       </SafeAreaView>
@@ -5077,6 +5321,93 @@ export default function ProfileScreen() {
                     );
                   })}
                 </View>
+
+                <View className="h-px bg-white/10 my-4" />
+
+                <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">Connected Apps</Text>
+                <View className="rounded-2xl border border-white/10 bg-black/10 p-4">
+                  {stravaMessage ? (
+                    <View className="mb-4 rounded-xl border border-af-accent/30 bg-af-accent/10 px-4 py-3">
+                      <Text className="text-af-silver text-sm">{stravaMessage}</Text>
+                    </View>
+                  ) : null}
+
+                  <View className="flex-row items-center justify-between py-1">
+                    <View className="flex-row items-center flex-1 pr-3">
+                      <Activity size={20} color="#F97316" />
+                      <View className="ml-3 flex-1">
+                        <Text className="text-white font-semibold">Strava</Text>
+                        <Text className="text-af-silver text-xs mt-1">
+                          {stravaConnection?.lastSyncedAt
+                            ? `Last synced ${new Date(stravaConnection.lastSyncedAt).toLocaleString()}`
+                            : 'Sync running and cycling workouts from Strava'}
+                        </Text>
+                        {stravaConnection?.displayName ? (
+                          <Text className="text-af-silver text-xs mt-1">
+                            Connected as {stravaConnection.displayName}
+                          </Text>
+                        ) : null}
+                      </View>
+                    </View>
+                    {connectedIntegrations.includes('strava') ? (
+                      <View className="items-end">
+                        <View className="flex-row items-center">
+                          <View className="bg-af-success/20 px-2 py-1 rounded-full mr-2">
+                            <Text className="text-af-success text-xs">Connected</Text>
+                          </View>
+                          <Pressable
+                            onPress={() => {
+                              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                              void handleStravaSync();
+                            }}
+                            disabled={stravaBusyAction !== null}
+                            className={cn(
+                              "rounded-full px-3 py-1 mr-2",
+                              stravaBusyAction !== null ? "bg-white/5" : "bg-white/10"
+                            )}
+                          >
+                            <Text className="text-af-silver text-xs">
+                              {stravaBusyAction === 'sync' ? 'Syncing...' : 'Sync now'}
+                            </Text>
+                          </Pressable>
+                          <Pressable
+                            onPress={() => {
+                              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                              setIntegrationToDisconnect('strava');
+                              setShowDisconnectModal(true);
+                            }}
+                            disabled={stravaBusyAction !== null}
+                            className="w-8 h-8 bg-af-danger/20 rounded-full items-center justify-center"
+                          >
+                            <Trash2 size={16} color="#EF4444" />
+                          </Pressable>
+                        </View>
+                      </View>
+                    ) : (
+                      <Pressable
+                        onPress={() => {
+                          void handleStravaConnect();
+                        }}
+                        disabled={!isOwnerReviewer || !canUseStravaSync() || stravaBusyAction !== null}
+                        className={cn(
+                          "px-3 py-1 rounded-full",
+                          !isOwnerReviewer || !canUseStravaSync() || stravaBusyAction !== null ? "bg-white/5" : "bg-white/10"
+                        )}
+                      >
+                        <Text className="text-af-silver text-xs">
+                          {isOwnerReviewer
+                            ? (stravaBusyAction === 'connect' ? 'Connecting...' : 'Connect')
+                            : 'App Under Review by Strava'}
+                        </Text>
+                      </Pressable>
+                    )}
+                  </View>
+                </View>
+                {Platform.OS === 'web' && !canUseStravaSync() ? (
+                  <Text className="text-af-silver text-xs mt-3">
+                    Configure `EXPO_PUBLIC_APP_URL`, `EXPO_PUBLIC_SUPABASE_URL`, and your Supabase Strava Edge Functions to enable Strava sync.
+                  </Text>
+                ) : null}
               </View>
 
               <View className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
@@ -5755,6 +6086,7 @@ export default function ProfileScreen() {
                       {expanded ? (
                         <View className="mt-3 border-t border-white/10 pt-3">
                           <Text className="text-white text-sm">{session.description}</Text>
+                          {session.location ? <Text className="text-af-silver text-xs mt-2">Location: {session.location}</Text> : null}
                           <Text className="text-af-silver text-xs mt-2">
                             Scheduled by {members.find((member) => member.id === session.createdBy)?.rank ?? ''} {members.find((member) => member.id === session.createdBy)?.firstName ?? ''} {members.find((member) => member.id === session.createdBy)?.lastName ?? 'Unknown member'}
                           </Text>

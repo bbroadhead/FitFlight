@@ -113,7 +113,13 @@ export default function MemberProfileScreen() {
   const [showLeaderboardHistoryModal, setShowLeaderboardHistoryModal] = useState(false);
   const [expandedWorkoutImageUri, setExpandedWorkoutImageUri] = useState<string | null>(null);
   const [manualWorkoutProofMap, setManualWorkoutProofMap] = useState<Record<string, string>>({});
-  const contentMaxWidth = width >= 1440 ? 1280 : width >= 1180 ? 1180 : 1024;
+  const contentMaxWidth = width >= 1680 ? 1480 : width >= 1440 ? 1400 : width >= 1180 ? 1180 : 1024;
+  const useDesktopCardGrid = width >= 1180;
+  const desktopGap = 12;
+  const desktopHeroCardWidth = useDesktopCardGrid ? Math.floor((contentMaxWidth - desktopGap) * 0.43) : 0;
+  const desktopTopRailWidth = useDesktopCardGrid ? contentMaxWidth - desktopHeroCardWidth - desktopGap : 0;
+  const desktopCardWidth = useDesktopCardGrid ? Math.floor((desktopTopRailWidth - desktopGap) / 2) : 0;
+  const desktopWideCardWidth = desktopTopRailWidth;
 
   const member = useMemo(() => {
     const rawId = Array.isArray(id) ? id[0] : id;
@@ -249,14 +255,15 @@ export default function MemberProfileScreen() {
   const workoutTypeBreakdown = useMemo(() => {
     const counts = new Map<string, number>();
     WORKOUT_TYPES.forEach((type) => counts.set(type, 0));
-    counts.set('Attendance', 0);
-
     monthVisibleWorkouts.forEach((workout) => {
-      const label = workout.source === 'attendance' ? 'Attendance' : workout.type;
+      if (workout.source === 'attendance') {
+        return;
+      }
+      const label = workout.type;
       counts.set(label, (counts.get(label) ?? 0) + 1);
     });
 
-    const total = monthVisibleWorkouts.length;
+    const total = monthVisibleWorkouts.filter((workout) => workout.source !== 'attendance').length;
     return Array.from(counts.entries())
       .map(([type, count]) => ({
         type,
@@ -381,10 +388,15 @@ export default function MemberProfileScreen() {
           showsVerticalScrollIndicator={false}
         >
           <PageContainer maxWidth={contentMaxWidth} className="px-6">
+          <View
+            className={useDesktopCardGrid ? 'flex-row items-start' : ''}
+            style={useDesktopCardGrid ? { gap: 12 } : undefined}
+          >
           {/* Profile Card */}
           <Animated.View
             entering={FadeInDown.delay(150).springify()}
             className="mt-4 p-6 bg-white/10 rounded-3xl border border-white/20"
+            style={useDesktopCardGrid ? { width: desktopHeroCardWidth } : undefined}
           >
             <View className="items-center">
               <View className="relative">
@@ -446,10 +458,15 @@ export default function MemberProfileScreen() {
             </View>
           </Animated.View>
 
+          <View
+            className={useDesktopCardGrid ? 'mt-4 flex-1 flex-row flex-wrap items-start' : ''}
+            style={useDesktopCardGrid ? { gap: 12 } : undefined}
+          >
           {/* Stats Card */}
           <Animated.View
             entering={FadeInDown.delay(200).springify()}
-            className="mt-4 p-4 bg-white/5 rounded-2xl border border-white/10"
+            className={useDesktopCardGrid ? 'p-4 bg-white/5 rounded-2xl border border-white/10' : 'mt-4 p-4 bg-white/5 rounded-2xl border border-white/10'}
+            style={useDesktopCardGrid ? { width: desktopCardWidth } : undefined}
           >
             <View className="flex-row items-center justify-between mb-3">
               <Text className="text-white/60 text-xs uppercase tracking-wider">Monthly Summary</Text>
@@ -521,6 +538,7 @@ export default function MemberProfileScreen() {
           <Animated.View
             entering={FadeInDown.delay(212).springify()}
             className="mt-4 p-4 bg-white/5 rounded-2xl border border-white/10"
+            style={useDesktopCardGrid ? { width: desktopCardWidth } : undefined}
           >
             <Text className="text-white/60 text-xs uppercase tracking-wider mb-3">History</Text>
             <View className="flex-row flex-wrap" style={{ gap: 12 }}>
@@ -571,7 +589,8 @@ export default function MemberProfileScreen() {
           {workoutTypeBreakdown.length > 0 && (
             <Animated.View
               entering={FadeInDown.delay(225).springify()}
-              className="mt-4 p-4 bg-white/5 rounded-2xl border border-white/10"
+              className={useDesktopCardGrid ? 'p-4 bg-white/5 rounded-2xl border border-white/10' : 'mt-4 p-4 bg-white/5 rounded-2xl border border-white/10'}
+              style={useDesktopCardGrid ? { width: desktopCardWidth } : undefined}
             >
               <View className="flex-row items-center mb-3">
                 <BarChart3 size={18} color="#4A90D9" />
@@ -592,10 +611,11 @@ export default function MemberProfileScreen() {
 
           {/* PFRA Section */}
           {canViewPFRASection ? (
-          <Animated.View
-            entering={FadeInDown.delay(250).springify()}
-            className="mt-4"
-          >
+            <Animated.View
+              entering={FadeInDown.delay(250).springify()}
+              className={useDesktopCardGrid ? '' : 'mt-4'}
+              style={useDesktopCardGrid ? { width: desktopWideCardWidth } : undefined}
+            >
             <View className="flex-row items-center justify-between mb-3">
               <Text className="text-white font-semibold text-lg">PFRA</Text>
               {member.fitnessAssessments.some(fa => fa.isPrivate) && !isOwnProfile && (
@@ -685,6 +705,8 @@ export default function MemberProfileScreen() {
             )}
           </Animated.View>
           ) : null}
+          </View>
+          </View>
 
           {/* Workout Uploads Section */}
           {canViewWorkoutUploadsSection ? (

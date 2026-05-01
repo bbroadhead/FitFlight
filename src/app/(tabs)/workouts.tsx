@@ -72,6 +72,7 @@ function WorkoutCard({
   isExpandedOverride,
   onToggleExpanded,
   theme,
+  cardStyle,
 }: {
   workout: SharedWorkout;
   currentUserId: string;
@@ -90,6 +91,7 @@ function WorkoutCard({
   isExpandedOverride?: boolean;
   onToggleExpanded?: (expanded: boolean) => void;
   theme: AppThemePalette;
+  cardStyle?: any;
 }) {
   const [expanded, setExpanded] = useState(false);
   const isExpanded = isExpandedOverride ?? expanded;
@@ -140,7 +142,7 @@ function WorkoutCard({
   };
 
   return (
-    <Animated.View entering={FadeInRight.springify()} className="mb-3">
+    <Animated.View entering={FadeInRight.springify()} className="mb-3" style={cardStyle}>
       <ThemeChrome theme={theme} variant={workout.source === 'playbook' ? 'feature' : 'default'}>
       <Pressable
         onPress={() => {
@@ -343,6 +345,15 @@ function WorkoutCard({
 export default function WorkoutsScreen() {
   const theme = useAppTheme();
   const { width } = useWindowDimensions();
+  const contentMaxWidth = width >= 1440 ? 1280 : width >= 1180 ? 1180 : 1024;
+  const useDesktopGrid = width >= 1180;
+  const desktopWorkoutColumns = useDesktopGrid ? 3 : 1;
+  const desktopWorkoutGap = 12;
+  const desktopWorkoutRailPadding = 48;
+  const workoutCardWidth = useDesktopGrid ? (width >= 1480 ? 352 : 332) : 0;
+  const desktopWorkoutRailWidth = useDesktopGrid
+    ? Math.min(contentMaxWidth, workoutCardWidth * desktopWorkoutColumns + desktopWorkoutGap * (desktopWorkoutColumns - 1) + desktopWorkoutRailPadding)
+    : undefined;
   const { setSwipeEnabled } = useTabSwipe();
   const router = useRouter();
   const params = useLocalSearchParams<{ openWorkoutId?: string }>();
@@ -828,7 +839,6 @@ export default function WorkoutsScreen() {
   };
 
   const shouldShowPlaybookSeparator = filterType === 'all' && filteredWorkouts.some((workout) => workout.source === 'playbook') && filteredWorkouts.some((workout) => workout.source !== 'playbook');
-  const contentMaxWidth = width >= 1440 ? 1280 : width >= 1180 ? 1180 : 1024;
 
   const canSubmit = newName.trim().length > 0 && (!isMultiStep || steps.some(s => s.trim()));
 
@@ -849,6 +859,7 @@ export default function WorkoutsScreen() {
         <Animated.View
           entering={FadeInDown.delay(100).springify()}
           className="px-6 pt-4 pb-2"
+          style={useDesktopGrid ? { width: '100%', maxWidth: desktopWorkoutRailWidth, alignSelf: 'center' } : undefined}
         >
           <View className="flex-row items-center justify-between">
             <View>
@@ -884,6 +895,7 @@ export default function WorkoutsScreen() {
           <Animated.View
             entering={FadeInDown.delay(150).springify()}
             className="px-6 mt-2"
+            style={useDesktopGrid ? { width: '100%', maxWidth: desktopWorkoutRailWidth, alignSelf: 'center' } : undefined}
           >
             <View className="flex-row items-center px-4 py-3" style={getThemeInputContainerStyle(theme)}>
             <Search size={20} color={theme.textSecondary} />
@@ -957,7 +969,7 @@ export default function WorkoutsScreen() {
             <RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} tintColor={theme.accent} />
           }
         >
-          <PageContainer maxWidth={contentMaxWidth} className="px-6">
+          <PageContainer maxWidth={contentMaxWidth} className="px-6" style={useDesktopGrid ? { width: '100%', maxWidth: desktopWorkoutRailWidth, alignSelf: 'center' } : undefined}>
           {filteredWorkouts.length === 0 ? (
             <View className="items-center justify-center py-12">
               <Text className="text-white/40 text-lg">No workouts found</Text>
@@ -966,7 +978,11 @@ export default function WorkoutsScreen() {
               </Text>
             </View>
           ) : (
-            filteredWorkouts.map((workout, index) => (
+            <View
+              className={useDesktopGrid ? 'flex-row flex-wrap items-start' : ''}
+              style={useDesktopGrid ? { gap: 12 } : undefined}
+            >
+            {filteredWorkouts.map((workout, index) => (
               (() => {
                 const isPlaybookWorkout = workout.source === 'playbook';
                 const previousWorkout = filteredWorkouts[index - 1];
@@ -974,7 +990,7 @@ export default function WorkoutsScreen() {
                 return (
               <React.Fragment key={workout.id}>
                 {showSeparator ? (
-                  <View className="mb-3 mt-1 flex-row items-center">
+                  <View className="mb-3 mt-1 flex-row items-center" style={useDesktopGrid ? { width: '100%' } : undefined}>
                     <View className="h-px flex-1 bg-white/10" />
                     <Text className="mx-3 text-af-silver text-xs uppercase tracking-[1px]">User Workouts</Text>
                     <View className="h-px flex-1 bg-white/10" />
@@ -998,40 +1014,54 @@ export default function WorkoutsScreen() {
                 isExpandedOverride={expandedWorkoutId === workout.id}
                 onToggleExpanded={(isExpanded) => setExpandedWorkoutId(isExpanded ? workout.id : (expandedWorkoutId === workout.id ? null : expandedWorkoutId))}
                 theme={theme}
+                cardStyle={useDesktopGrid ? { width: workoutCardWidth, marginBottom: 0 } : undefined}
               />
               </React.Fragment>
                 );
               })()
-            ))
+            ))}
+            </View>
           )}
           </PageContainer>
         </ScrollView>
       </SafeAreaView>
 
       {/* Create/Edit Workout Modal */}
-      <Modal visible={showCreateModal} transparent animationType="slide">
+      <Modal visible={showCreateModal} transparent animationType="none">
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           className="flex-1"
         >
-          <View className="flex-1 bg-black/80 justify-end">
-            <ThemeChrome theme={theme} variant="feature">
-            <View className="p-6 pb-12 max-h-[90%]">
+          <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
+            <Animated.View entering={SlideInDown.duration(260)}>
+            <ThemeChrome
+              theme={theme}
+              variant="feature"
+              fill
+              style={{ borderTopLeftRadius: 24, borderTopRightRadius: 24, height: '84%', overflow: 'hidden' }}
+            >
+            <View style={{ flex: 1, minHeight: 0, paddingHorizontal: 24, paddingTop: 24, paddingBottom: 48 }}>
                 <View className="flex-row items-center justify-between mb-6">
-                <Text style={getThemeHeadingStyle(theme, 22)}>{editingWorkoutId ? 'Edit Workout' : 'Create Workout'}</Text>
-                <Pressable
-                  onPress={() => {
-                    setShowCreateModal(false);
+                  <Text style={getThemeHeadingStyle(theme, 22)}>{editingWorkoutId ? 'Edit Workout' : 'Create Workout'}</Text>
+                  <Pressable
+                    onPress={() => {
+                      setShowCreateModal(false);
                     resetCreateForm();
                   }}
                   className="w-8 h-8 items-center justify-center"
                   style={getThemeIconWellStyle(theme)}
-                >
-                  <X size={20} color={theme.textSecondary} />
-                </Pressable>
-              </View>
-
-              <ScrollView showsVerticalScrollIndicator={false}>
+                  >
+                    <X size={20} color={theme.textSecondary} />
+                  </Pressable>
+                </View>
+  
+              <ScrollView
+                style={{ flex: 1, minHeight: 0 }}
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ paddingBottom: 16 }}
+                keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
+              >
                 {/* Name */}
                 <View className="mb-4">
                   <Text style={getThemeBodyStyle(theme, 13, theme.textSecondary)} className="mb-2">Workout Name *</Text>
@@ -1194,9 +1224,10 @@ export default function WorkoutsScreen() {
                     </Text>
                   </Pressable>
               </ScrollView>
-            </View>
-            </ThemeChrome>
-          </View>
+              </View>
+              </ThemeChrome>
+            </Animated.View>
+          </Animated.View>
         </KeyboardAvoidingView>
       </Modal>
 

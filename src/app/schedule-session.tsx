@@ -52,6 +52,7 @@ export default function ScheduleSessionScreen() {
   const [selectedKind, setSelectedKind] = useState<ScheduledPTKind>('pt');
   const [selectedFlights, setSelectedFlights] = useState<Flight[]>(user?.flight ? [user.flight] : ['Apex']);
   const [description, setDescription] = useState(preselectedWorkoutName ? `Workout: ${preselectedWorkoutName}` : '');
+  const [location, setLocation] = useState('');
   const [editingSession, setEditingSession] = useState<ScheduledPTSession | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [sessionError, setSessionError] = useState('');
@@ -85,6 +86,7 @@ export default function ScheduleSessionScreen() {
 
   const resetForm = () => {
     setDescription('');
+    setLocation('');
     setSelectedKind('pt');
     applyScopeSelection(defaultScope);
     setEditingSession(null);
@@ -118,6 +120,7 @@ export default function ScheduleSessionScreen() {
         description: preselectedWorkoutId && preselectedWorkoutName
           ? `${description.trim()}\n\n${buildScheduledWorkoutToken(preselectedWorkoutId, preselectedWorkoutName)}`
           : description.trim(),
+        location: location.trim(),
         flights,
         squadron: userSquadron,
         createdBy: mode === 'edit' && editingSession ? editingSession.createdBy : user.id,
@@ -148,7 +151,7 @@ export default function ScheduleSessionScreen() {
     setEditingSession(session);
     setSelectedDate(new Date(`${session.date}T00:00:00`));
     const time = new Date(); const [hours, minutes] = session.time.split(':'); time.setHours(parseInt(hours, 10), parseInt(minutes, 10), 0, 0);
-    setSelectedTime(time); setSelectedFlights(session.flights); setSelectedScope(session.scope); setSelectedKind(session.kind); setDescription(stripScheduledWorkoutToken(session.description)); setSessionError(''); setShowEditModal(true);
+    setSelectedTime(time); setSelectedFlights(session.flights); setSelectedScope(session.scope); setSelectedKind(session.kind); setDescription(stripScheduledWorkoutToken(session.description)); setLocation(session.location ?? ''); setSessionError(''); setShowEditModal(true);
   };
 
   const handleDeleteSession = (id: string) => {
@@ -301,7 +304,8 @@ export default function ScheduleSessionScreen() {
             {renderDateCard()}
             {renderTimeCard()}
             {renderFlightSelector()}
-            <View className="mb-4"><Text className="text-white/60 text-sm mb-2">Details</Text><View className="flex-row items-start bg-white/10 rounded-xl px-4 py-3 border border-white/10"><FileText size={20} color="#C0C0C0" /><TextInput value={description} onChangeText={setDescription} placeholder={selectedKind === 'pt' ? 'e.g., Group run at track, HIIT session...' : 'e.g., PFRA diagnostic at gym track...'} placeholderTextColor="#ffffff40" multiline className="flex-1 ml-3 text-white text-base" style={{ minHeight: 60 }} /></View></View>
+            <View className="mb-4"><Text className="text-white/60 text-sm mb-2">Location</Text><View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10"><Building2 size={20} color="#C0C0C0" /><TextInput value={location} onChangeText={setLocation} placeholder="e.g., Track" placeholderTextColor="#ffffff40" className="flex-1 ml-3 text-white text-base" /></View></View>
+            <View className="mb-4"><Text className="text-white/60 text-sm mb-2">Details</Text><View className="flex-row items-start bg-white/10 rounded-xl px-4 py-3 border border-white/10"><FileText size={20} color="#C0C0C0" /><TextInput value={description} onChangeText={setDescription} placeholder={selectedKind === 'pt' ? 'e.g., 2 mile run, HIIT session...' : 'e.g., PFRA diagnostic at gym track...'} placeholderTextColor="#ffffff40" multiline className="flex-1 ml-3 text-white text-base" style={{ minHeight: 60 }} /></View></View>
             {sessionError ? <Text className="text-af-danger text-sm mb-4">{sessionError}</Text> : null}
             <Pressable onPress={() => void saveSession(editingSession ? 'edit' : 'create')} disabled={!description.trim() || (selectedScope === 'flight' && selectedFlights.length === 0) || isSavingSession} className={cn('py-4 rounded-xl flex-row items-center justify-center', description.trim() && (selectedScope !== 'flight' || selectedFlights.length > 0) && !isSavingSession ? 'bg-af-accent' : 'bg-white/10')}><Check size={20} color={description.trim() && (selectedScope !== 'flight' || selectedFlights.length > 0) && !isSavingSession ? 'white' : '#666666'} /><Text className={cn('font-bold ml-2', description.trim() && (selectedScope !== 'flight' || selectedFlights.length > 0) && !isSavingSession ? 'text-white' : 'text-white/40')}>{isSavingSession ? 'Saving...' : editingSession ? 'Save Changes' : 'Create Session'}</Text></Pressable>
           </Animated.View>
@@ -315,6 +319,7 @@ export default function ScheduleSessionScreen() {
                     <Text className="text-white font-semibold">{stripScheduledWorkoutToken(session.description)}</Text>
                     <Text className="text-af-silver text-sm mt-1">{format(new Date(`${session.date}T00:00:00`), 'EEE, MMM d')} at {session.time}</Text>
                     <Text className="text-af-silver text-xs mt-1">{sessionKindLabel(session.kind)}</Text>
+                    {session.location ? <Text className="text-af-silver text-xs mt-1">Location: {session.location}</Text> : null}
                     <Text className="text-af-silver text-xs mt-1">{session.scope === 'personal' ? 'Personal PT' : `Flights: ${session.flights.join(', ')}`}</Text>
                     <Text className="text-af-silver text-xs mt-1">Scheduled by {creatorNameById.get(session.createdBy) ?? 'Unknown member'}</Text>
                     <View className="flex-row flex-wrap items-center mt-2">
@@ -332,7 +337,7 @@ export default function ScheduleSessionScreen() {
       </SafeAreaView>
       {showDatePicker ? <DateTimePicker value={selectedDate} mode="date" display="spinner" onChange={handleDateChange} minimumDate={new Date()} themeVariant="dark" /> : null}
       {showTimePicker ? <DateTimePicker value={selectedTime} mode="time" display="spinner" onChange={handleTimeChange} is24Hour themeVariant="dark" /> : null}
-      <Modal visible={showEditModal} transparent animationType="slide"><View className="flex-1 bg-black/80 justify-end"><View className="bg-af-navy rounded-t-3xl p-6 pb-12"><View className="flex-row items-center justify-between mb-6"><Text className="text-white text-xl font-bold">Edit Session</Text><Pressable onPress={resetForm} className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"><X size={20} color="#C0C0C0" /></Pressable></View>{renderScopeSelector()}{renderKindSelector()}{renderDateCard()}{renderTimeCard()}{renderFlightSelector()}<TextInput value={description} onChangeText={setDescription} placeholder="Description" placeholderTextColor="#ffffff40" multiline className="bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10 mb-4" style={{ minHeight: 60 }} />{sessionError ? <Text className="text-af-danger text-sm mb-4">{sessionError}</Text> : null}<Pressable onPress={() => void saveSession('edit')} disabled={!description.trim() || (selectedScope === 'flight' && selectedFlights.length === 0) || isSavingSession} className={cn('py-4 rounded-xl', description.trim() && (selectedScope !== 'flight' || selectedFlights.length > 0) && !isSavingSession ? 'bg-af-accent' : 'bg-white/10')}><Text className={cn('font-bold text-center', description.trim() && (selectedScope !== 'flight' || selectedFlights.length > 0) && !isSavingSession ? 'text-white' : 'text-white/40')}>{isSavingSession ? 'Saving...' : 'Save Changes'}</Text></Pressable></View></View></Modal>
+      <Modal visible={showEditModal} transparent animationType="slide"><View className="flex-1 bg-black/80 justify-end"><View className="bg-af-navy rounded-t-3xl p-6 pb-12"><View className="flex-row items-center justify-between mb-6"><Text className="text-white text-xl font-bold">Edit Session</Text><Pressable onPress={resetForm} className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"><X size={20} color="#C0C0C0" /></Pressable></View>{renderScopeSelector()}{renderKindSelector()}{renderDateCard()}{renderTimeCard()}{renderFlightSelector()}<View className="mb-4"><Text className="text-white/60 text-sm mb-2">Location</Text><View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10"><Building2 size={20} color="#C0C0C0" /><TextInput value={location} onChangeText={setLocation} placeholder="e.g., Track" placeholderTextColor="#ffffff40" className="flex-1 ml-3 text-white text-base" /></View></View><TextInput value={description} onChangeText={setDescription} placeholder="Description" placeholderTextColor="#ffffff40" multiline className="bg-white/10 rounded-xl px-4 py-3 text-white border border-white/10 mb-4" style={{ minHeight: 60 }} />{sessionError ? <Text className="text-af-danger text-sm mb-4">{sessionError}</Text> : null}<Pressable onPress={() => void saveSession('edit')} disabled={!description.trim() || (selectedScope === 'flight' && selectedFlights.length === 0) || isSavingSession} className={cn('py-4 rounded-xl', description.trim() && (selectedScope !== 'flight' || selectedFlights.length > 0) && !isSavingSession ? 'bg-af-accent' : 'bg-white/10')}><Text className={cn('font-bold text-center', description.trim() && (selectedScope !== 'flight' || selectedFlights.length > 0) && !isSavingSession ? 'text-white' : 'text-white/40')}>{isSavingSession ? 'Saving...' : 'Save Changes'}</Text></Pressable></View></View></Modal>
     </View>
   );
 }

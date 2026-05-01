@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Modal, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from 'react-native';
+import { Modal, Pressable, RefreshControl, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -59,7 +59,7 @@ function WorkoutTypeAnalyticsBar({
     width: `${barWidth.value}%`,
   }));
 
-  const color = label === 'Attendance' ? '#4A90D9' : WORKOUT_TYPE_COLORS[label as WorkoutType] ?? '#6B7280';
+  const color = WORKOUT_TYPE_COLORS[label as WorkoutType] ?? '#6B7280';
 
   return (
     <View className="mb-2">
@@ -157,6 +157,7 @@ function LeaderboardCard({
   delay,
   onPress,
   theme,
+  cardStyle,
 }: {
   member: LeaderboardMember;
   position: number;
@@ -164,6 +165,7 @@ function LeaderboardCard({
   delay: number;
   onPress: () => void;
   theme: ReturnType<typeof useAppTheme>;
+  cardStyle?: any;
 }) {
   const getRankIcon = () => {
     if (position === 1) return <Crown size={20} color="#FFD700" />;
@@ -190,16 +192,24 @@ function LeaderboardCard({
       <Animated.View
         entering={FadeInRight.delay(delay).springify()}
         className="mb-3"
+        style={cardStyle}
       >
         <ThemeChrome theme={theme} variant={position <= 3 ? 'feature' : 'default'}>
-        <View className="p-4">
+        <View className="p-4" style={{ minHeight: position <= 3 ? 152 : 138 }}>
         <View className="flex-row items-center mb-3">
           <View className="w-8 h-8 rounded-full items-center justify-center mr-3" style={{ backgroundColor: rankAccent.bg, borderWidth: 1, borderColor: rankAccent.border }}>
             {getRankIcon() || <Text className="text-white font-bold text-sm">{position}</Text>}
           </View>
-          <View className="flex-1">
+          <View className="flex-1" style={{ minHeight: 50 }}>
             <View className="flex-row items-center flex-wrap">
-              <Text style={[getThemeBodyStyle(theme, 16, theme.textPrimary), { fontWeight: '600' }]}>{displayName}</Text>
+              <Text
+                style={[getThemeBodyStyle(theme, 16, theme.textPrimary), { fontWeight: '600' }]}
+                numberOfLines={2}
+                adjustsFontSizeToFit
+                minimumFontScale={0.78}
+              >
+                {displayName}
+              </Text>
               {getClosedMonthPlacements(member).length > 0 && (
                 <View className="ml-2 flex-row items-center px-1.5 py-0.5 rounded border" style={{ backgroundColor: rankAccent.bg, borderColor: rankAccent.border }}>
                   <Trophy size={10} color={rankAccent.text} />
@@ -276,6 +286,7 @@ export function LeaderboardContent({
   onBack?: () => void;
 }) {
   const theme = useAppTheme();
+  const { width } = useWindowDimensions();
   const router = useRouter();
   const [isExpanded, setIsExpanded] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -299,6 +310,24 @@ export function LeaderboardContent({
   const userName = user ? getShortDisplayName(user) : 'Airman';
   const userSquadron = user?.squadron ?? 'Hawks';
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
+  const useDesktopGrid = width >= 1180;
+  const desktopGap = 4;
+  const desktopContentWidth = useDesktopGrid ? width - 48 : width;
+  const desktopTopLeftWidth = useDesktopGrid ? Math.floor((desktopContentWidth - desktopGap) * 0.49) : 0;
+  const desktopTopRightWidth = useDesktopGrid ? desktopContentWidth - desktopTopLeftWidth - desktopGap : 0;
+  const summaryCardWidth = useDesktopGrid ? Math.floor((desktopTopLeftWidth - desktopGap) / 2) : 0;
+  const leaderboardColumns = useDesktopGrid ? (width >= 1680 ? 4 : 3) : 1;
+  const leaderboardCardWidth = useDesktopGrid
+    ? Math.floor((desktopContentWidth - desktopGap * (leaderboardColumns - 1)) / leaderboardColumns)
+    : 0;
+  const desktopTopThreeCardWidth = useDesktopGrid
+    ? Math.floor((desktopTopRightWidth - desktopGap * 2) / 3)
+    : 0;
+  const currentMonthKey = useMemo(() => getMonthKey(), []);
+  const currentMonthLabel = useMemo(
+    () => new Date(`${currentMonthKey}-01T00:00:00`).toLocaleString('en-US', { month: 'long' }),
+    [currentMonthKey]
+  );
 
   useEffect(() => {
     trackAnalyticsEvent('open_leaderboard', {
@@ -310,7 +339,6 @@ export function LeaderboardContent({
     return members.filter(m => m.squadron === userSquadron);
   }, [members, userSquadron]);
 
-  const currentMonthKey = useMemo(() => getMonthKey(), []);
   const currentMonthSummaries = useMemo(() => {
     return new Map(
       squadronMembers.map((member) => [
@@ -424,13 +452,14 @@ export function LeaderboardContent({
   const squadronWorkoutBreakdown = useMemo(() => {
     const counts = new Map<string, number>();
     WORKOUT_TYPES.forEach(type => { counts.set(type, 0); });
-    counts.set('Attendance', 0);
-
     let totalWorkouts = 0;
     squadronMembers.forEach(member => {
       const summary = currentMonthSummaries.get(member.id) ?? getMemberMonthSummary(member, currentMonthKey, ptSessions);
       summary.workouts.forEach(workout => {
-        const label = workout.source === 'attendance' ? 'Attendance' : workout.type;
+        if (workout.source === 'attendance') {
+          return;
+        }
+        const label = workout.type;
         counts.set(label, (counts.get(label) ?? 0) + 1);
         totalWorkouts++;
       });
@@ -476,7 +505,7 @@ export function LeaderboardContent({
     return scores.map((_, index) => getCompetitionPosition(scores, index));
   }, [flightPointsRanking]);
 
-  const displayedMembers = isExpanded ? sortedMembers : sortedMembers.slice(0, 10);
+  const displayedMembers = isExpanded ? sortedMembers : sortedMembers.slice(0, 12);
   const displayedPositions = useMemo(() => {
     if (normalizedSearchQuery && !isFlightSearch) {
       return displayedMembers.map((member) => overallPositionsByMemberId.get(member.id) ?? 0);
@@ -576,7 +605,285 @@ export function LeaderboardContent({
           </View>
         </Animated.View>
 
-          <Animated.View entering={FadeInDown.delay(200).springify()} className="mx-6">
+          {useDesktopGrid ? (
+            <View className="mx-6 mt-3">
+              <View className="flex-row items-start" style={{ gap: 12 }}>
+                <View style={{ width: desktopTopLeftWidth }}>
+                  <View className="flex-row items-start" style={{ gap: 12 }}>
+                    <View style={{ width: summaryCardWidth }}>
+                      <Animated.View entering={FadeInDown.delay(200).springify()}>
+                        <ThemeChrome theme={theme} variant="feature">
+                          <View className="px-4 py-3">
+                            <Text style={[getThemeBodyStyle(theme, 11, theme.textMuted), { textTransform: 'uppercase', marginBottom: 8 }]}>Squadron Totals This Month</Text>
+                            <View className="flex-row justify-between items-center">
+                              <View className="flex-1 flex-row items-center">
+                                <Timer size={18} color="#4A90D9" />
+                                <Text className="text-white font-bold text-lg ml-2">{squadronTotals.hours.toFixed(2)}</Text>
+                                <Text className="text-af-silver text-xs ml-1">Hours</Text>
+                              </View>
+                              <View className="w-px h-8 bg-white/10 mx-3" />
+                              <View className="flex-1 flex-row items-center">
+                                <RunningIcon size={18} color="#22C55E" />
+                                <Text className="text-white font-bold text-lg ml-2">{squadronTotals.miles.toFixed(2)}</Text>
+                                <Text className="text-af-silver text-xs ml-1">Miles</Text>
+                              </View>
+                              <View className="w-px h-8 bg-white/10 mx-3" />
+                              <View className="flex-1 flex-row items-center">
+                                <Dumbbell size={18} color="#A855F7" />
+                                <Text className="text-white font-bold text-lg ml-2">{squadronTotals.workouts}</Text>
+                                <Text className="text-af-silver text-xs ml-1">Workouts</Text>
+                              </View>
+                            </View>
+                          </View>
+                        </ThemeChrome>
+                      </Animated.View>
+                    </View>
+
+                    <View style={{ width: summaryCardWidth }}>
+                      <Animated.View entering={FadeInDown.delay(225).springify()}>
+                        <ThemeChrome theme={theme} variant="feature">
+                          <View className="px-4 py-3">
+                            <Text style={[getThemeBodyStyle(theme, 11, theme.textMuted), { textTransform: 'uppercase', marginBottom: 8 }]}>Current Leaders This Month</Text>
+                            <View className="flex-row justify-between items-center">
+                              <View className="flex-1 flex-row items-center">
+                                <Timer size={18} color="#4A90D9" />
+                                <Text
+                                  style={[getThemeBodyStyle(theme, 10, theme.textPrimary), { fontWeight: '700', marginLeft: 8, flexShrink: 1 }]}
+                                  numberOfLines={1}
+                                  adjustsFontSizeToFit
+                                  minimumFontScale={0.42}
+                                >
+                                  {squadronLeaders.hours}
+                                </Text>
+                              </View>
+                              <View className="w-px h-8 bg-white/10 mx-3" />
+                              <View className="flex-1 flex-row items-center">
+                                <RunningIcon size={18} color="#22C55E" />
+                                <Text
+                                  style={[getThemeBodyStyle(theme, 10, theme.textPrimary), { fontWeight: '700', marginLeft: 8, flexShrink: 1 }]}
+                                  numberOfLines={1}
+                                  adjustsFontSizeToFit
+                                  minimumFontScale={0.42}
+                                >
+                                  {squadronLeaders.miles}
+                                </Text>
+                              </View>
+                              <View className="w-px h-8 bg-white/10 mx-3" />
+                              <View className="flex-1 flex-row items-center">
+                                <Dumbbell size={18} color="#A855F7" />
+                                <Text
+                                  style={[getThemeBodyStyle(theme, 10, theme.textPrimary), { fontWeight: '700', marginLeft: 8, flexShrink: 1 }]}
+                                  numberOfLines={1}
+                                  adjustsFontSizeToFit
+                                  minimumFontScale={0.42}
+                                >
+                                  {squadronLeaders.workouts}
+                                </Text>
+                              </View>
+                            </View>
+                          </View>
+                        </ThemeChrome>
+                      </Animated.View>
+                    </View>
+                  </View>
+
+                  <View className="mt-3 flex-row items-start" style={{ gap: 12 }}>
+                    {squadronWorkoutBreakdown.totalWorkouts > 0 ? (
+                      <Animated.View entering={FadeInDown.delay(250).springify()} style={{ width: summaryCardWidth }}>
+                        <Pressable
+                          disabled={squadronWorkoutBreakdown.breakdown.length <= 3}
+                          onPress={() => {
+                            Haptics.selectionAsync();
+                            setShowWorkoutTypesModal(true);
+                          }}
+                        >
+                          <ThemeChrome theme={theme} variant="feature">
+                            <View className="p-4 justify-between" style={{ height: 194 }}>
+                              <View className="mb-3">
+                                <View className="flex-row items-center justify-between">
+                                  <View className="flex-row items-center flex-1 pr-2">
+                                    <BarChart3 size={16} color={theme.accent} />
+                                    <Text style={[getThemeBodyStyle(theme, 11, theme.textMuted), { textTransform: 'uppercase', marginLeft: 8 }]}>Workout Types</Text>
+                                  </View>
+                                  {squadronWorkoutBreakdown.breakdown.length > 3 ? (
+                                    <Text style={getThemeBodyStyle(theme, 11, theme.accent)}>Open</Text>
+                                  ) : null}
+                                </View>
+                                <Text
+                                  style={[getThemeBodyStyle(theme, 12), { marginTop: 8, textAlign: 'left', flexShrink: 1 }]}
+                                  numberOfLines={2}
+                                  adjustsFontSizeToFit
+                                  minimumFontScale={0.68}
+                                >
+                                  {squadronWorkoutBreakdown.breakdown.length} {squadronWorkoutBreakdown.breakdown.length === 1 ? 'type' : 'types'} | {squadronWorkoutBreakdown.totalWorkouts} total {squadronWorkoutBreakdown.totalWorkouts === 1 ? 'workout' : 'workouts'}
+                                </Text>
+                              </View>
+                              {squadronWorkoutBreakdown.breakdown.slice(0, 3).map((item, index) => (
+                                <WorkoutTypeAnalyticsBar
+                                  key={item.label}
+                                  label={item.label}
+                                  count={item.count}
+                                  percentage={item.percentage}
+                                  maxPercentage={squadronWorkoutBreakdown.breakdown[0]?.percentage ?? 100}
+                                  delay={250 + index * 50}
+                                />
+                              ))}
+                              <View style={{ minHeight: 22, justifyContent: 'flex-end', paddingTop: 8 }} />
+                            </View>
+                          </ThemeChrome>
+                        </Pressable>
+                      </Animated.View>
+                    ) : null}
+
+                    {flightPointsRanking.length > 0 ? (
+                      <Animated.View entering={FadeInDown.delay(250).springify()} style={{ width: summaryCardWidth }}>
+                        <Pressable
+                          onPress={() => {
+                            Haptics.selectionAsync();
+                            setShowFlightRankings(true);
+                          }}
+                        >
+                          <ThemeChrome theme={theme} variant="feature">
+                            <View className="p-4 justify-between" style={{ height: 194 }}>
+                              <View className="mb-3">
+                                <View className="flex-row items-center justify-between">
+                                  <View className="flex-row items-center">
+                                    <Users size={16} color={theme.accent} />
+                                    <Text style={[getThemeBodyStyle(theme, 11, theme.textMuted), { textTransform: 'uppercase', marginLeft: 8 }]}>Flight Rankings</Text>
+                                  </View>
+                                  <Text style={getThemeBodyStyle(theme, 11, theme.accent)}>Open</Text>
+                                </View>
+                              </View>
+                              {topFlights.map((entry, index) => (
+                                <View
+                                  key={entry.flight}
+                                  className={index === topFlights.length - 1 ? 'flex-row items-center justify-between' : 'flex-row items-center justify-between mb-3'}
+                                >
+                                  <View className="flex-row items-center flex-1 pr-2">
+                                    {flightRankingPositions[index] === 1 ? (
+                                      <Crown size={14} color="#FFD700" />
+                                    ) : flightRankingPositions[index] === 2 ? (
+                                      <Medal size={14} color="#C0C0C0" />
+                                    ) : flightRankingPositions[index] === 3 ? (
+                                      <Medal size={14} color="#CD7F32" />
+                                    ) : (
+                                      <Text style={[getThemeBodyStyle(theme, 12, theme.textPrimary), { fontWeight: '700' }]}>
+                                        {flightRankingPositions[index]}
+                                      </Text>
+                                    )}
+                                    <Text
+                                      style={[getThemeBodyStyle(theme, 11, theme.textPrimary), { fontWeight: '600', marginLeft: 6 }]}
+                                      numberOfLines={1}
+                                      adjustsFontSizeToFit
+                                      minimumFontScale={0.72}
+                                    >
+                                      {entry.flight}
+                                    </Text>
+                                  </View>
+                                  <View className="items-end">
+                                    <Text style={getThemeHeadingStyle(theme, 14)}>{entry.averagePoints.toFixed(1)}</Text>
+                                    <Text style={getThemeBodyStyle(theme, 10, theme.textMuted)}>avg</Text>
+                                  </View>
+                                </View>
+                              ))}
+                              <View style={{ minHeight: 22, justifyContent: 'flex-end', paddingTop: 8 }} />
+                            </View>
+                          </ThemeChrome>
+                        </Pressable>
+                      </Animated.View>
+                    ) : null}
+                  </View>
+                </View>
+
+                <View className="flex-1" style={{ minWidth: desktopTopRightWidth }}>
+                  <Animated.View entering={FadeInDown.delay(275).springify()}>
+                    <View className="flex-row items-center rounded-xl px-4 py-3" style={getThemeControlStyle(theme)}>
+                      <Search size={20} color={theme.textSecondary} />
+                      <TextInput
+                        value={searchQuery}
+                        onChangeText={setSearchQuery}
+                        placeholder="Search by name or flight..."
+                        placeholderTextColor={theme.textMuted}
+                        className="flex-1 ml-3 text-base"
+                        style={{ color: theme.textPrimary }}
+                      />
+                      {searchQuery.length > 0 && (
+                        <Pressable onPress={() => setSearchQuery('')}>
+                          <X size={18} color={theme.textSecondary} />
+                        </Pressable>
+                      )}
+                    </View>
+                  </Animated.View>
+
+                  <View className="mt-3">
+                    <View className="flex-row items-center justify-between mb-3">
+                      <Text style={getThemeHeadingStyle(theme, 18)}>{currentMonthLabel} Rankings</Text>
+                      <Pressable onPress={toggleExpand} className="flex-row items-center px-3 py-1.5 rounded-full" style={getThemeControlStyle(theme)}>
+                        <Text className="text-sm mr-1" style={{ color: theme.textSecondary }}>{isExpanded ? 'Show Less' : 'Show All'}</Text>
+                        {isExpanded ? <ChevronUp size={16} color={theme.textSecondary} /> : <ChevronDown size={16} color={theme.textSecondary} />}
+                      </Pressable>
+                    </View>
+                    <View className="mb-3 items-center">
+                      <View
+                        className="flex-row items-center rounded-full px-4 py-1.5 border"
+                        style={{ backgroundColor: `${theme.accent}12`, borderColor: `${theme.accent}35` }}
+                      >
+                        <Crown size={14} color="#FFD700" />
+                        <Text
+                          style={[
+                            getThemeBodyStyle(theme, 12, theme.accentAlt),
+                            { marginLeft: 8, fontWeight: '700', letterSpacing: 1.2, textTransform: 'uppercase' },
+                          ]}
+                        >
+                          Podium
+                        </Text>
+                        <Crown size={14} color="#FFD700" style={{ marginLeft: 8 }} />
+                      </View>
+                    </View>
+                    <View className="flex-row items-start" style={{ width: '100%', gap: desktopGap }}>
+                      {displayedMembers.slice(0, 3).map((member, index) => (
+                        <LeaderboardCard
+                          key={member.id}
+                          member={member}
+                          position={displayedPositions[index] ?? index + 1}
+                          maxValues={maxValues}
+                          delay={300 + index * 50}
+                          onPress={() => handleMemberPress(member.id)}
+                          theme={theme}
+                          cardStyle={{ width: desktopTopThreeCardWidth, marginBottom: 0 }}
+                        />
+                      ))}
+                    </View>
+                  </View>
+                </View>
+              </View>
+
+              <View className="my-4 h-px bg-white/10" />
+
+              <View className="flex-row flex-wrap items-start" style={{ width: '100%', gap: desktopGap, rowGap: 12 }}>
+                {displayedMembers.slice(3).map((member, index) => (
+                  <LeaderboardCard
+                    key={member.id}
+                    member={member}
+                    position={displayedPositions[index + 3] ?? index + 4}
+                    maxValues={maxValues}
+                    delay={450 + index * 35}
+                    onPress={() => handleMemberPress(member.id)}
+                    theme={theme}
+                    cardStyle={{ width: leaderboardCardWidth, marginBottom: 0 }}
+                  />
+                ))}
+              </View>
+            </View>
+          ) : (
+            <>
+          <View
+            className={'mx-6'}
+          >
+          <Animated.View
+            entering={FadeInDown.delay(200).springify()}
+            className={'mx-0'}
+          >
             <ThemeChrome theme={theme} variant="feature">
               <View className="px-4 py-3">
                 <Text style={[getThemeBodyStyle(theme, 11, theme.textMuted), { textTransform: 'uppercase', marginBottom: 8 }]}>Squadron Totals This Month</Text>
@@ -603,7 +910,7 @@ export function LeaderboardContent({
             </ThemeChrome>
           </Animated.View>
 
-          <Animated.View entering={FadeInDown.delay(225).springify()} className="mx-6 mt-3">
+          <Animated.View entering={FadeInDown.delay(225).springify()} className="mx-0 mt-3">
             <ThemeChrome theme={theme} variant="feature">
               <View className="px-4 py-3">
                 <Text style={[getThemeBodyStyle(theme, 11, theme.textMuted), { textTransform: 'uppercase', marginBottom: 8 }]}>Current Leaders This Month</Text>
@@ -611,10 +918,10 @@ export function LeaderboardContent({
                   <View className="flex-1 flex-row items-center">
                     <Timer size={18} color="#4A90D9" />
                     <Text
-                      style={[getThemeBodyStyle(theme, 13, theme.textPrimary), { fontWeight: '700', marginLeft: 8, flexShrink: 1 }]}
+                      style={[getThemeBodyStyle(theme, 11, theme.textPrimary), { fontWeight: '700', marginLeft: 8, flexShrink: 1 }]}
                       numberOfLines={1}
                       adjustsFontSizeToFit
-                      minimumFontScale={0.72}
+                      minimumFontScale={0.5}
                     >
                       {squadronLeaders.hours}
                     </Text>
@@ -623,10 +930,10 @@ export function LeaderboardContent({
                   <View className="flex-1 flex-row items-center">
                     <RunningIcon size={18} color="#22C55E" />
                     <Text
-                      style={[getThemeBodyStyle(theme, 13, theme.textPrimary), { fontWeight: '700', marginLeft: 8, flexShrink: 1 }]}
+                      style={[getThemeBodyStyle(theme, 11, theme.textPrimary), { fontWeight: '700', marginLeft: 8, flexShrink: 1 }]}
                       numberOfLines={1}
                       adjustsFontSizeToFit
-                      minimumFontScale={0.72}
+                      minimumFontScale={0.5}
                     >
                       {squadronLeaders.miles}
                     </Text>
@@ -635,10 +942,10 @@ export function LeaderboardContent({
                   <View className="flex-1 flex-row items-center">
                     <Dumbbell size={18} color="#A855F7" />
                     <Text
-                      style={[getThemeBodyStyle(theme, 13, theme.textPrimary), { fontWeight: '700', marginLeft: 8, flexShrink: 1 }]}
+                      style={[getThemeBodyStyle(theme, 11, theme.textPrimary), { fontWeight: '700', marginLeft: 8, flexShrink: 1 }]}
                       numberOfLines={1}
                       adjustsFontSizeToFit
-                      minimumFontScale={0.72}
+                      minimumFontScale={0.5}
                     >
                       {squadronLeaders.workouts}
                     </Text>
@@ -647,12 +954,19 @@ export function LeaderboardContent({
               </View>
             </ThemeChrome>
           </Animated.View>
+          </View>
 
           {(squadronWorkoutBreakdown.totalWorkouts > 0 || flightPointsRanking.length > 0) && (
             <Animated.View entering={FadeInDown.delay(250).springify()} className="mx-6 mt-3">
-              <View className="flex-row items-stretch">
+              <View
+                className={useDesktopGrid ? 'flex-row flex-wrap items-stretch' : 'flex-row items-stretch'}
+                style={useDesktopGrid ? { gap: 12 } : undefined}
+              >
                 {squadronWorkoutBreakdown.totalWorkouts > 0 ? (
-                  <View className="flex-1 mr-2">
+                  <View
+                    className={useDesktopGrid ? '' : 'flex-1 mr-2'}
+                    style={useDesktopGrid ? { width: summaryCardWidth } : undefined}
+                  >
                     <Pressable
                       disabled={squadronWorkoutBreakdown.breakdown.length <= 3}
                       onPress={() => {
@@ -691,22 +1005,7 @@ export function LeaderboardContent({
                               delay={250 + index * 50}
                             />
                           ))}
-                          <View style={{ minHeight: 22, justifyContent: 'flex-end', paddingTop: 8 }}>
-                            {squadronWorkoutBreakdown.breakdown.length > 3 ? (
-                              <Text
-                                style={getThemeBodyStyle(theme, 11, theme.textSecondary)}
-                                numberOfLines={1}
-                                adjustsFontSizeToFit
-                                minimumFontScale={0.75}
-                              >
-                                Tap to view all {squadronWorkoutBreakdown.breakdown.length} types
-                              </Text>
-                            ) : (
-                              <Text style={getThemeBodyStyle(theme, 11, 'transparent')}>
-                                Tap to view all 000 types
-                              </Text>
-                            )}
-                          </View>
+                          <View style={{ minHeight: 22, justifyContent: 'flex-end', paddingTop: 8 }} />
                         </View>
                       </ThemeChrome>
                     </Pressable>
@@ -714,7 +1013,10 @@ export function LeaderboardContent({
                 ) : null}
 
                 {flightPointsRanking.length > 0 ? (
-                  <View className={squadronWorkoutBreakdown.totalWorkouts > 0 ? "flex-1 ml-2" : "flex-1"}>
+                  <View
+                    className={useDesktopGrid ? '' : (squadronWorkoutBreakdown.totalWorkouts > 0 ? "flex-1 ml-2" : "flex-1")}
+                    style={useDesktopGrid ? { width: summaryCardWidth } : undefined}
+                  >
                     <Pressable
                       onPress={() => {
                         Haptics.selectionAsync();
@@ -723,11 +1025,22 @@ export function LeaderboardContent({
                     >
                       <ThemeChrome theme={theme} variant="feature">
                         <View className="p-4 justify-between" style={{ height: 194 }}>
-                          <View className="mb-3">
+                          <View className={useDesktopGrid ? "mb-3" : "mb-1"}>
                             <View className="flex-row items-center justify-between">
                               <View className="flex-row items-center">
                                 <Users size={16} color={theme.accent} />
-                                <Text style={[getThemeBodyStyle(theme, 11, theme.textMuted), { textTransform: 'uppercase', marginLeft: 8 }]}>Flight Rankings</Text>
+                                <Text
+                                  style={[
+                                    getThemeBodyStyle(theme, useDesktopGrid ? 11 : 10, theme.textMuted),
+                                    {
+                                      textTransform: 'uppercase',
+                                      marginLeft: 8,
+                                      lineHeight: useDesktopGrid ? 13 : 11,
+                                    },
+                                  ]}
+                                >
+                                  {useDesktopGrid ? 'Flight Rankings' : 'Flight\nRankings'}
+                                </Text>
                               </View>
                               <Text style={getThemeBodyStyle(theme, 11, theme.accent)}>Open</Text>
                             </View>
@@ -766,17 +1079,7 @@ export function LeaderboardContent({
                             </View>
                           ))}
 
-                          <View style={{ minHeight: 22, justifyContent: 'flex-end', paddingTop: 8 }}>
-                            {flightPointsRanking.length > 2 ? (
-                              <Text style={getThemeBodyStyle(theme, 11, theme.textSecondary)}>
-                                Tap to view all {flightPointsRanking.length} flights
-                              </Text>
-                            ) : (
-                              <Text style={getThemeBodyStyle(theme, 11, 'transparent')}>
-                                Tap to view all 000 flights
-                              </Text>
-                            )}
-                          </View>
+                          <View style={{ minHeight: 22, justifyContent: 'flex-end', paddingTop: 8 }} />
                         </View>
                       </ThemeChrome>
                     </Pressable>
@@ -786,7 +1089,10 @@ export function LeaderboardContent({
             </Animated.View>
           )}
 
-          <Animated.View entering={FadeInDown.delay(275).springify()} className="mx-6 mt-3">
+          <Animated.View
+            entering={FadeInDown.delay(275).springify()}
+            className="mx-6 mt-3"
+          >
             <View className="flex-row items-center rounded-xl px-4 py-3" style={getThemeControlStyle(theme)}>
               <Search size={20} color={theme.textSecondary} />
               <TextInput
@@ -806,14 +1112,14 @@ export function LeaderboardContent({
           </Animated.View>
 
           <View className="flex-row items-center justify-between px-6 mt-3 mb-3">
-            <Text style={getThemeHeadingStyle(theme, 20)}>{isExpanded ? 'All Members' : 'Top 10 Performers'}</Text>
+            <Text style={getThemeHeadingStyle(theme, 20)}>{currentMonthLabel} Rankings</Text>
             <Pressable onPress={toggleExpand} className="flex-row items-center px-3 py-1.5 rounded-full" style={getThemeControlStyle(theme)}>
               <Text className="text-sm mr-1" style={{ color: theme.textSecondary }}>{isExpanded ? 'Show Less' : 'Show All'}</Text>
               {isExpanded ? <ChevronUp size={16} color={theme.textSecondary} /> : <ChevronDown size={16} color={theme.textSecondary} />}
             </Pressable>
           </View>
 
-          <View className="px-6">
+          <View className={'px-6'}>
             {displayedMembers.map((member, index) => (
             <LeaderboardCard
               key={member.id}
@@ -826,6 +1132,8 @@ export function LeaderboardContent({
             />
             ))}
           </View>
+            </>
+          )}
         </ScrollView>
 
         <Modal

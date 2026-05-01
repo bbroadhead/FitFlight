@@ -97,21 +97,29 @@ const scheduledSessionKindLabel = (session: ScheduledPTSession) =>
 
 function ScheduledSessionDescription({
   description,
+  location,
   onOpenWorkout,
 }: {
   description: string;
+  location?: string;
   onOpenWorkout: (workoutId: string) => void;
 }) {
   const linkedWorkout = parseScheduledWorkoutLink(description);
   const displayDescription = stripScheduledWorkoutToken(description);
 
   if (!linkedWorkout) {
-    return <Text className="text-af-silver text-sm mt-2">{displayDescription}</Text>;
+    return (
+      <View className="mt-2">
+        <Text className="text-af-silver text-sm">{displayDescription}</Text>
+        {location ? <Text className="text-af-silver text-xs mt-2">Location: {location}</Text> : null}
+      </View>
+    );
   }
 
   return (
     <View className="mt-2">
       <Text className="text-af-silver text-sm">{displayDescription}</Text>
+      {location ? <Text className="text-af-silver text-xs mt-2">Location: {location}</Text> : null}
       <Pressable onPress={() => onOpenWorkout(linkedWorkout.workoutId)} className="self-start mt-2 rounded-full border border-af-accent/40 bg-af-accent/10 px-3 py-1.5">
         <Text className="text-af-accent text-xs font-semibold">{linkedWorkout.workoutName}</Text>
       </Pressable>
@@ -159,6 +167,8 @@ export default function AttendanceScreen() {
   const [selectedScheduledDayKey, setSelectedScheduledDayKey] = useState<string | null>(null);
   const [expandedScheduledSessionIds, setExpandedScheduledSessionIds] = useState<string[]>([]);
   const contentMaxWidth = width >= 1440 ? 1320 : width >= 1180 ? 1180 : 980;
+  const useDesktopSummaryGrid = width >= 1180;
+  const desktopContentWidth = contentMaxWidth - 48;
   const [weeklyExcusedMemberIds, setWeeklyExcusedMemberIds] = useState<string[]>([]);
   const { setSwipeEnabled } = useTabSwipe();
   const flightScrollRef = useRef<ScrollView | null>(null);
@@ -200,6 +210,10 @@ export default function AttendanceScreen() {
   }, []);
 
   const dayColumnsWidth = weekDays.length * DAY_COLUMN_WIDTH;
+  const attendanceTableNaturalWidth = NAME_COLUMN_WIDTH + dayColumnsWidth + PROGRESS_COLUMN_WIDTH;
+  const desktopSideCardWidth = useDesktopSummaryGrid
+    ? Math.max(Math.floor((desktopContentWidth - attendanceTableNaturalWidth - 24) / 2), 280)
+    : 0;
   const horizontalOverflow = Math.max(dayColumnsWidth - tableViewportWidth, 0);
   const flightHorizontalOverflow = Math.max(flightStripWidth - flightViewportWidth, 0);
   const edgeThreshold = 2;
@@ -887,6 +901,123 @@ export default function AttendanceScreen() {
     setCurrentScrollX(x);
   }, []);
 
+  const renderScheduledSessionsCard = (delay: number, widthStyle?: { width: number }) => (
+    <Animated.View
+      entering={FadeInDown.delay(delay).springify()}
+      className={widthStyle ? '' : 'mb-3'}
+      style={widthStyle}
+    >
+      <Pressable
+        onPress={() => {
+          Haptics.selectionAsync();
+          setShowScheduledSessionsModal(true);
+        }}
+        className="overflow-hidden"
+      >
+        <ThemeChrome theme={theme} variant="feature">
+          <LinearGradient
+            colors={['rgba(34,197,94,0.14)', 'rgba(74,144,217,0.07)', 'rgba(255,255,255,0.02)']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={{ padding: 12 }}
+          >
+            <View className="flex-row items-center justify-between">
+              <View className="flex-row items-center flex-1 pr-3">
+                <View className="w-9 h-9 rounded-xl bg-white/10 items-center justify-center mr-3">
+                  <CalendarDays size={18} color="#22C55E" />
+                </View>
+                <View className="flex-1">
+                  <Text className="text-white font-semibold text-base">Scheduled PT This Week</Text>
+                  <Text className="text-af-silver text-xs mt-1">
+                    {selectedFlight === 'all' ? `${userSquadron} squadron view` : `${selectedFlight} flight view`}
+                  </Text>
+                </View>
+              </View>
+              <View className="rounded-xl border border-white/10 bg-black/15 px-3 py-1.5 items-center min-w-[70px]">
+                <Text className="text-af-silver text-[10px] uppercase tracking-[0.4px]">Sessions</Text>
+                <Text className="text-white text-lg font-bold mt-0.5">{scheduledSessionsThisWeek.length}</Text>
+              </View>
+            </View>
+
+            {scheduledSessionsThisWeek.length === 0 ? (
+              <Text className="text-af-silver text-xs mt-2">No scheduled PT sessions for this week.</Text>
+            ) : (
+              <View className="mt-2" style={{ gap: 6 }}>
+                {scheduledSessionsThisWeek.slice(0, 2).map((session) => (
+                  <View key={session.id} className="rounded-xl border border-white/10 bg-black/10 px-3 py-2.5">
+                    <View className="flex-row items-center justify-between">
+                      <Text className="text-white font-semibold text-sm">
+                        {format(new Date(`${session.date}T00:00:00`), 'EEE, MMM d')} at {session.time}
+                      </Text>
+                      <Text className={cn('text-[11px]', session.scope === 'personal' ? 'text-af-success' : 'text-af-silver')}>
+                        {scheduledSessionScopeLabel(session)}
+                      </Text>
+                    </View>
+                    <Text className="text-af-silver text-[11px] mt-1">{scheduledSessionKindLabel(session)}</Text>
+                  </View>
+                ))}
+                {scheduledSessionsThisWeek.length > 2 ? (
+                  <Text className="text-af-silver text-[11px]">
+                    Tap to view {scheduledSessionsThisWeek.length - 2} more scheduled session{scheduledSessionsThisWeek.length - 2 === 1 ? '' : 's'}.
+                  </Text>
+                ) : (
+                  <Text className="text-af-silver text-[11px]">Tap to view session details.</Text>
+                )}
+              </View>
+            )}
+          </LinearGradient>
+        </ThemeChrome>
+      </Pressable>
+    </Animated.View>
+  );
+
+  const renderAttendanceOverviewCard = (delay: number, widthStyle?: { width: number }) => (
+    <Animated.View
+      entering={FadeInDown.delay(delay).springify()}
+      className={widthStyle ? '' : 'mb-4'}
+      style={widthStyle}
+    >
+      <ThemeChrome theme={theme} variant="feature">
+        <LinearGradient
+          colors={['rgba(74,144,217,0.16)', 'rgba(20,184,166,0.07)', 'rgba(255,255,255,0.02)']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={{ padding: 12 }}
+        >
+          <View className="flex-row items-center justify-between gap-3">
+            <View className="flex-1">
+              <Text className="text-white font-semibold text-base">
+                {selectedFlight === 'all' ? `${userSquadron} Attendance` : formatFlightDisplay(selectedFlight)}
+              </Text>
+              <Text className="text-af-silver text-xs mt-1">
+                Tap a member for profile. Tap attendance markers to update.
+              </Text>
+            </View>
+            <View className="rounded-xl border border-white/10 bg-black/15 px-3 py-1.5 items-center min-w-[82px]">
+              <Text className="text-af-silver text-[10px] uppercase tracking-[0.4px]">Full Week Check-Ins</Text>
+              <Text className="text-white text-lg font-bold mt-0.5">{membersOnTarget}</Text>
+            </View>
+          </View>
+
+          <View className="mt-2 flex-row" style={{ gap: 8 }}>
+            <View className="flex-1 rounded-xl border border-white/10 bg-black/10 px-3 py-2">
+              <Text className="text-af-silver text-[10px] uppercase tracking-[0.4px]">Members</Text>
+              <Text className="text-white text-lg font-bold mt-0.5">{flightMembers.length}</Text>
+            </View>
+            <View className="flex-1 rounded-xl border border-white/10 bg-black/10 px-3 py-2">
+              <Text className="text-af-silver text-[10px] uppercase tracking-[0.4px]">Total Check-Ins</Text>
+              <Text className="text-white text-lg font-bold mt-0.5">{totalWeeklyCheckIns}</Text>
+            </View>
+            <View className="flex-1 rounded-xl border border-white/10 bg-black/10 px-3 py-2">
+              <Text className="text-af-silver text-[10px] uppercase tracking-[0.4px]">Avg</Text>
+              <Text className="text-white text-lg font-bold mt-0.5">{averageWeeklyCheckIns.toFixed(1)}</Text>
+            </View>
+          </View>
+        </LinearGradient>
+      </ThemeChrome>
+    </Animated.View>
+  );
+
   const buildAttendancePdfHtml = () => {
     const generatedAt = new Date().toLocaleString();
     const headerCells = weekDays
@@ -1186,11 +1317,11 @@ export default function AttendanceScreen() {
           <Animated.View entering={FadeInDown.delay(200).springify()} className="mb-4">
             <ThemeChrome theme={theme}>
             <View className="p-3">
-              <View onLayout={handleFlightStripLayout}>
-                <ScrollView
-                  ref={flightScrollRef}
-                  horizontal
-                  bounces={false}
+                <View onLayout={handleFlightStripLayout}>
+                  <ScrollView
+                    ref={flightScrollRef}
+                    horizontal
+                    bounces={false}
                   scrollEnabled={flightHorizontalOverflow > 0}
                   showsHorizontalScrollIndicator={false}
                   scrollEventThrottle={16}
@@ -1200,13 +1331,14 @@ export default function AttendanceScreen() {
                   }}
                   onTouchStart={() => setSwipeEnabled(false)}
                   onTouchEnd={() => setSwipeEnabled(true)}
-                  onTouchCancel={() => setSwipeEnabled(true)}
-                  onScrollBeginDrag={() => setSwipeEnabled(false)}
-                  onScrollEndDrag={() => setSwipeEnabled(true)}
-                  onMomentumScrollEnd={() => setSwipeEnabled(true)}
-                  style={{ flexGrow: 0 }}
-                >
-                  <View className="flex-row">
+                    onTouchCancel={() => setSwipeEnabled(true)}
+                    onScrollBeginDrag={() => setSwipeEnabled(false)}
+                    onScrollEndDrag={() => setSwipeEnabled(true)}
+                    onMomentumScrollEnd={() => setSwipeEnabled(true)}
+                    style={{ flexGrow: 0, alignSelf: useDesktopSummaryGrid ? 'center' : undefined }}
+                    contentContainerStyle={useDesktopSummaryGrid ? { justifyContent: 'center', flexGrow: 1 } : undefined}
+                  >
+                    <View className="flex-row">
                     <Pressable
                       onPress={() => {
                         setSelectedFlight('all');
@@ -1242,115 +1374,289 @@ export default function AttendanceScreen() {
             </ThemeChrome>
           </Animated.View>
 
-          <Animated.View entering={FadeInDown.delay(110).springify()} className="mb-3">
-            <Pressable
-              onPress={() => {
-                Haptics.selectionAsync();
-                setShowScheduledSessionsModal(true);
-              }}
-              className="overflow-hidden"
-            >
-              <ThemeChrome theme={theme} variant="feature">
-              <LinearGradient
-                colors={['rgba(34,197,94,0.14)', 'rgba(74,144,217,0.07)', 'rgba(255,255,255,0.02)']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={{ padding: 12 }}
-              >
-                <View className="flex-row items-center justify-between">
-                  <View className="flex-row items-center flex-1 pr-3">
-                    <View className="w-9 h-9 rounded-xl bg-white/10 items-center justify-center mr-3">
-                      <CalendarDays size={18} color="#22C55E" />
-                    </View>
-                    <View className="flex-1">
-                      <Text className="text-white font-semibold text-base">Scheduled PT This Week</Text>
-                      <Text className="text-af-silver text-xs mt-1">
-                        {selectedFlight === 'all' ? `${userSquadron} squadron view` : `${selectedFlight} flight view`}
-                      </Text>
-                    </View>
-                  </View>
-                  <View className="rounded-xl border border-white/10 bg-black/15 px-3 py-1.5 items-center min-w-[70px]">
-                    <Text className="text-af-silver text-[10px] uppercase tracking-[0.4px]">Sessions</Text>
-                    <Text className="text-white text-lg font-bold mt-0.5">{scheduledSessionsThisWeek.length}</Text>
-                  </View>
-                </View>
+          {!useDesktopSummaryGrid ? (
+            <View>
+              {renderScheduledSessionsCard(110)}
+              {renderAttendanceOverviewCard(125)}
+            </View>
+          ) : null}
 
-                {scheduledSessionsThisWeek.length === 0 ? (
-                  <Text className="text-af-silver text-xs mt-2">No scheduled PT sessions for this week.</Text>
-                ) : (
-                  <View className="mt-2" style={{ gap: 6 }}>
-                    {scheduledSessionsThisWeek.slice(0, 2).map((session) => (
-                      <View key={session.id} className="rounded-xl border border-white/10 bg-black/10 px-3 py-2.5">
-                        <View className="flex-row items-center justify-between">
-                          <Text className="text-white font-semibold text-sm">
-                            {format(new Date(`${session.date}T00:00:00`), 'EEE, MMM d')} at {session.time}
-                          </Text>
-                          <Text className={cn('text-[11px]', session.scope === 'personal' ? 'text-af-success' : 'text-af-silver')}>
-                            {scheduledSessionScopeLabel(session)}
-                          </Text>
-                        </View>
-                        <Text className="text-af-silver text-[11px] mt-1">{scheduledSessionKindLabel(session)}</Text>
+          {useDesktopSummaryGrid ? (
+            <View className="mb-4 flex-row items-start justify-center" style={{ gap: 12 }}>
+              {renderScheduledSessionsCard(110, { width: desktopSideCardWidth })}
+              <TutorialTarget id="attendance-grid">
+                <View
+                  onLayout={handleTableLayout}
+                  style={{ width: attendanceTableNaturalWidth, alignSelf: 'center' }}
+                >
+                  <ThemeChrome theme={theme}>
+                  <View className="flex-row overflow-hidden">
+                  <View style={{ width: NAME_COLUMN_WIDTH }} className="border-r border-white/10">
+                    <View className="flex-row items-center px-3" style={{ height: HEADER_HEIGHT }}>
+                      <View style={{ width: NAME_COLUMN_WIDTH - 24 }}>
+                        <Text className="text-af-silver text-xs uppercase tracking-[0.4px]">Member</Text>
                       </View>
-                    ))}
-                    {scheduledSessionsThisWeek.length > 2 ? (
-                      <Text className="text-af-silver text-[11px]">
-                        Tap to view {scheduledSessionsThisWeek.length - 2} more scheduled session{scheduledSessionsThisWeek.length - 2 === 1 ? '' : 's'}.
-                      </Text>
-                    ) : (
-                      <Text className="text-af-silver text-[11px]">Tap to view session details.</Text>
+                    </View>
+
+                    {flightMembers.map((member, index) => {
+                      const weeklyAttendance = getWeeklyAttendance(member.id);
+                      const displayName = getAttendanceDisplayName(member.id);
+                      const isExcused = isMemberWeeklyExcused(member.id);
+
+                      return (
+                        <Animated.View
+                          key={`fixed-${member.id}`}
+                          entering={FadeInUp.delay(250 + index * 50).springify()}
+                          className={cn('flex-row items-center px-3 border-t border-white/5', isExcused && 'bg-white/5 opacity-60')}
+                          style={{ height: ROW_HEIGHT }}
+                        >
+                          <Pressable
+                            onPress={() => {
+                              Haptics.selectionAsync();
+                              router.push({ pathname: '/member-profile', params: { id: member.id } });
+                            }}
+                            onLongPress={
+                              canManageWeeklyExcusals
+                                ? () => {
+                                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                                    handleToggleWeeklyExcusal(member.id);
+                                  }
+                                : undefined
+                            }
+                            style={{ width: NAME_COLUMN_WIDTH, paddingRight: 8 }}
+                          >
+                              <Text className="text-af-silver text-[11px]" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72}>{displayName.rank}</Text>
+                              <Text className="text-white font-medium mt-0.5" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.68}>{displayName.name}</Text>
+                            <Text className="text-af-silver text-xs mt-1">
+                              {isExcused ? 'Excused this week' : `${weeklyAttendance}/${getWeeklyRequiredSessions(member.id)} sessions`}
+                            </Text>
+                          </Pressable>
+                        </Animated.View>
+                      );
+                    })}
+                  </View>
+
+                  <View className="flex-1 relative">
+                    <ScrollView
+                      horizontal
+                      bounces={false}
+                      scrollEnabled={horizontalOverflow > 0}
+                      showsHorizontalScrollIndicator={false}
+                      scrollEventThrottle={16}
+                      onScroll={handleAttendanceScroll}
+                      onTouchStart={(event) => {
+                        weekTouchStartRef.current = {
+                          x: event.nativeEvent.pageX,
+                          y: event.nativeEvent.pageY,
+                        };
+                        weekDragActivatedRef.current = false;
+                        setSwipeEnabled(false);
+                      }}
+                      onTouchMove={(event) => {
+                        const start = weekTouchStartRef.current;
+                        if (!start || weekDragActivatedRef.current) {
+                          return;
+                        }
+
+                        const dx = Math.abs(event.nativeEvent.pageX - start.x);
+                        const dy = Math.abs(event.nativeEvent.pageY - start.y);
+                        if (dx > 6 || dy > 6) {
+                          weekDragActivatedRef.current = true;
+                          markAttendanceInteraction(true);
+                        }
+                      }}
+                      onTouchEnd={() => {
+                        weekTouchStartRef.current = null;
+                        setSwipeEnabled(true);
+                        if (weekDragActivatedRef.current) {
+                          weekDragActivatedRef.current = false;
+                          markAttendanceInteraction(false);
+                        }
+                      }}
+                      onTouchCancel={() => {
+                        weekTouchStartRef.current = null;
+                        setSwipeEnabled(true);
+                        if (weekDragActivatedRef.current) {
+                          weekDragActivatedRef.current = false;
+                          markAttendanceInteraction(false);
+                        }
+                      }}
+                      onScrollBeginDrag={() => {
+                        markAttendanceInteraction(true);
+                        setSwipeEnabled(false);
+                      }}
+                      onScrollEndDrag={() => {
+                        markAttendanceInteraction(false);
+                        setSwipeEnabled(true);
+                        weekDragActivatedRef.current = false;
+                      }}
+                      onMomentumScrollEnd={() => {
+                        markAttendanceInteraction(false);
+                        setSwipeEnabled(true);
+                        weekDragActivatedRef.current = false;
+                      }}
+                    >
+                      <View style={{ width: dayColumnsWidth }}>
+                        <View className="flex-row items-center" style={{ height: HEADER_HEIGHT }}>
+                            {weekDays.map((day, index) => (
+                              <Pressable
+                                key={`header-${day.toISOString()}`}
+                                style={{ width: DAY_COLUMN_WIDTH }}
+                                className="items-center justify-center"
+                                disabled={!weekScheduledIndicators[index].hasGroup && !weekScheduledIndicators[index].hasPersonal}
+                                onPress={() => handleOpenScheduledSessionsForDay(day)}
+                              >
+                                <Text className="text-af-silver text-xs uppercase tracking-[0.4px]">{format(day, 'EEE')}</Text>
+                                <View className="relative items-center justify-center mt-0.5" style={{ minWidth: 22 }}>
+                                  <Text className="text-white font-bold">{format(day, 'd')}</Text>
+                                  {(weekScheduledIndicators[index].hasGroup || weekScheduledIndicators[index].hasPersonal) ? (
+                                    <View className="absolute" style={{ right: -8, top: -1, gap: 3 }}>
+                                      {weekScheduledIndicators[index].hasGroup ? (
+                                        <View
+                                          className="rounded-full"
+                                          style={{ width: 6, height: 6, backgroundColor: '#FACC15' }}
+                                        />
+                                      ) : null}
+                                      {weekScheduledIndicators[index].hasPersonal ? (
+                                        <View
+                                          className="rounded-full"
+                                          style={{ width: 6, height: 6, backgroundColor: '#22C55E' }}
+                                        />
+                                      ) : null}
+                                    </View>
+                                  ) : null}
+                                </View>
+                              </Pressable>
+                            ))}
+                        </View>
+
+                        {flightMembers.map((member, index) => (
+                          <Animated.View
+                            key={`days-${member.id}`}
+                            entering={FadeInUp.delay(250 + index * 50).springify()}
+                            className={cn('flex-row items-center border-t border-white/5', isMemberWeeklyExcused(member.id) && 'bg-white/5 opacity-60')}
+                            style={{ height: ROW_HEIGHT }}
+                          >
+                              {weekDays.map((day) => {
+                                const isExcused = isMemberWeeklyExcused(member.id);
+                                const attending = isAttending(day, member.id, member.flight, member.squadron);
+                                const attendanceSource = getAttendanceSource(day, member.id, member.flight, member.squadron);
+                                const sourceStyle = attendanceSource ? ATTENDANCE_SOURCE_STYLE[attendanceSource] : null;
+                                return (
+                                  <Pressable
+                                  key={`${member.id}-${day.toISOString()}`}
+                                  onPress={() => {
+                                    if (suppressNextAttendancePressRef.current) {
+                                      suppressNextAttendancePressRef.current = false;
+                                      return;
+                                    }
+                                    void handleToggleAttendance(day, member.id, member.flight, member.squadron);
+                                  }}
+                                  onLongPress={() => {
+                                    void handleToggleDailyExcusal(day, member.id, member.flight, member.squadron);
+                                  }}
+                                  disabled={!canEdit || isExcused}
+                                  style={{ width: DAY_COLUMN_WIDTH }}
+                                  className="items-center"
+                                >
+                                    <View
+                                      className={cn(
+                                        'w-10 h-10 rounded-full items-center justify-center border shadow-sm',
+                                        attending
+                                          ? sourceStyle
+                                            ? `${sourceStyle.background} ${sourceStyle.border}`
+                                            : 'bg-af-success/20 border-af-success'
+                                          : 'bg-black/10 border-white/10'
+                                      )}
+                                    >
+                                      {attending ? (
+                                        <Check size={20} color={sourceStyle?.icon ?? '#22C55E'} />
+                                      ) : (
+                                        <X size={20} color="#ffffff30" />
+                                      )}
+                                    </View>
+                                  </Pressable>
+                                );
+                            })}
+                          </Animated.View>
+                        ))}
+                      </View>
+                    </ScrollView>
+
+                    {showLeftIndicator && (
+                      <View pointerEvents="none" className="absolute left-0 top-0 bottom-0 w-8 justify-center items-start">
+                        <LinearGradient
+                          colors={['rgba(10,22,40,0.95)', 'rgba(10,22,40,0)']}
+                          start={{ x: 0, y: 0.5 }}
+                          end={{ x: 1, y: 0.5 }}
+                          style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
+                        />
+                        <ChevronLeft size={16} color="#C0C0C0" />
+                      </View>
+                    )}
+
+                    {showRightIndicator && (
+                      <View pointerEvents="none" className="absolute right-0 top-0 bottom-0 w-8 justify-center items-end">
+                        <LinearGradient
+                          colors={['rgba(10,22,40,0)', 'rgba(10,22,40,0.95)']}
+                          start={{ x: 0, y: 0.5 }}
+                          end={{ x: 1, y: 0.5 }}
+                          style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
+                        />
+                        <ChevronRight size={16} color="#C0C0C0" />
+                      </View>
                     )}
                   </View>
-                )}
-              </LinearGradient>
-              </ThemeChrome>
-            </Pressable>
-          </Animated.View>
 
-          <Animated.View entering={FadeInDown.delay(125).springify()} className="mb-4">
-            <ThemeChrome theme={theme} variant="feature">
-              <LinearGradient
-                colors={['rgba(74,144,217,0.16)', 'rgba(20,184,166,0.07)', 'rgba(255,255,255,0.02)']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={{ padding: 12 }}
-              >
-                <View className="flex-row items-center justify-between gap-3">
-                  <View className="flex-1">
-                    <Text className="text-white font-semibold text-base">
-                    {selectedFlight === 'all' ? `${userSquadron} Attendance` : formatFlightDisplay(selectedFlight)}
-                    </Text>
-                    <Text className="text-af-silver text-xs mt-1">
-                      Tap a member for profile. Tap attendance markers to update.
-                    </Text>
+                  <View style={{ width: PROGRESS_COLUMN_WIDTH }} className="border-l border-white/10">
+                    <View className="items-center justify-center px-1.5" style={{ height: HEADER_HEIGHT }}>
+                      <Text className="text-af-silver text-[10px] uppercase tracking-[0.25px] text-center">Progress</Text>
+                    </View>
+
+                    {flightMembers.map((member, index) => {
+                      const weeklyAttendance = getWeeklyAttendance(member.id);
+                      const isExcused = isMemberWeeklyExcused(member.id);
+                      const weeklyRequired = getWeeklyRequiredSessions(member.id);
+                      const progressPercent = weeklyRequired > 0 ? Math.min((weeklyAttendance / weeklyRequired) * 100, 100) : 100;
+
+                      return (
+                        <Animated.View
+                          key={`progress-${member.id}`}
+                          entering={FadeInUp.delay(250 + index * 50).springify()}
+                          className="items-center justify-center border-t border-white/5"
+                          style={{ height: ROW_HEIGHT }}
+                        >
+                          <View className="w-10 h-10 items-center justify-center">
+                            <View className={cn('w-8 h-8 rounded-full border-2 items-center justify-center overflow-hidden', isExcused ? 'border-white/10 bg-white/5' : 'border-white/20 bg-black/10')}>
+                              {!isExcused ? (
+                                <View
+                                  className={cn(
+                                    'absolute bottom-0 left-0 right-0',
+                                    progressPercent >= 100 ? 'bg-af-success' : 'bg-af-accent'
+                                  )}
+                                  style={{ height: `${progressPercent}%` }}
+                                />
+                              ) : null}
+                              <Text className={cn('text-xs font-bold z-10', isExcused ? 'text-white/40' : 'text-white')}>
+                                {isExcused ? '—' : weeklyAttendance}
+                              </Text>
+                            </View>
+                          </View>
+                        </Animated.View>
+                      );
+                    })}
                   </View>
-                  <View className="rounded-xl border border-white/10 bg-black/15 px-3 py-1.5 items-center min-w-[70px]">
-                    <Text className="text-af-silver text-[10px] uppercase tracking-[0.4px]">Weekly Compliance</Text>
-                    <Text className="text-white text-lg font-bold mt-0.5">{membersOnTarget}</Text>
                   </View>
+                  </ThemeChrome>
                 </View>
-
-                <View className="mt-2 flex-row" style={{ gap: 8 }}>
-                  <View className="flex-1 rounded-xl border border-white/10 bg-black/10 px-3 py-2">
-                    <Text className="text-af-silver text-[10px] uppercase tracking-[0.4px]">Members</Text>
-                    <Text className="text-white text-lg font-bold mt-0.5">{flightMembers.length}</Text>
-                  </View>
-                  <View className="flex-1 rounded-xl border border-white/10 bg-black/10 px-3 py-2">
-                    <Text className="text-af-silver text-[10px] uppercase tracking-[0.4px]">Week</Text>
-                    <Text className="text-white text-lg font-bold mt-0.5">{totalWeeklyCheckIns}</Text>
-                  </View>
-                  <View className="flex-1 rounded-xl border border-white/10 bg-black/10 px-3 py-2">
-                    <Text className="text-af-silver text-[10px] uppercase tracking-[0.4px]">Avg</Text>
-                    <Text className="text-white text-lg font-bold mt-0.5">{averageWeeklyCheckIns.toFixed(1)}</Text>
-                  </View>
-                </View>
-              </LinearGradient>
-            </ThemeChrome>
-          </Animated.View>
-
-          <TutorialTarget id="attendance-grid">
-            <View onLayout={handleTableLayout}>
-              <ThemeChrome theme={theme}>
-              <View className="flex-row overflow-hidden">
+              </TutorialTarget>
+              {renderAttendanceOverviewCard(125, { width: desktopSideCardWidth })}
+            </View>
+          ) : (
+            <TutorialTarget id="attendance-grid">
+              <View onLayout={handleTableLayout}>
+                <ThemeChrome theme={theme}>
+                <View className="flex-row overflow-hidden">
               <View style={{ width: NAME_COLUMN_WIDTH }} className="border-r border-white/10">
                 <View className="flex-row items-center px-3" style={{ height: HEADER_HEIGHT }}>
                   <View style={{ width: NAME_COLUMN_WIDTH - 24 }}>
@@ -1610,6 +1916,7 @@ export default function AttendanceScreen() {
               </ThemeChrome>
             </View>
           </TutorialTarget>
+          )}
 
           {flightMembers.length === 0 ? (
             <View className="items-center py-12">
@@ -1720,7 +2027,7 @@ export default function AttendanceScreen() {
                           <Text style={[getThemeBodyStyle(theme, 15, theme.textPrimary), { fontWeight: '700' }]}>
                             {format(new Date(`${session.date}T00:00:00`), 'EEEE, MMM d')} at {session.time}
                           </Text>
-                          <ScheduledSessionDescription description={session.description} onOpenWorkout={handleOpenScheduledWorkout} />
+                          <ScheduledSessionDescription description={session.description} location={session.location} onOpenWorkout={handleOpenScheduledWorkout} />
                           <Text style={getThemeBodyStyle(theme, 12, theme.textSecondary)} className="mt-2">{scheduledSessionKindLabel(session)}</Text>
                           <Text style={getThemeBodyStyle(theme, 12, theme.textSecondary)} className="mt-2">
                             Scheduled by {creatorNameById.get(session.createdBy) ?? 'Unknown member'}
@@ -1814,7 +2121,7 @@ export default function AttendanceScreen() {
 
                         {expanded ? (
                           <View className="mt-3 border-t border-white/10 pt-3">
-                            <ScheduledSessionDescription description={session.description} onOpenWorkout={handleOpenScheduledWorkout} />
+                            <ScheduledSessionDescription description={session.description} location={session.location} onOpenWorkout={handleOpenScheduledWorkout} />
                             <Text style={getThemeBodyStyle(theme, 12, theme.textSecondary)} className="mt-2">{scheduledSessionKindLabel(session)}</Text>
                             <Text style={getThemeBodyStyle(theme, 12, theme.textSecondary)} className="mt-2">
                               Scheduled by {creatorNameById.get(session.createdBy) ?? 'Unknown member'}
@@ -1867,7 +2174,7 @@ export default function AttendanceScreen() {
                   {(['excused', 'manual', 'workout', 'strava', 'pfra'] as AttendanceSource[]).map((source, index) => {
                     const style = ATTENDANCE_SOURCE_STYLE[source];
                     return (
-                      <ThemeChrome key={source} theme={theme} variant={source === 'manual' || source === 'excused' ? 'feature' : 'default'} style={index < 4 ? { marginBottom: 12 } : undefined}>
+                      <ThemeChrome key={source} theme={theme} variant="feature" style={index < 4 ? { marginBottom: 12 } : undefined}>
                       <View className="p-4">
                         <View className="flex-row items-center">
                           <View className={cn('w-10 h-10 rounded-full items-center justify-center border', style.border, style.background)}>

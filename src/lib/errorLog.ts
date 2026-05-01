@@ -21,25 +21,49 @@ type ErrorLogState = {
 };
 
 const MAX_ERROR_LOG_ENTRIES = 200;
+const ERROR_LOG_DEDUPE_WINDOW_MS = 2500;
 
 export const useErrorLogStore = create<ErrorLogState>((set) => ({
   entries: [],
   currentRouteLabel: 'Unknown Screen',
   currentOverlayLabel: null,
   addEntry: (entry) =>
-    set((state) => ({
-      entries: [
-        ...state.entries,
-        {
-          id: entry.id ?? `error-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          timestamp: entry.timestamp ?? new Date().toISOString(),
-          source: entry.source,
-          message: entry.message,
-          stack: entry.stack,
-          location: entry.location,
-        },
-      ].slice(-MAX_ERROR_LOG_ENTRIES),
-    })),
+    set((state) => {
+      const nextTimestamp = entry.timestamp ?? new Date().toISOString();
+      const mostRecentMatchingEntry = [...state.entries]
+        .reverse()
+        .find((existing) => (
+          existing.message.trim() === entry.message.trim() &&
+          existing.location === entry.location &&
+          (existing.stack ?? '').trim() === (entry.stack ?? '').trim()
+        ));
+
+      if (mostRecentMatchingEntry) {
+        const existingTime = Date.parse(mostRecentMatchingEntry.timestamp);
+        const nextTime = Date.parse(nextTimestamp);
+        if (
+          Number.isFinite(existingTime) &&
+          Number.isFinite(nextTime) &&
+          nextTime - existingTime <= ERROR_LOG_DEDUPE_WINDOW_MS
+        ) {
+          return state;
+        }
+      }
+
+      return {
+        entries: [
+          ...state.entries,
+          {
+            id: entry.id ?? `error-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            timestamp: nextTimestamp,
+            source: entry.source,
+            message: entry.message,
+            stack: entry.stack,
+            location: entry.location,
+          },
+        ].slice(-MAX_ERROR_LOG_ENTRIES),
+      };
+    }),
   clearEntries: () => set({ entries: [] }),
   setCurrentRouteLabel: (currentRouteLabel) => set({ currentRouteLabel }),
   setCurrentOverlayLabel: (currentOverlayLabel) => set({ currentOverlayLabel }),
@@ -86,7 +110,8 @@ export function recordAppError(params: {
   const message = params.message ?? error?.message ?? 'Unknown error';
   const normalizedMessage = message.trim();
   const shouldIgnoreTransformOriginWarning =
-    IGNORED_ERROR_LOG_MESSAGE_PATTERNS.every((pattern) => pattern.test(normalizedMessage));
+    /invalid dom property/i.test(normalizedMessage) &&
+    (/transform-origin/i.test(normalizedMessage) || /transformOrigin/i.test(normalizedMessage));
   if (shouldIgnoreTransformOriginWarning) {
     return;
   }

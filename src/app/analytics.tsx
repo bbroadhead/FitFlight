@@ -3,7 +3,7 @@ import { View, Text, Pressable, ScrollView, Alert, Platform, Modal, ActivityIndi
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { ChevronLeft, ChevronRight, FileSpreadsheet, FileText, Users, Activity, TrendingUp, Calendar, BarChart3, Dumbbell, X } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, ChevronUp, ChevronDown, FileSpreadsheet, FileText, Users, Activity, TrendingUp, Calendar, BarChart3, Dumbbell, X } from 'lucide-react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Animated, { FadeInDown, useAnimatedStyle, useSharedValue, withSpring, withDelay } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
@@ -99,6 +99,20 @@ function formatAnalyticsViewLabel(view: AnalyticsTimeframeView) {
     default:
       return 'All-Time';
   }
+}
+
+function getAccountTypeLabel(accountType: string) {
+  return accountType === 'pfl' || accountType === 'ptl'
+    ? 'PFL'
+    : accountType === 'squadron_leadership'
+      ? 'Squadron Leadership'
+      : accountType === 'demo'
+        ? 'Demo Role'
+        : accountType === 'ufpm'
+          ? 'UFPM'
+          : accountType === 'fitflight_creator'
+            ? 'Owner'
+            : accountType;
 }
 
 function ComplianceCircle({
@@ -216,7 +230,18 @@ export default function AnalyticsScreen() {
   const [selectedPFRABatch, setSelectedPFRABatch] = useState<PFRABatchSummary | null>(null);
   const [selectedPFRABatchMembers, setSelectedPFRABatchMembers] = useState<PFRABatchMemberEntry[]>([]);
   const [isLoadingBatchMembers, setIsLoadingBatchMembers] = useState(false);
-  const contentMaxWidth = width >= 1440 ? 1320 : width >= 1180 ? 1180 : 1040;
+  const [expandedFlights, setExpandedFlights] = useState<string[]>([]);
+  const [showRecentPFRAEntries, setShowRecentPFRAEntries] = useState(false);
+  const contentMaxWidth = width >= 1680 ? 1520 : width >= 1440 ? 1400 : width >= 1180 ? 1180 : 1040;
+  const useDesktopAnalyticsGrid = width >= 1180;
+  const analyticsGridGap = 12;
+  const analyticsGridColumns = useDesktopAnalyticsGrid ? (width >= 1480 ? 4 : 3) : 1;
+  const analyticsCardWidth = useDesktopAnalyticsGrid
+    ? Math.floor((contentMaxWidth - analyticsGridGap * (analyticsGridColumns - 1)) / analyticsGridColumns)
+    : 0;
+  const analyticsWideCardWidth = useDesktopAnalyticsGrid
+    ? analyticsCardWidth * 2 + analyticsGridGap
+    : 0;
   const userSquadron = user?.squadron ?? 'Hawks';
   const members = useMemo(
     () => allMembers.filter((member) => member.squadron === userSquadron),
@@ -237,6 +262,29 @@ export default function AnalyticsScreen() {
       ? selectedMonthKey
       : availableMonthKeys[0] ?? getMonthKey();
   const activeMonthKey = visibleMonthKey;
+  const activeMonthIndex = availableMonthKeys.indexOf(activeMonthKey);
+
+  const navigateMonth = (direction: 'prev' | 'next') => {
+    if (activeMonthIndex < 0) {
+      return;
+    }
+    const nextIndex = direction === 'prev' ? activeMonthIndex + 1 : activeMonthIndex - 1;
+    const nextMonthKey = availableMonthKeys[nextIndex];
+    if (!nextMonthKey) {
+      return;
+    }
+    Haptics.selectionAsync();
+    setSelectedMonthKey(nextMonthKey);
+  };
+
+  const toggleFlightBreakdown = (flight: Flight) => {
+    Haptics.selectionAsync();
+    setExpandedFlights((current) =>
+      current.includes(flight)
+        ? current.filter((value) => value !== flight)
+        : [...current, flight]
+    );
+  };
 
   useEffect(() => {
     trackAnalyticsEvent('view_analytics_dashboard', {
@@ -296,6 +344,19 @@ export default function AnalyticsScreen() {
     const weekDates = new Set(
       Array.from({ length: 7 }, (_, index) => format(addDays(selectedWeekStart, index), 'yyyy-MM-dd'))
     );
+    const getMonthWeekStartKeys = (monthKey: string) => {
+      const monthStart = new Date(`${monthKey}-01T00:00:00`);
+      const nextMonthStart = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
+      const keys: string[] = [];
+      const cursor = startOfWeek(monthStart, { weekStartsOn: 1 });
+
+      while (cursor < nextMonthStart) {
+        keys.push(format(cursor, 'yyyy-MM-dd'));
+        cursor.setDate(cursor.getDate() + 7);
+      }
+
+      return keys;
+    };
     const totalMembers = members.length;
     const totalPFLs = members.filter((member) => member.accountType === 'pfl' || member.accountType === 'ptl').length;
     const selectedWeekSessions = ptSessions.filter((session) => weekDates.has(session.date));
@@ -333,6 +394,66 @@ export default function AnalyticsScreen() {
         ? 0
         : Math.max(WEEKLY_ATTENDANCE_TARGET - getMemberWeeklyDailyExcusals(memberId), 0);
 
+    const getMemberAttendanceForWeek = (memberId: string, weekStartKey: string) => {
+      const weekStartDate = new Date(`${weekStartKey}T00:00:00`);
+      const weekDateSet = new Set(
+        Array.from({ length: 7 }, (_, index) => format(addDays(weekStartDate, index), 'yyyy-MM-dd'))
+      );
+
+      return ptSessions.reduce((count, session) => {
+        if (!weekDateSet.has(session.date)) {
+          return count;
+        }
+        const source = session.attendeeSources?.[memberId];
+        return source && source !== 'excused' ? count + 1 : count;
+      }, 0);
+    };
+
+    const getMemberDailyExcusalsForWeek = (memberId: string, weekStartKey: string) => {
+      const weekStartDate = new Date(`${weekStartKey}T00:00:00`);
+      const weekDateSet = new Set(
+        Array.from({ length: 7 }, (_, index) => format(addDays(weekStartDate, index), 'yyyy-MM-dd'))
+      );
+
+      return ptSessions.reduce((count, session) => {
+        if (!weekDateSet.has(session.date)) {
+          return count;
+        }
+        return session.attendeeSources?.[memberId] === 'excused' ? count + 1 : count;
+      }, 0);
+    };
+
+    const getRequiredSessionsForWeek = (memberId: string, weekStartKey: string) => {
+      if (weekStartKey === format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd') && weeklyExcusedMemberIds.includes(memberId)) {
+        return 0;
+      }
+      return Math.max(WEEKLY_ATTENDANCE_TARGET - getMemberDailyExcusalsForWeek(memberId, weekStartKey), 0);
+    };
+
+    const monthWeekStartKeys = getMonthWeekStartKeys(activeMonthKey);
+
+    const getMemberMonthlyCompliance = (memberId: string) => {
+      let eligibleWeeks = 0;
+      let compliantWeeks = 0;
+
+      monthWeekStartKeys.forEach((weekStartKey) => {
+        const required = getRequiredSessionsForWeek(memberId, weekStartKey);
+        if (required <= 0) {
+          return;
+        }
+        eligibleWeeks += 1;
+        if (getMemberAttendanceForWeek(memberId, weekStartKey) >= required) {
+          compliantWeeks += 1;
+        }
+      });
+
+      return {
+        compliantWeeks,
+        eligibleWeeks,
+        percent: eligibleWeeks > 0 ? Math.round((compliantWeeks / eligibleWeeks) * 100) : 0,
+      };
+    };
+
     const memberPeriodSummaries = members.map((member) => {
       const effectiveWorkouts = getMemberEffectiveWorkouts(member, ptSessions);
       const periodWorkouts = effectiveWorkouts.filter((workout) => matchesTimeframe(workout.date));
@@ -357,6 +478,7 @@ export default function AnalyticsScreen() {
         periodMinutes,
         periodMiles: Number(periodMiles.toFixed(2)),
         periodWorkoutCount: periodWorkouts.length,
+        monthCompliance: getMemberMonthlyCompliance(member.id),
       };
     }).sort((left, right) => left.lastName.localeCompare(right.lastName) || left.firstName.localeCompare(right.firstName));
 
@@ -399,6 +521,9 @@ export default function AnalyticsScreen() {
           return source && source !== 'excused';
         }).length, 0) / flightSessions.length
         : 0;
+      const monthComplianceEntries = rawFlightMembers.map((member) => getMemberMonthlyCompliance(member.id));
+      const monthEligibleWeeks = monthComplianceEntries.reduce((sum, entry) => sum + entry.eligibleWeeks, 0);
+      const monthCompliantWeeks = monthComplianceEntries.reduce((sum, entry) => sum + entry.compliantWeeks, 0);
 
       return {
         flight,
@@ -408,8 +533,10 @@ export default function AnalyticsScreen() {
         avgAttendance: Math.round(avgAttendance * 10) / 10,
         sessions: flightSessions.length,
         weeklyCompliancePercent: eligibleMembers > 0 ? Math.round((compliantMembers / eligibleMembers) * 100) : 0,
+        monthCompliancePercent: monthEligibleWeeks > 0 ? Math.round((monthCompliantWeeks / monthEligibleWeeks) * 100) : 0,
         compliantMembers,
         eligibleMembers,
+        members: flightMembers,
       };
     });
 
@@ -435,21 +562,24 @@ export default function AnalyticsScreen() {
 
     const workoutTypeCounts = new Map<string, number>();
     WORKOUT_TYPES.forEach((type) => workoutTypeCounts.set(type, 0));
-    workoutTypeCounts.set('Attendance', 0);
     members.forEach((member) => {
       getMemberEffectiveWorkouts(member, ptSessions)
         .filter((workout) => matchesTimeframe(workout.date))
         .forEach((workout) => {
-          const label = workout.source === 'attendance' ? 'Attendance' : workout.type;
+          if (workout.source === 'attendance') {
+            return;
+          }
+          const label = workout.type;
           workoutTypeCounts.set(label, (workoutTypeCounts.get(label) ?? 0) + 1);
         });
     });
 
+    const workoutTypeTotal = Array.from(workoutTypeCounts.values()).reduce((sum, count) => sum + count, 0);
     const workoutTypeBreakdown = Array.from(workoutTypeCounts.entries())
       .map(([type, count]) => ({
         type,
         count,
-        percentage: totalWorkouts > 0 ? (count / totalWorkouts) * 100 : 0,
+        percentage: workoutTypeTotal > 0 ? (count / workoutTypeTotal) * 100 : 0,
       }))
       .filter((item) => item.count > 0)
       .sort((left, right) => right.count - left.count);
@@ -721,16 +851,7 @@ export default function AnalyticsScreen() {
         firstName: member.firstName,
         lastName: member.lastName,
         flight: member.flight,
-        role:
-                      member.accountType === 'pfl' || member.accountType === 'ptl'
-            ? 'PFL'
-            : member.accountType === 'squadron_leadership'
-              ? 'Squadron Leadership'
-              : member.accountType === 'demo'
-                ? 'Demo Role'
-                : member.accountType === 'ufpm'
-                ? 'UFPM'
-                : member.accountType,
+        role: getAccountTypeLabel(member.accountType),
         minutes: memberSummary.periodMinutes,
         miles: memberSummary.periodMiles,
         workouts: memberSummary.periodWorkoutCount,
@@ -1219,31 +1340,25 @@ export default function AnalyticsScreen() {
           ) : null}
 
           {analyticsView === 'month' ? (
-            <Animated.View entering={FadeInDown.delay(138).springify()} className="mt-4">
-              <Text className="text-white/60 text-xs uppercase tracking-wider mb-2">Report Month</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingRight: 12 }}>
-                {availableMonthKeys.map((monthKey) => (
-                  <Pressable
-                    key={monthKey}
-                    onPress={() => {
-                      Haptics.selectionAsync();
-                      setSelectedMonthKey(monthKey);
-                      setSelectedWeekStart(startOfWeek(startOfMonth(new Date(`${monthKey}-01T00:00:00`)), { weekStartsOn: 1 }));
-                    }}
-                    className={cn(
-                      "px-3 py-2 rounded-full mr-2 border",
-                      activeMonthKey === monthKey ? "bg-af-accent border-af-accent" : "bg-white/5 border-white/10"
-                    )}
-                  >
-                    <Text className={cn(
-                      "text-xs",
-                      activeMonthKey === monthKey ? "text-white font-semibold" : "text-af-silver"
-                    )}>
-                      {formatMonthLabel(monthKey)}
-                    </Text>
-                  </Pressable>
-                ))}
-              </ScrollView>
+            <Animated.View entering={FadeInDown.delay(138).springify()} className="mt-4 flex-row items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+              <Pressable
+                onPress={() => navigateMonth('prev')}
+                disabled={activeMonthIndex >= availableMonthKeys.length - 1}
+                className={cn('h-10 w-10 items-center justify-center rounded-full bg-white/10', activeMonthIndex >= availableMonthKeys.length - 1 && 'opacity-35')}
+              >
+                <ChevronLeft size={20} color="#C0C0C0" />
+              </Pressable>
+              <View className="items-center px-3">
+                <Text className="text-white font-semibold text-base">{formatMonthLabel(activeMonthKey)}</Text>
+                <Text className="mt-1 text-af-silver text-xs">All visible data reflects this month</Text>
+              </View>
+              <Pressable
+                onPress={() => navigateMonth('next')}
+                disabled={activeMonthIndex <= 0}
+                className={cn('h-10 w-10 items-center justify-center rounded-full bg-white/10', activeMonthIndex <= 0 && 'opacity-35')}
+              >
+                <ChevronRight size={20} color="#C0C0C0" />
+              </Pressable>
             </Animated.View>
           ) : null}
 
@@ -1287,9 +1402,14 @@ export default function AnalyticsScreen() {
           </Animated.View>
 
           {/* Overview Stats */}
+          <View
+            className={useDesktopAnalyticsGrid ? 'mt-4 flex-row flex-wrap items-start' : ''}
+            style={useDesktopAnalyticsGrid ? { gap: 12 } : undefined}
+          >
           <Animated.View
             entering={FadeInDown.delay(200).springify()}
-            className="mt-4 p-4 bg-white/5 rounded-2xl border border-white/10"
+            className={useDesktopAnalyticsGrid ? 'p-4 bg-white/5 rounded-2xl border border-white/10' : 'mt-4 p-4 bg-white/5 rounded-2xl border border-white/10'}
+            style={useDesktopAnalyticsGrid ? { width: analyticsWideCardWidth } : undefined}
           >
             <View className="flex-row items-start justify-between mb-3">
               <View className="flex-1 pr-3">
@@ -1299,20 +1419,19 @@ export default function AnalyticsScreen() {
             </View>
             <View className="flex-row flex-wrap">
               <View className="w-1/2 p-2">
-                <Pressable onPress={() => toggleOverviewCard('members')} className="bg-white/5 rounded-xl p-3 border border-transparent active:border-white/10">
+                <View className="bg-white/5 rounded-xl p-3 border border-transparent">
                   <View className="flex-row items-start justify-between">
                     <Users size={20} color="#4A90D9" />
-                    <Text className="text-af-accent text-xs font-semibold">Open</Text>
                   </View>
                   <Text className="text-white font-bold text-2xl mt-2">{analytics.totalMembers}</Text>
                   <Text className="text-af-silver text-xs">Total Members</Text>
-                </Pressable>
+                </View>
               </View>
               <View className="w-1/2 p-2">
                 <Pressable onPress={() => toggleOverviewCard('workouts')} className="bg-white/5 rounded-xl p-3 border border-transparent active:border-white/10">
                   <View className="flex-row items-start justify-between">
                     <Dumbbell size={20} color="#A855F7" />
-                    <Text className="text-af-accent text-xs font-semibold">Open</Text>
+                    <Text className="text-af-accent text-xs font-semibold">{expandedOverviewCard === 'workouts' ? 'Close' : 'Open'}</Text>
                   </View>
                   <Text className="text-white font-bold text-2xl mt-2">{analytics.totalWorkouts}</Text>
                   <Text className="text-af-silver text-xs">Total Workouts</Text>
@@ -1322,7 +1441,7 @@ export default function AnalyticsScreen() {
                 <Pressable onPress={() => toggleOverviewCard('sessions')} className="bg-white/5 rounded-xl p-3 border border-transparent active:border-white/10">
                   <View className="flex-row items-start justify-between">
                     <Calendar size={20} color="#22C55E" />
-                    <Text className="text-af-accent text-xs font-semibold">Open</Text>
+                    <Text className="text-af-accent text-xs font-semibold">{expandedOverviewCard === 'sessions' ? 'Close' : 'Open'}</Text>
                   </View>
                   <Text className="text-white font-bold text-2xl mt-2">{analytics.totalSessions}</Text>
                   <Text className="text-af-silver text-xs">PT Sessions Logged</Text>
@@ -1332,7 +1451,7 @@ export default function AnalyticsScreen() {
                 <Pressable onPress={() => toggleOverviewCard('pfra')} className="bg-white/5 rounded-xl p-3 border border-transparent active:border-white/10">
                   <View className="flex-row items-start justify-between">
                     <TrendingUp size={20} color="#F59E0B" />
-                    <Text className="text-af-accent text-xs font-semibold">Open</Text>
+                    <Text className="text-af-accent text-xs font-semibold">{expandedOverviewCard === 'pfra' ? 'Close' : 'Open'}</Text>
                   </View>
                   <Text className="text-white font-bold text-2xl mt-2">{analytics.avgPFRAScore}</Text>
                   <Text className="text-af-silver text-xs">Avg PFRA Score</Text>
@@ -1357,25 +1476,6 @@ export default function AnalyticsScreen() {
                 <Text className="text-white font-semibold text-sm">{analytics.excusedThisWeekCount}</Text>
               </View>
             ) : null}
-            {expandedOverviewCard === 'members' && (
-              <View className="mt-4 pt-4 border-t border-white/10">
-                    <Text className="text-white font-semibold mb-3">Squadron Members</Text>
-                {analytics.memberWeeklySummaries.map((member) => (
-                  <View key={member.id} className="flex-row items-center justify-between py-2 border-b border-white/5">
-                    <View className="flex-1 pr-3">
-                      <Text className="text-white font-medium">{member.displayName}</Text>
-                      <Text className="text-af-silver text-xs">{formatFlightDisplay(member.flight)}</Text>
-                    </View>
-                    <View className="items-end">
-                      <Text className="text-white text-sm">{member.isExcused ? 'Excused this week' : `${member.attendance}/${member.weeklyRequired} attendance`}</Text>
-                      <Text className="text-af-silver text-xs">
-                    {member.workouts} workouts, {member.minutes} min, {member.miles.toFixed(2)} mi
-                      </Text>
-                    </View>
-                  </View>
-                ))}
-              </View>
-            )}
             {expandedOverviewCard === 'workouts' && (
               <View className="mt-4 pt-4 border-t border-white/10">
                 <Text className="text-white font-semibold mb-3">Workout Details</Text>
@@ -1459,7 +1559,8 @@ export default function AnalyticsScreen() {
           {/* Activity Summary */}
           <Animated.View
             entering={FadeInDown.delay(250).springify()}
-            className="mt-4 p-4 bg-white/5 rounded-2xl border border-white/10"
+            className={useDesktopAnalyticsGrid ? 'p-4 bg-white/5 rounded-2xl border border-white/10' : 'mt-4 p-4 bg-white/5 rounded-2xl border border-white/10'}
+            style={useDesktopAnalyticsGrid ? { width: analyticsCardWidth } : undefined}
           >
             <View className="mb-4 flex-row items-center justify-between">
               <Text className="text-white font-semibold text-lg">Activity Summary</Text>
@@ -1505,13 +1606,23 @@ export default function AnalyticsScreen() {
           {analytics.recentPFRARecords.length > 0 && (
             <Animated.View
               entering={FadeInDown.delay(262).springify()}
-              className="mt-4 p-4 bg-white/5 rounded-2xl border border-white/10"
+              className={useDesktopAnalyticsGrid ? 'p-4 bg-white/5 rounded-2xl border border-white/10' : 'mt-4 p-4 bg-white/5 rounded-2xl border border-white/10'}
+              style={useDesktopAnalyticsGrid ? { width: analyticsCardWidth } : undefined}
             >
-              <View className="flex-row items-center mb-4">
+              <Pressable
+                onPress={() => {
+                  Haptics.selectionAsync();
+                  setShowRecentPFRAEntries((current) => !current);
+                }}
+                className="flex-row items-center justify-between"
+              >
+                <View className="flex-row items-center">
                 <TrendingUp size={20} color="#F59E0B" />
                 <Text className="text-white font-semibold text-lg ml-2">Recent PFRA Entries</Text>
-              </View>
-              {analytics.recentPFRARecords.map((record) => (
+                </View>
+                {showRecentPFRAEntries ? <ChevronUp size={18} color="#C0C0C0" /> : <ChevronDown size={18} color="#C0C0C0" />}
+              </Pressable>
+              {showRecentPFRAEntries ? analytics.recentPFRARecords.map((record) => (
                 <View key={record.id} className="mb-3 rounded-xl border border-white/10 bg-black/10 p-3 last:mb-0">
                   <View className="flex-row items-center justify-between">
                     <Text className="text-white font-semibold flex-1 pr-3">{record.memberName}</Text>
@@ -1522,7 +1633,9 @@ export default function AnalyticsScreen() {
                     <Text className="text-af-silver text-xs">Logged by {record.loggedByName}</Text>
                   </View>
                 </View>
-              ))}
+              )) : (
+                <Text className="mt-3 text-af-silver text-xs">Open to view recent PFRA records for this timeframe.</Text>
+              )}
             </Animated.View>
           )}
 
@@ -1532,7 +1645,8 @@ export default function AnalyticsScreen() {
                 Haptics.selectionAsync();
                 setShowPFRADetailModal(true);
               }}
-              className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4"
+              className={useDesktopAnalyticsGrid ? 'rounded-2xl border border-white/10 bg-white/5 p-4' : 'mt-4 rounded-2xl border border-white/10 bg-white/5 p-4'}
+              style={useDesktopAnalyticsGrid ? { width: analyticsWideCardWidth } : undefined}
             >
               <View className="flex-row items-center justify-between">
                 <Text className="text-white font-semibold text-lg">PFRA Leadership Summary</Text>
@@ -1604,7 +1718,7 @@ export default function AnalyticsScreen() {
           </Animated.View>
 
           {analytics.recentPFRABatches.length > 0 ? (
-            <Animated.View entering={FadeInDown.delay(272).springify()} className="mt-4 p-4 bg-white/5 rounded-2xl border border-white/10">
+            <Animated.View entering={FadeInDown.delay(272).springify()} className={useDesktopAnalyticsGrid ? 'p-4 bg-white/5 rounded-2xl border border-white/10' : 'mt-4 p-4 bg-white/5 rounded-2xl border border-white/10'} style={useDesktopAnalyticsGrid ? { width: analyticsCardWidth } : undefined}>
               <Text className="text-white font-semibold text-lg mb-3">Recent PFRA Batches</Text>
               {analytics.recentPFRABatches.map((batch) => (
                 <Pressable
@@ -1629,7 +1743,8 @@ export default function AnalyticsScreen() {
           {analytics.workoutTypeBreakdown.length > 0 && (
             <Animated.View
               entering={FadeInDown.delay(275).springify()}
-              className="mt-4 p-4 bg-white/5 rounded-2xl border border-white/10"
+              className={useDesktopAnalyticsGrid ? 'p-4 bg-white/5 rounded-2xl border border-white/10' : 'mt-4 p-4 bg-white/5 rounded-2xl border border-white/10'}
+              style={useDesktopAnalyticsGrid ? { width: analyticsCardWidth } : undefined}
             >
               <View className="flex-row items-center justify-between mb-4">
                 <View className="flex-row items-center">
@@ -1654,17 +1769,34 @@ export default function AnalyticsScreen() {
           {/* Flight Breakdown */}
           <Animated.View
             entering={FadeInDown.delay(300).springify()}
-            className="mt-4"
+            className={useDesktopAnalyticsGrid ? '' : 'mt-4'}
+            style={useDesktopAnalyticsGrid ? { width: '100%' } : undefined}
           >
             <Text className="text-white font-semibold text-lg mb-3">Flight Breakdown</Text>
             {analytics.flightStats.map((flight) => (
-              <View
+              <Pressable
                 key={flight.flight}
+                onPress={() => toggleFlightBreakdown(flight.flight)}
                 className="bg-white/5 rounded-xl p-4 mb-2 border border-white/10"
               >
                 <View className="flex-row items-center justify-between mb-2">
-                  <Text className="text-white font-semibold">{formatFlightDisplay(flight.flight)}</Text>
-                  <Text className="text-af-silver text-sm">{flight.memberCount} members</Text>
+                  <View>
+                    <Text className="text-white font-semibold">{formatFlightDisplay(flight.flight)}</Text>
+                    <Text className="text-af-silver text-sm">{flight.memberCount} members</Text>
+                  </View>
+                  <View className="flex-row items-center">
+                    {analyticsView !== 'all_time' ? (
+                      <View className="mr-3">
+                        <ComplianceCircle
+                          percent={analyticsView === 'month' ? flight.monthCompliancePercent : flight.weeklyCompliancePercent}
+                          size={46}
+                          strokeWidth={5}
+                          label={analyticsView === 'month' ? 'Monthly' : 'Weekly'}
+                        />
+                      </View>
+                    ) : null}
+                    {expandedFlights.includes(flight.flight) ? <ChevronUp size={18} color="#C0C0C0" /> : <ChevronDown size={18} color="#C0C0C0" />}
+                  </View>
                 </View>
                 <View className="flex-row items-center justify-between">
                   <View className="flex-1">
@@ -1683,18 +1815,53 @@ export default function AnalyticsScreen() {
                     <Text className="text-af-silver text-xs">Avg Attend</Text>
                     <Text className="text-white font-semibold">{flight.avgAttendance}</Text>
                   </View>
-                  <View className="ml-2">
-                    <ComplianceCircle
-                      percent={flight.weeklyCompliancePercent}
-                      size={46}
-                      strokeWidth={5}
-                      label="Weekly"
-                    />
-                  </View>
                 </View>
-              </View>
+                {expandedFlights.includes(flight.flight) ? (
+                  <View className="mt-4 border-t border-white/10 pt-4">
+                    {flight.members.length === 0 ? (
+                      <Text className="text-af-silver text-sm">No member activity recorded in this view yet.</Text>
+                    ) : (
+                      flight.members.map((member) => (
+                        <View key={member.id} className="mb-3 rounded-xl border border-white/10 bg-black/10 p-3 last:mb-0">
+                          <View className="flex-row items-center justify-between">
+                            <View className="flex-1 pr-3">
+                              <Text className="text-white font-semibold">{member.displayName}</Text>
+                              <View className="mt-1 flex-row flex-wrap items-center" style={{ gap: 8 }}>
+                                <Text className="text-af-silver text-xs">{formatFlightDisplay(member.flight)}</Text>
+                                {(() => {
+                                  const sourceMember = members.find((entry) => entry.id === member.id);
+                                  const roleLabel = sourceMember ? getAccountTypeLabel(sourceMember.accountType) : '';
+                                  return roleLabel && roleLabel !== 'standard' ? (
+                                    <View className="rounded-full border border-white/15 bg-white/10 px-2.5 py-1">
+                                      <Text className="text-af-silver text-[10px] font-semibold">{roleLabel}</Text>
+                                    </View>
+                                  ) : null;
+                                })()}
+                              </View>
+                            </View>
+                            <View className="items-end">
+                              <Text className="text-white text-sm font-semibold">{member.periodWorkoutCount} workouts</Text>
+                              <Text className="text-af-silver text-xs">{member.periodMinutes} min • {member.periodMiles.toFixed(2)} mi</Text>
+                            </View>
+                          </View>
+                          {analyticsView === 'week' ? (
+                            <Text className="mt-2 text-af-silver text-xs">
+                              {member.isExcused ? 'Excused for the selected week' : `${member.attendance}/${member.weeklyRequired} attendance for the selected week`}
+                            </Text>
+                          ) : analyticsView === 'month' ? (
+                            <Text className="mt-2 text-af-silver text-xs">
+                              Month Compliance: {member.monthCompliance.percent}% ({member.monthCompliance.compliantWeeks}/{member.monthCompliance.eligibleWeeks} eligible weeks)
+                            </Text>
+                          ) : null}
+                        </View>
+                      ))
+                    )}
+                  </View>
+                ) : null}
+              </Pressable>
             ))}
           </Animated.View>
+          </View>
           </PageContainer>
         </ScrollView>
 

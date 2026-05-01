@@ -159,6 +159,7 @@ export interface ScheduledPTSession {
   date: string; // ISO date string
   time: string; // Military time format HH:MM
   description: string;
+  location?: string;
   flights: Flight[];
   squadron: Squadron;
   createdBy: string;
@@ -386,6 +387,7 @@ export const getAutomaticAchievementIds = (
   sharedWorkouts: SharedWorkout[]
 ) => {
   const automaticAchievements = new Set<string>();
+  const currentMonthKey = getMonthKey();
   const workoutCount = member.workouts.length;
   const uniqueWorkoutTypes = new Set(member.workouts.map((workout) => workout.type)).size;
 
@@ -436,24 +438,44 @@ export const getAutomaticAchievementIds = (
   if (longestCompletedWeekStreak >= 4) automaticAchievements.add('month_streak');
   if (longestCompletedWeekStreak >= 12) automaticAchievements.add('three_month_streak');
 
-  const flightSessionsByWeek = new Map<string, { total: number; attended: number }>();
-  ptSessions
-    .filter((session) => session.flight === member.flight && session.squadron === member.squadron)
-    .forEach((session) => {
-      const weekKey = getWeekStartKey(session.date);
-      const current = flightSessionsByWeek.get(weekKey) ?? { total: 0, attended: 0 };
-      current.total += 1;
-      if (session.attendees.includes(member.id)) {
-        current.attended += 1;
-      }
-      flightSessionsByWeek.set(weekKey, current);
+  const getMonthWeekKeys = (monthKey: string) => {
+    const [year, month] = monthKey.split('-').map(Number);
+    if (!year || !month) {
+      return [];
+    }
+
+    const monthStart = new Date(year, month - 1, 1);
+    const nextMonthStart = new Date(year, month, 1);
+    const cursor = new Date(monthStart);
+    cursor.setDate(cursor.getDate() - ((cursor.getDay() + 6) % 7));
+    const keys: string[] = [];
+
+    while (cursor < nextMonthStart) {
+      keys.push(cursor.toISOString().split('T')[0]);
+      cursor.setDate(cursor.getDate() + 7);
+    }
+
+    return keys;
+  };
+
+  const effectiveWorkouts = member.workouts;
+  const closedMonthWorkoutCounts = new Map<string, Map<string, number>>();
+  effectiveWorkouts
+    .filter((workout: Workout) => workout.date.slice(0, 7) < currentMonthKey)
+    .forEach((workout: Workout) => {
+      const monthKey = workout.date.slice(0, 7);
+      const weekKey = getWeekStartKey(workout.date);
+      const countsByWeek = closedMonthWorkoutCounts.get(monthKey) ?? new Map<string, number>();
+      countsByWeek.set(weekKey, (countsByWeek.get(weekKey) ?? 0) + 1);
+      closedMonthWorkoutCounts.set(monthKey, countsByWeek);
     });
 
-  const flawlessWeeks = Array.from(flightSessionsByWeek.entries())
-    .filter(([, counts]) => counts.total > 0 && counts.attended === counts.total)
-    .map(([weekKey]) => weekKey);
+  const earnedIronWill = Array.from(closedMonthWorkoutCounts.entries()).some(([monthKey, countsByWeek]) => {
+    const monthWeekKeys = getMonthWeekKeys(monthKey);
+    return monthWeekKeys.length > 0 && monthWeekKeys.every((weekKey) => (countsByWeek.get(weekKey) ?? 0) >= member.requiredPTSessionsPerWeek);
+  });
 
-  if (countMaxConsecutiveWeeks(flawlessWeeks) >= 4) {
+  if (earnedIronWill) {
     automaticAchievements.add('iron_will');
   }
 

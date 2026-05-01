@@ -26,6 +26,13 @@ function formatReportDate(dateKey: string) {
   return `${dateKey.slice(4, 6)}/${dateKey.slice(6, 8)}`;
 }
 
+function clampPercent(value: number) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
 export default function AppUsageAnalyticsScreen() {
   const theme = useAppTheme();
   const router = useRouter();
@@ -58,7 +65,7 @@ export default function AppUsageAnalyticsScreen() {
         setWarning(null);
       }
 
-      const nextReport = await fetchGoogleAnalyticsUsage(accessToken ?? undefined);
+      const nextReport = await fetchGoogleAnalyticsUsage(accessToken ?? undefined, user?.squadron);
       setReport(nextReport);
       setError(null);
       setWarning(null);
@@ -87,6 +94,8 @@ export default function AppUsageAnalyticsScreen() {
 
   const topEvents = useMemo(() => report?.events ?? [], [report]);
   const dailyPoints = useMemo(() => report?.daily ?? [], [report]);
+  const loginPercent = clampPercent(report?.rosterSummary.loggedInPercentage ?? 0);
+  const loginProgress = `${loginPercent}%`;
 
   if (!canView) {
     return (
@@ -166,6 +175,65 @@ export default function AppUsageAnalyticsScreen() {
             <>
               <ThemeChrome theme={theme} variant="feature" style={{ marginTop: 16 }}>
               <View className="p-4">
+                <Text className="text-white font-semibold text-lg">Login Adoption</Text>
+                <Text className="text-af-silver text-xs mt-1">
+                  Supabase roster status for {report.rosterSummary.squadron}.
+                </Text>
+
+                <View className={width >= 1180 ? 'mt-4 flex-row items-center' : 'mt-4'}>
+                  <View className={width >= 1180 ? 'pr-4' : ''} style={width >= 1180 ? { width: 220 } : { alignItems: 'center' }}>
+                    <View
+                      className="items-center justify-center rounded-full border-4"
+                      style={{
+                        width: 140,
+                        height: 140,
+                        borderColor: `${theme.accent}AA`,
+                        backgroundColor: 'rgba(255,255,255,0.04)',
+                      }}
+                    >
+                      <Text style={getThemeHeadingStyle(theme, 30)}>{loginPercent}%</Text>
+                    </View>
+                    <Text style={[getThemeBodyStyle(theme, 13, theme.textSecondary), { marginTop: 14, textAlign: 'center' }]}>
+                      Members logged in at least once:
+                    </Text>
+                    <Text style={[getThemeHeadingStyle(theme, 18), { marginTop: 4, textAlign: 'center' }]}>
+                      {report.rosterSummary.loggedInMembers} / {report.rosterSummary.totalMembers}
+                    </Text>
+                  </View>
+
+                  <View className={width >= 1180 ? 'flex-1 flex-row flex-wrap' : 'mt-5 flex-row flex-wrap'} style={{ rowGap: 12 }}>
+                    <View className="w-1/2 pr-2">
+                      <View className="rounded-xl border border-white/10 bg-black/10 p-4">
+                        <Text className="text-af-silver text-xs">Never Logged In</Text>
+                        <Text className="text-white text-2xl font-bold mt-2">{report.rosterSummary.neverLoggedInMembers}</Text>
+                      </View>
+                    </View>
+                    <View className="w-1/2 pl-2">
+                      <View className="rounded-xl border border-white/10 bg-black/10 p-4">
+                        <Text className="text-af-silver text-xs">Linked Accounts</Text>
+                        <Text className="text-white text-2xl font-bold mt-2">{report.rosterSummary.linkedAuthMembers}</Text>
+                      </View>
+                    </View>
+                    <View className="w-1/2 pr-2">
+                      <View className="rounded-xl border border-white/10 bg-black/10 p-4">
+                        <Text className="text-af-silver text-xs">Strava Connected</Text>
+                        <Text className="text-white text-2xl font-bold mt-2">{report.rosterSummary.stravaConnectedMembers}</Text>
+                      </View>
+                    </View>
+                    <View className="w-1/2 pl-2">
+                      <View className="rounded-xl border border-white/10 bg-black/10 p-4">
+                        <Text className="text-af-silver text-xs">GA Active Users</Text>
+                        <Text className="text-white text-2xl font-bold mt-2">{report.summary.activeUsers}</Text>
+                        <Text className="text-af-silver text-[11px] mt-1">{report.rangeLabel}</Text>
+                      </View>
+                    </View>
+                  </View>
+                </View>
+              </View>
+              </ThemeChrome>
+
+              <ThemeChrome theme={theme} variant="feature" style={{ marginTop: 16 }}>
+              <View className="p-4">
                 <Text className="text-white font-semibold text-lg">Overview</Text>
                 <Text className="text-af-silver text-xs mt-1">
                   Property {report.propertyId}{report.measurementId ? ` | ${report.measurementId}` : ''}
@@ -196,13 +264,17 @@ export default function AppUsageAnalyticsScreen() {
                   <View className="w-1/2 pl-2 mb-3">
                     <View className="rounded-xl border border-white/10 bg-black/10 p-4">
                       <MousePointerClick size={18} color="#F59E0B" />
-                      <Text className="text-white text-2xl font-bold mt-2">{report.summary.screenPageViews}</Text>
-                      <Text className="text-af-silver text-xs mt-1">Page Views</Text>
+                      <Text className="text-white text-2xl font-bold mt-2">{report.summary.eventCount}</Text>
+                      <Text className="text-af-silver text-xs mt-1">Event Count</Text>
                     </View>
                   </View>
                 </View>
 
                 <View className="flex-row rounded-xl border border-white/10 bg-black/10 p-4 mt-1">
+                  <View className="flex-1">
+                    <Text className="text-af-silver text-xs">Page Views</Text>
+                    <Text className="text-white font-semibold text-lg mt-1">{report.summary.screenPageViews}</Text>
+                  </View>
                   <View className="flex-1">
                     <Text className="text-af-silver text-xs">Engaged Sessions</Text>
                     <Text className="text-white font-semibold text-lg mt-1">{report.summary.engagedSessions}</Text>

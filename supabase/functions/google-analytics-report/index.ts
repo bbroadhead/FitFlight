@@ -3,7 +3,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, cache-control',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
 };
 
@@ -25,6 +25,7 @@ const TRACKED_EVENT_NAMES = [
   'open_leaderboard',
   'export_analytics_report',
 ];
+const SUPPORTED_SQUADRONS = new Set(['Hawks', 'Tigers']);
 
 function json(body: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(body), {
@@ -47,6 +48,36 @@ function getEnv(name: string) {
 
 function getSupabaseAdmin() {
   return createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'));
+}
+
+function normalizePropertyId(propertyId: string) {
+  return propertyId.replace(/^properties\//i, '').trim();
+}
+
+function getRosterTableName(squadron: string) {
+  if (squadron === 'Hawks') {
+    return 'roster';
+  }
+
+  return `${squadron.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_roster`;
+}
+
+function getBooleanValue(value: unknown) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return normalized === 'true' || normalized === 't' || normalized === '1' || normalized === 'yes';
+  }
+  if (typeof value === 'number') {
+    return value === 1;
+  }
+  return false;
+}
+
+function getStringValue(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 function getServiceAccountCredentials() {
@@ -191,6 +222,48 @@ function dimensionValue(row: any, index: number) {
   return String(row?.dimensionValues?.[index]?.value ?? '');
 }
 
+async function buildRosterSummary(supabase: ReturnType<typeof createClient>, squadron: string) {
+  const rosterTable = getRosterTableName(squadron);
+  const { data: rosterRows, error: rosterError } = await supabase
+    .from(rosterTable)
+    .select('AUTH_USER_ID,HAS_LOGGED_INTO_APP');
+
+  if (rosterError) {
+    throw new Error(`Unable to load roster adoption data for ${squadron}.`);
+  }
+
+  const totalMembers = Array.isArray(rosterRows) ? rosterRows.length : 0;
+  const loggedInMembers = (rosterRows ?? []).filter((row: any) => getBooleanValue(row?.HAS_LOGGED_INTO_APP)).length;
+  const authIds = (rosterRows ?? [])
+    .map((row: any) => getStringValue(row?.AUTH_USER_ID))
+    .filter((value: string) => value.length > 0);
+
+  let stravaConnectedMembers = 0;
+  if (authIds.length > 0) {
+    const uniqueAuthIds = [...new Set(authIds)];
+    const { data: stravaRows, error: stravaError } = await supabase
+      .from('strava_connections')
+      .select('user_id')
+      .in('user_id', uniqueAuthIds);
+
+    if (stravaError) {
+      throw new Error('Unable to load Strava connection adoption data.');
+    }
+
+    stravaConnectedMembers = new Set((stravaRows ?? []).map((row: any) => String(row.user_id))).size;
+  }
+
+  return {
+    squadron,
+    totalMembers,
+    loggedInMembers,
+    neverLoggedInMembers: Math.max(totalMembers - loggedInMembers, 0),
+    linkedAuthMembers: [...new Set(authIds)].length,
+    stravaConnectedMembers,
+    loggedInPercentage: totalMembers > 0 ? Math.round((loggedInMembers / totalMembers) * 100) : 0,
+  };
+}
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -239,9 +312,13 @@ Deno.serve(async (request) => {
       return json({ error: 'You do not have permission to view app usage analytics.' }, { status: 403 });
     }
 
-    const propertyId = getEnv('GA_PROPERTY_ID');
+    const url = new URL(request.url);
+    const requestedSquadron = url.searchParams.get('squadron')?.trim() || 'Hawks';
+    const squadron = SUPPORTED_SQUADRONS.has(requestedSquadron) ? requestedSquadron : 'Hawks';
+    const propertyId = normalizePropertyId(getEnv('GA_PROPERTY_ID'));
     const measurementId = Deno.env.get('GA_MEASUREMENT_ID') ?? undefined;
     const googleAccessToken = await createServiceAccountAccessToken();
+    const rosterSummary = await buildRosterSummary(supabase, squadron);
 
     const [summaryReport, eventsReport, dailyReport] = await Promise.all([
       runReport(propertyId, googleAccessToken, {
@@ -250,6 +327,7 @@ Deno.serve(async (request) => {
           { name: 'activeUsers' },
           { name: 'newUsers' },
           { name: 'sessions' },
+          { name: 'eventCount' },
           { name: 'screenPageViews' },
           { name: 'engagedSessions' },
           { name: 'averageSessionDuration' },
@@ -295,13 +373,15 @@ Deno.serve(async (request) => {
       measurementId,
       rangeLabel: 'Last 30 days',
       generatedAt: new Date().toISOString(),
+      rosterSummary,
       summary: {
         activeUsers: metricValue(summaryRow, 0),
         newUsers: metricValue(summaryRow, 1),
         sessions: metricValue(summaryRow, 2),
-        screenPageViews: metricValue(summaryRow, 3),
-        engagedSessions: metricValue(summaryRow, 4),
-        averageSessionDuration: metricValue(summaryRow, 5),
+        eventCount: metricValue(summaryRow, 3),
+        screenPageViews: metricValue(summaryRow, 4),
+        engagedSessions: metricValue(summaryRow, 5),
+        averageSessionDuration: metricValue(summaryRow, 6),
       },
       events,
       daily,

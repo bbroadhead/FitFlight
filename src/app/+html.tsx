@@ -73,6 +73,7 @@ html {
   min-height: 100%;
   min-height: 100dvh;
   min-height: 100svh;
+  width: 100%;
 }
 
 body {
@@ -86,6 +87,7 @@ body {
   min-height: -webkit-fill-available;
   padding: 0;
   overflow: hidden;
+  overscroll-behavior-y: none;
 }
 
 input,

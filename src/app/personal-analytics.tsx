@@ -88,7 +88,10 @@ export default function PersonalAnalyticsScreen() {
     );
 
     workouts.forEach((workout) => {
-      const label = workout.source === 'attendance' ? 'Attendance' : workout.type;
+      if (workout.source === 'attendance') {
+        return;
+      }
+      const label = workout.type;
       workoutTypeCounts.set(label, (workoutTypeCounts.get(label) ?? 0) + 1);
       dailyCounts.set(workout.date, (dailyCounts.get(workout.date) ?? 0) + 1);
 

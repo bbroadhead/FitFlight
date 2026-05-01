@@ -744,6 +744,7 @@ export default function CalculatorScreen() {
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [showOfficialSaveModal, setShowOfficialSaveModal] = useState(false);
   const [showPfraActionsMenu, setShowPfraActionsMenu] = useState(false);
+  const [pfraActionsAnchor, setPfraActionsAnchor] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSavingPdf, setIsSavingPdf] = useState(false);
   const [isSavingOfficialPfRA, setIsSavingOfficialPfRA] = useState(false);
@@ -755,6 +756,13 @@ export default function CalculatorScreen() {
   const accessToken = useAuthStore((s) => s.accessToken);
   const currentMember = user ? members.find((member) => member.id === user.id) : null;
   const canBulkSavePFRA = user ? canManagePFRARecords(user.accountType) : false;
+  const pfraActionsButtonRef = useRef<View | null>(null);
+  const openPfraActionsMenu = () => {
+    pfraActionsButtonRef.current?.measureInWindow((x, y, buttonWidth, buttonHeight) => {
+      setPfraActionsAnchor({ x, y, width: buttonWidth, height: buttonHeight });
+      setShowPfraActionsMenu(true);
+    });
+  };
   const handleRefresh = async () => {
     setIsRefreshing(true);
     try {
@@ -1465,9 +1473,19 @@ export default function CalculatorScreen() {
                 </Text>
               </View>
               <TutorialTarget id="calculator-actions">
-                <View className={isCompactHeader ? "items-stretch" : "items-end"}>
+                <View
+                  ref={pfraActionsButtonRef}
+                  className={isCompactHeader ? "items-stretch" : "items-end"}
+                  style={{ position: 'relative', zIndex: 20 }}
+                >
                   <Pressable
-                    onPress={() => setShowPfraActionsMenu((current) => !current)}
+                    onPress={() => {
+                      if (showPfraActionsMenu) {
+                        setShowPfraActionsMenu(false);
+                        return;
+                      }
+                      openPfraActionsMenu();
+                    }}
                     className="rounded-xl px-4 py-2.5"
                     style={[getThemeControlStyle(theme, true), isCompactHeader ? { minWidth: 220 } : null]}
                   >
@@ -1484,8 +1502,31 @@ export default function CalculatorScreen() {
                       <Ionicons name={showPfraActionsMenu ? 'chevron-up' : 'chevron-down'} size={16} color={theme.accent} style={{ marginLeft: 8 }} />
                     </View>
                   </Pressable>
-                  {showPfraActionsMenu ? (
-                    <ThemeChrome theme={theme} style={{ marginTop: 8, minWidth: 240 }}>
+                </View>
+              </TutorialTarget>
+            </View>
+          </View>
+          <Modal
+            visible={showPfraActionsMenu}
+            transparent
+            animationType="none"
+            onRequestClose={() => setShowPfraActionsMenu(false)}
+          >
+            <View className="flex-1">
+              <Pressable className="flex-1 bg-black/12" onPress={() => setShowPfraActionsMenu(false)} />
+              {pfraActionsAnchor ? (
+                <View
+                  pointerEvents="box-none"
+                  style={{
+                    position: 'absolute',
+                    top: pfraActionsAnchor.y + pfraActionsAnchor.height + 8,
+                    left: Math.max(16, Math.min(pfraActionsAnchor.x + pfraActionsAnchor.width - 264, width - 280)),
+                    width: 264,
+                    zIndex: 999,
+                    elevation: 30,
+                  }}
+                >
+                  <ThemeChrome theme={theme} variant="feature" blurIntensity={84} forceBlur style={{ width: '100%' }}>
                     <View className="p-2">
                       <Pressable
                         onPress={() => {
@@ -1517,12 +1558,11 @@ export default function CalculatorScreen() {
                         </Pressable>
                       ) : null}
                     </View>
-                    </ThemeChrome>
-                  ) : null}
+                  </ThemeChrome>
                 </View>
-              </TutorialTarget>
+              ) : null}
             </View>
-          </View>
+          </Modal>
 
           {isWide ? (
             <View style={{ width: '100%', maxWidth: contentMaxWidth, alignSelf: 'center' }} className="px-6">

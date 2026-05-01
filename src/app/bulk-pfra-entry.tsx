@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Alert, Modal, Platform, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -11,7 +11,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { cn } from '@/lib/cn';
 import { canManagePFRARecords, formatFlightDisplay, getDisplayName, type Flight, type PFRAAccountabilityStatus, type PFRARecordType, useAuthStore, useMemberStore } from '@/lib/store';
-import { bulkSavePFRAResults, fetchAttendanceSessions, fetchPFRABatchById, fetchPFRABatchMembers, fetchPFRABatches, fetchPFRARecords, type PFRABatchSummary } from '@/lib/supabaseData';
+import { bulkSavePFRAResults, deletePFRABatch, fetchAttendanceSessions, fetchPFRABatchById, fetchPFRABatchMembers, fetchPFRABatches, fetchPFRARecords, type PFRABatchSummary } from '@/lib/supabaseData';
 import { buildBulkAssessment, createEmptyBulkPFRARow, scoreBulkPFRARow, type BulkPFRARowDraft } from '@/lib/pfraBulk';
 import { getThemeBodyStyle, getThemeControlStyle, getThemeHeadingStyle, useAppTheme } from '@/lib/theme';
 
@@ -24,6 +24,13 @@ const RECORD_TYPES: Array<{ value: Exclude<PFRARecordType, 'self'>; label: strin
 const ACCOUNTABILITY_OPTIONS: PFRAAccountabilityStatus[] = ['completed', 'pending', 'absent', 'excused', 'postponed'];
 const CELL_WIDTHS = { member: 188, status: 132, age: 64, gender: 84, body: 132, strength: 140, core: 140, cardio: 148, total: 84, result: 84 };
 type BulkSortType = 'last_name' | 'flight' | 'status';
+type ConfirmDialogState = {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  destructive?: boolean;
+  onConfirm: () => void;
+};
 
 const STATUS_SORT_ORDER: Record<PFRAAccountabilityStatus, number> = {
   completed: 0,
@@ -51,6 +58,15 @@ function ToggleChip({ active, label, onPress }: { active: boolean; label: string
     >
       <Text style={[getThemeBodyStyle(theme, 12, active ? theme.textPrimary : theme.textSecondary), { fontWeight: '600' }]}>{label}</Text>
     </Pressable>
+  );
+}
+
+function ScoreBadge({ label }: { label: string }) {
+  const theme = useAppTheme();
+  return (
+    <View className="rounded-full border px-3 py-1.5" style={{ borderColor: `${theme.accent}55`, backgroundColor: theme.accentSoft }}>
+      <Text style={[getThemeBodyStyle(theme, 12, theme.accent), { fontWeight: '600' }]}>{label}</Text>
+    </View>
   );
 }
 
@@ -113,7 +129,9 @@ export default function BulkPFRAEntryScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [isDeletingBatch, setIsDeletingBatch] = useState(false);
   const [isLoadingExistingBatch, setIsLoadingExistingBatch] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
   const [hasHydratedDraft, setHasHydratedDraft] = useState(false);
   const [hasLocalDraft, setHasLocalDraft] = useState(false);
   const [sortType, setSortType] = useState<BulkSortType>('last_name');
@@ -130,6 +148,15 @@ export default function BulkPFRAEntryScreen() {
       clearTimeout(saveStateTimeoutRef.current);
     }
   }, []);
+
+  useEffect(() => {
+    setHasHydratedDraft(false);
+    setHasLocalDraft(false);
+    setRowsByMemberId({});
+    setSelectedFlights([]);
+    setRecordType('mock');
+    setAssessmentDate(new Date());
+  }, [resolvedBatchId]);
 
   const availableMembers = useMemo(() => {
     if (selectedFlights.length === 0) {
@@ -346,9 +373,59 @@ export default function BulkPFRAEntryScreen() {
     return rows;
   }, [availableMembers, rowsByMemberId, sortType]);
   const completedRows = useMemo(() => orderedRows.filter((row) => row.accountabilityStatus === 'completed'), [orderedRows]);
+  const hasEnteredGridValues = useMemo(
+    () =>
+      Object.values(rowsByMemberId).some((row) => {
+        if (row.accountabilityStatus !== 'pending') {
+          return true;
+        }
+        return Boolean(
+          row.ageYears.trim() ||
+          row.heightIn.trim() ||
+          row.waistIn.trim() ||
+          row.strengthValue.trim() ||
+          row.coreValue.trim() ||
+          row.cardioValue.trim() ||
+          row.exemptions.waist ||
+          row.exemptions.strength ||
+          row.exemptions.core ||
+          row.exemptions.cardio
+        );
+      }),
+    [rowsByMemberId]
+  );
 
   const updateRow = (memberId: string, updater: (row: BulkPFRARowDraft) => BulkPFRARowDraft) => {
     setRowsByMemberId((current) => current[memberId] ? { ...current, [memberId]: updater(current[memberId]) } : current);
+  };
+
+  const requestConfirmation = (options: ConfirmDialogState) => {
+    setConfirmDialog(options);
+  };
+
+  const handleConfirmDialog = () => {
+    const action = confirmDialog?.onConfirm;
+    setConfirmDialog(null);
+    action?.();
+  };
+
+  const handleOpenSavedBatch = (batchId: string) => {
+    const openBatch = () => {
+      Haptics.selectionAsync();
+      router.replace(`/bulk-pfra-entry?batchId=${encodeURIComponent(batchId)}`);
+    };
+
+    if (!hasEnteredGridValues) {
+      openBatch();
+      return;
+    }
+
+    requestConfirmation({
+      title: 'Replace current bulk entry values?',
+      message: 'Opening a previous bulk save will replace the values currently entered in the Bulk Entry Grid.',
+      confirmLabel: 'Replace',
+      onConfirm: openBatch,
+    });
   };
 
   const handleToggleFlight = (flight: Flight) => {
@@ -479,6 +556,47 @@ export default function BulkPFRAEntryScreen() {
     void run();
   };
 
+  const handleDeleteBatch = (batchIdOverride?: string) => {
+    const targetBatchId = batchIdOverride ?? resolvedBatchId;
+    if (!targetBatchId) {
+      Alert.alert('No saved batch selected', 'Open a previous bulk save first, then you can delete it.');
+      return;
+    }
+    if (!accessToken) {
+      Alert.alert('Sign in required', 'You must be signed in to delete a saved bulk PFRA batch.');
+      return;
+    }
+
+    requestConfirmation({
+      title: 'Delete saved batch?',
+      message: 'This will permanently remove the saved PFRA batch and its linked entries from Supabase. This cannot be undone.',
+      confirmLabel: 'Delete',
+      destructive: true,
+      onConfirm: () => {
+        const run = async () => {
+          setIsDeletingBatch(true);
+          try {
+            await deletePFRABatch(targetBatchId, accessToken);
+            await AsyncStorage.removeItem(`fitflight-bulk-pfra:${user?.id ?? 'anon'}:${targetBatchId}`).catch(() => undefined);
+            const refreshedBatches = await fetchPFRABatches(accessToken, squadron).catch(() => []);
+            setRecentBatches(refreshedBatches);
+            setRowsByMemberId({});
+            setSelectedFlights([]);
+            Alert.alert('Batch deleted', 'The saved bulk PFRA batch was removed from Supabase.');
+            if (targetBatchId === resolvedBatchId) {
+              router.replace('/bulk-pfra-entry');
+            }
+          } catch (error) {
+            Alert.alert('Unable to delete batch', error instanceof Error ? error.message : 'Please try again.');
+          } finally {
+            setIsDeletingBatch(false);
+          }
+        };
+        void run();
+      },
+    });
+  };
+
   if (!canManage) {
     return (
       <View className="flex-1 items-center justify-center px-6" style={{ backgroundColor: theme.background }}>
@@ -503,52 +621,66 @@ export default function BulkPFRAEntryScreen() {
               <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>Fast roster entry for mock, diagnostic, and official PFRA events.</Text>
             </View>
           </View>
-          <Pressable
-            onPress={handleSave}
-            disabled={isSaving || isLoadingExistingBatch}
-            className={cn(
-              'rounded-xl border px-4 py-3',
-              isCompactMobile ? 'mt-4' : '',
-              (isSaving || isLoadingExistingBatch) && 'opacity-50'
-            )}
-            style={{ borderColor: theme.accent, backgroundColor: theme.accentSoft }}
-          >
-            <View className="flex-row items-center">
-              {isLoadingExistingBatch || saveState === 'saving' ? (
-                <ActivityIndicator size="small" color={theme.accent} />
-              ) : saveState === 'saved' ? (
-                <Check size={16} color="#22C55E" />
-              ) : saveState === 'error' ? (
-                <AlertTriangle size={16} color="#EF4444" />
-              ) : (
-                <Save size={16} color={theme.accent} />
-              )}
-              <Text
-                style={[
-                  getThemeBodyStyle(
-                    theme,
-                    14,
-                    saveState === 'saved'
-                      ? '#22C55E'
-                      : saveState === 'error'
-                        ? '#EF4444'
-                        : theme.accent
-                  ),
-                  { marginLeft: 8, fontWeight: '600' },
-                ]}
+          <View className={cn('flex-row items-center', isCompactMobile ? 'mt-4 justify-end' : '')} style={{ gap: 10 }}>
+            {resolvedBatchId ? (
+              <Pressable
+                onPress={() => handleDeleteBatch()}
+                disabled={isDeletingBatch || isSaving}
+                className={cn('rounded-xl border px-4 py-3', (isDeletingBatch || isSaving) && 'opacity-50')}
+                style={{ borderColor: '#EF4444', backgroundColor: 'rgba(239,68,68,0.12)' }}
               >
-                {isLoadingExistingBatch
-                  ? 'Loading...'
-                  : saveState === 'saving'
-                    ? 'Saving'
-                    : saveState === 'saved'
-                      ? 'Saved'
-                      : saveState === 'error'
-                        ? 'ERROR'
-                        : 'Save All'}
-              </Text>
-            </View>
-          </Pressable>
+                <View className="flex-row items-center">
+                  {isDeletingBatch ? <ActivityIndicator size="small" color="#EF4444" /> : <AlertTriangle size={16} color="#EF4444" />}
+                  <Text style={[getThemeBodyStyle(theme, 14, '#EF4444'), { marginLeft: 8, fontWeight: '600' }]}>Delete</Text>
+                </View>
+              </Pressable>
+            ) : null}
+            <Pressable
+              onPress={handleSave}
+              disabled={isSaving || isLoadingExistingBatch || isDeletingBatch}
+              className={cn(
+                'rounded-xl border px-4 py-3',
+                (isSaving || isLoadingExistingBatch || isDeletingBatch) && 'opacity-50'
+              )}
+              style={{ borderColor: theme.accent, backgroundColor: theme.accentSoft }}
+            >
+              <View className="flex-row items-center">
+                {isLoadingExistingBatch || saveState === 'saving' ? (
+                  <ActivityIndicator size="small" color={theme.accent} />
+                ) : saveState === 'saved' ? (
+                  <Check size={16} color="#22C55E" />
+                ) : saveState === 'error' ? (
+                  <AlertTriangle size={16} color="#EF4444" />
+                ) : (
+                  <Save size={16} color={theme.accent} />
+                )}
+                <Text
+                  style={[
+                    getThemeBodyStyle(
+                      theme,
+                      14,
+                      saveState === 'saved'
+                        ? '#22C55E'
+                        : saveState === 'error'
+                          ? '#EF4444'
+                          : theme.accent
+                    ),
+                    { marginLeft: 8, fontWeight: '600' },
+                  ]}
+                >
+                  {isLoadingExistingBatch
+                    ? 'Loading...'
+                    : saveState === 'saving'
+                      ? 'Saving'
+                      : saveState === 'saved'
+                        ? 'Saved'
+                        : saveState === 'error'
+                          ? 'ERROR'
+                          : 'Save All'}
+                </Text>
+              </View>
+            </Pressable>
+          </View>
         </View>
         <ScrollView className="flex-1 px-4 md:px-6" contentContainerStyle={{ paddingBottom: 40, alignItems: 'center' }} showsVerticalScrollIndicator={false}>
           <View style={{ width: '100%', maxWidth: contentMaxWidth }}>
@@ -667,6 +799,9 @@ export default function BulkPFRAEntryScreen() {
               <History size={18} color={theme.textSecondary} />
               <Text style={[getThemeHeadingStyle(theme, 18), { marginLeft: 8 }]}>Previous Bulk Saves</Text>
             </View>
+            <Text style={[getThemeBodyStyle(theme, 13, theme.textSecondary), { marginTop: 10 }]}>
+              Opening a previous save fills the Bulk Entry Grid with that batch&apos;s saved values.
+            </Text>
             {recentBatches.length === 0 ? (
               <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 12 }]}>No saved PFRA batches found for this squadron yet.</Text>
             ) : (
@@ -674,13 +809,28 @@ export default function BulkPFRAEntryScreen() {
                 {recentBatches.slice(0, 8).map((batch) => (
                   <Pressable
                     key={batch.id}
-                    onPress={() => router.push(`/bulk-pfra-entry?batchId=${encodeURIComponent(batch.id)}`)}
+                    onPress={() => handleOpenSavedBatch(batch.id)}
                     className="mb-3 rounded-xl border px-4 py-3 last:mb-0"
-                    style={{ borderColor: theme.border, backgroundColor: theme.surfaceAlt }}
+                    style={{
+                      borderColor: resolvedBatchId === batch.id ? theme.accent : theme.border,
+                      backgroundColor: resolvedBatchId === batch.id ? theme.accentSoft : theme.surfaceAlt,
+                    }}
                   >
                     <View className="flex-row items-center justify-between">
                       <Text style={[getThemeBodyStyle(theme, 14, theme.textPrimary), { fontWeight: '600' }]}>{batch.assessmentDate} • {batch.recordType.toUpperCase()}</Text>
-                      <Text style={[getThemeBodyStyle(theme, 14, theme.accent), { fontWeight: '600' }]}>Open</Text>
+                      <View className="flex-row items-center" style={{ gap: 10 }}>
+                        {resolvedBatchId === batch.id ? (
+                          <View
+                            className="rounded-full border px-2.5 py-1"
+                            style={{ borderColor: `${theme.accent}88`, backgroundColor: 'rgba(74,144,217,0.16)' }}
+                          >
+                            <Text style={[getThemeBodyStyle(theme, 11, theme.accent), { fontWeight: '700' }]}>Opened</Text>
+                          </View>
+                        ) : null}
+                        <Text style={[getThemeBodyStyle(theme, 14, theme.accent), { fontWeight: '600' }]}>
+                          {resolvedBatchId === batch.id ? 'Loaded' : 'Open'}
+                        </Text>
+                      </View>
                     </View>
                     <Text style={[getThemeBodyStyle(theme, 12, theme.textSecondary), { marginTop: 8 }]}>
                       {batch.selectedFlights.join(', ')} • {batch.completedCount}/{batch.expectedCount} completed • Saved by {batch.createdByName}
@@ -704,7 +854,7 @@ export default function BulkPFRAEntryScreen() {
                   const greyedOut = isGreyedOut(row.accountabilityStatus);
                   const scored = scoreBulkPFRARow(row);
                   return (
-                    <View key={row.memberId} className={cn('mb-4 rounded-2xl border border-white/10 bg-black/15 p-4', greyedOut && 'opacity-50')}>
+                    <View key={row.memberId} className={cn('mb-5 rounded-2xl border border-white/10 bg-black/15 p-4', greyedOut && 'opacity-50')}>
                       <View className="flex-row items-start justify-between">
                         <View className="flex-1 pr-3">
                           <Text className="text-white font-semibold">{row.memberName}</Text>
@@ -743,7 +893,7 @@ export default function BulkPFRAEntryScreen() {
                         </View>
                       </View>
 
-                      <View className="mt-4 rounded-xl border border-white/10 bg-white/5 p-3">
+                      <View className="mt-3 rounded-xl border border-white/10 bg-white/5 p-3">
                         <Text className="text-white font-semibold">Body Composition</Text>
                         <View className="mt-3 flex-row" style={{ gap: 12 }}>
                           <View className="flex-1">
@@ -753,12 +903,13 @@ export default function BulkPFRAEntryScreen() {
                             <SmallInput value={row.waistIn} onChangeText={(value) => updateRow(row.memberId, (current) => ({ ...current, waistIn: value.replace(/[^0-9.]/g, '') }))} placeholder="Waist (in)" editable={!greyedOut && !row.exemptions.waist} />
                           </View>
                         </View>
-                        <View className="mt-3 self-start">
-                          <ToggleChip active={row.exemptions.waist} label={`Exempt ${scored.waistScore.toFixed(1)}`} onPress={() => updateRow(row.memberId, (current) => ({ ...current, exemptions: { ...current.exemptions, waist: !current.exemptions.waist } }))} />
+                        <View className="mt-3 flex-row items-center self-start" style={{ gap: 8 }}>
+                          <ScoreBadge label={`${scored.waistScore.toFixed(1)} pts`} />
+                          <ToggleChip active={row.exemptions.waist} label="Exempt" onPress={() => updateRow(row.memberId, (current) => ({ ...current, exemptions: { ...current.exemptions, waist: !current.exemptions.waist } }))} />
                         </View>
                       </View>
 
-                      <View className="mt-4 rounded-xl border border-white/10 bg-white/5 p-3">
+                      <View className="mt-3 rounded-xl border border-white/10 bg-white/5 p-3">
                         <Text className="text-white font-semibold">Strength</Text>
                         <View className="mt-3 flex-row flex-wrap" style={{ gap: 8 }}>
                           <ToggleChip active={row.strengthTest === 'pushups'} label="Push-ups" onPress={() => updateRow(row.memberId, (current) => ({ ...current, strengthTest: 'pushups' }))} />
@@ -767,12 +918,13 @@ export default function BulkPFRAEntryScreen() {
                         <View className="mt-3">
                           <SmallInput value={row.strengthValue} onChangeText={(value) => updateRow(row.memberId, (current) => ({ ...current, strengthValue: value }))} placeholder="Reps" editable={!greyedOut && !row.exemptions.strength} />
                         </View>
-                        <View className="mt-3 self-start">
-                          <ToggleChip active={row.exemptions.strength} label={`Exempt ${scored.strengthScore.toFixed(1)}`} onPress={() => updateRow(row.memberId, (current) => ({ ...current, exemptions: { ...current.exemptions, strength: !current.exemptions.strength } }))} />
+                        <View className="mt-3 flex-row items-center self-start" style={{ gap: 8 }}>
+                          <ScoreBadge label={`${scored.strengthScore.toFixed(1)} pts`} />
+                          <ToggleChip active={row.exemptions.strength} label="Exempt" onPress={() => updateRow(row.memberId, (current) => ({ ...current, exemptions: { ...current.exemptions, strength: !current.exemptions.strength } }))} />
                         </View>
                       </View>
 
-                      <View className="mt-4 rounded-xl border border-white/10 bg-white/5 p-3">
+                      <View className="mt-3 rounded-xl border border-white/10 bg-white/5 p-3">
                         <Text className="text-white font-semibold">Core</Text>
                         <View className="mt-3 flex-row flex-wrap" style={{ gap: 8 }}>
                           <ToggleChip active={row.coreTest === 'situps'} label="Sit-ups" onPress={() => updateRow(row.memberId, (current) => ({ ...current, coreTest: 'situps' }))} />
@@ -782,12 +934,13 @@ export default function BulkPFRAEntryScreen() {
                         <View className="mt-3">
                           <SmallInput value={row.coreValue} onChangeText={(value) => updateRow(row.memberId, (current) => ({ ...current, coreValue: row.coreTest === 'plank' ? normalizeTimeLikeInput(value) : value.replace(/[^0-9]/g, '') }))} placeholder={row.coreTest === 'plank' ? 'mm:ss' : 'Reps'} editable={!greyedOut && !row.exemptions.core} />
                         </View>
-                        <View className="mt-3 self-start">
-                          <ToggleChip active={row.exemptions.core} label={`Exempt ${scored.coreScore.toFixed(1)}`} onPress={() => updateRow(row.memberId, (current) => ({ ...current, exemptions: { ...current.exemptions, core: !current.exemptions.core } }))} />
+                        <View className="mt-3 flex-row items-center self-start" style={{ gap: 8 }}>
+                          <ScoreBadge label={`${scored.coreScore.toFixed(1)} pts`} />
+                          <ToggleChip active={row.exemptions.core} label="Exempt" onPress={() => updateRow(row.memberId, (current) => ({ ...current, exemptions: { ...current.exemptions, core: !current.exemptions.core } }))} />
                         </View>
                       </View>
 
-                      <View className="mt-4 rounded-xl border border-white/10 bg-white/5 p-3">
+                      <View className="mt-3 rounded-xl border border-white/10 bg-white/5 p-3">
                         <Text className="text-white font-semibold">Cardio</Text>
                         <View className="mt-3 flex-row flex-wrap" style={{ gap: 8 }}>
                           <ToggleChip active={row.cardioTest === 'run_2mile'} label="Run" onPress={() => updateRow(row.memberId, (current) => ({ ...current, cardioTest: 'run_2mile' }))} />
@@ -797,8 +950,9 @@ export default function BulkPFRAEntryScreen() {
                         <View className="mt-3">
                           <SmallInput value={row.cardioValue} onChangeText={(value) => updateRow(row.memberId, (current) => ({ ...current, cardioValue: row.cardioTest === 'hamr_20m' ? value.replace(/[^0-9]/g, '') : normalizeTimeLikeInput(value) }))} placeholder={row.cardioTest === 'hamr_20m' ? 'Shuttles' : 'mm:ss'} editable={!greyedOut && !row.exemptions.cardio} />
                         </View>
-                        <View className="mt-3 self-start">
-                          <ToggleChip active={row.exemptions.cardio} label={row.cardioTest === 'walk_2k' ? (scored.walkPass ? 'Walk Pass' : 'Walk Fail') : `Exempt ${scored.cardioScore.toFixed(1)}`} onPress={() => updateRow(row.memberId, (current) => ({ ...current, exemptions: { ...current.exemptions, cardio: !current.exemptions.cardio } }))} />
+                        <View className="mt-3 flex-row items-center self-start" style={{ gap: 8 }}>
+                          <ScoreBadge label={row.cardioTest === 'walk_2k' ? (scored.walkPass ? 'Walk Pass' : 'Walk Fail') : `${scored.cardioScore.toFixed(1)} pts`} />
+                          <ToggleChip active={row.exemptions.cardio} label="Exempt" onPress={() => updateRow(row.memberId, (current) => ({ ...current, exemptions: { ...current.exemptions, cardio: !current.exemptions.cardio } }))} />
                         </View>
                       </View>
                     </View>
@@ -856,8 +1010,9 @@ export default function BulkPFRAEntryScreen() {
                       <View className="mt-2">
                           <SmallInput value={row.waistIn} onChangeText={(value) => updateRow(row.memberId, (current) => ({ ...current, waistIn: value.replace(/[^0-9.]/g, '') }))} placeholder="Waist (in)" editable={!greyedOut && !row.exemptions.waist} />
                         </View>
-                        <View className="mt-2">
-                          <ToggleChip active={row.exemptions.waist} label={`Exempt ${scored.waistScore.toFixed(1)}`} onPress={() => updateRow(row.memberId, (current) => ({ ...current, exemptions: { ...current.exemptions, waist: !current.exemptions.waist } }))} />
+                        <View className="mt-2 flex-row flex-wrap items-center" style={{ gap: 8 }}>
+                          <ScoreBadge label={`${scored.waistScore.toFixed(1)} pts`} />
+                          <ToggleChip active={row.exemptions.waist} label="Exempt" onPress={() => updateRow(row.memberId, (current) => ({ ...current, exemptions: { ...current.exemptions, waist: !current.exemptions.waist } }))} />
                         </View>
                       </View>
                       <View style={{ width: CELL_WIDTHS.strength }} className="px-2 py-3 border-r border-white/10">
@@ -868,8 +1023,9 @@ export default function BulkPFRAEntryScreen() {
                         <View className="mt-2">
                           <SmallInput value={row.strengthValue} onChangeText={(value) => updateRow(row.memberId, (current) => ({ ...current, strengthValue: value }))} placeholder="Reps" editable={!greyedOut && !row.exemptions.strength} />
                         </View>
-                        <View className="mt-2">
-                          <ToggleChip active={row.exemptions.strength} label={`Exempt ${scored.strengthScore.toFixed(1)}`} onPress={() => updateRow(row.memberId, (current) => ({ ...current, exemptions: { ...current.exemptions, strength: !current.exemptions.strength } }))} />
+                        <View className="mt-2 flex-row flex-wrap items-center" style={{ gap: 8 }}>
+                          <ScoreBadge label={`${scored.strengthScore.toFixed(1)} pts`} />
+                          <ToggleChip active={row.exemptions.strength} label="Exempt" onPress={() => updateRow(row.memberId, (current) => ({ ...current, exemptions: { ...current.exemptions, strength: !current.exemptions.strength } }))} />
                         </View>
                       </View>
                       <View style={{ width: CELL_WIDTHS.core }} className="px-2 py-3 border-r border-white/10">
@@ -883,8 +1039,9 @@ export default function BulkPFRAEntryScreen() {
                         <View className="mt-2">
                           <SmallInput value={row.coreValue} onChangeText={(value) => updateRow(row.memberId, (current) => ({ ...current, coreValue: row.coreTest === 'plank' ? normalizeTimeLikeInput(value) : value.replace(/[^0-9]/g, '') }))} placeholder={row.coreTest === 'plank' ? 'mm:ss' : 'Reps'} editable={!greyedOut && !row.exemptions.core} />
                         </View>
-                        <View className="mt-2">
-                          <ToggleChip active={row.exemptions.core} label={`Exempt ${scored.coreScore.toFixed(1)}`} onPress={() => updateRow(row.memberId, (current) => ({ ...current, exemptions: { ...current.exemptions, core: !current.exemptions.core } }))} />
+                        <View className="mt-2 flex-row flex-wrap items-center" style={{ gap: 8 }}>
+                          <ScoreBadge label={`${scored.coreScore.toFixed(1)} pts`} />
+                          <ToggleChip active={row.exemptions.core} label="Exempt" onPress={() => updateRow(row.memberId, (current) => ({ ...current, exemptions: { ...current.exemptions, core: !current.exemptions.core } }))} />
                         </View>
                       </View>
                       <View style={{ width: CELL_WIDTHS.cardio }} className="px-2 py-3 border-r border-white/10">
@@ -898,8 +1055,9 @@ export default function BulkPFRAEntryScreen() {
                         <View className="mt-2">
                           <SmallInput value={row.cardioValue} onChangeText={(value) => updateRow(row.memberId, (current) => ({ ...current, cardioValue: row.cardioTest === 'hamr_20m' ? value.replace(/[^0-9]/g, '') : normalizeTimeLikeInput(value) }))} placeholder={row.cardioTest === 'hamr_20m' ? 'Shuttles' : 'mm:ss'} editable={!greyedOut && !row.exemptions.cardio} />
                         </View>
-                        <View className="mt-2">
-                          <ToggleChip active={row.exemptions.cardio} label={row.cardioTest === 'walk_2k' ? (scored.walkPass ? 'Walk Pass' : 'Walk Fail') : `Exempt ${scored.cardioScore.toFixed(1)}`} onPress={() => updateRow(row.memberId, (current) => ({ ...current, exemptions: { ...current.exemptions, cardio: !current.exemptions.cardio } }))} />
+                        <View className="mt-2 flex-row flex-wrap items-center" style={{ gap: 8 }}>
+                          <ScoreBadge label={row.cardioTest === 'walk_2k' ? (scored.walkPass ? 'Walk Pass' : 'Walk Fail') : `${scored.cardioScore.toFixed(1)} pts`} />
+                          <ToggleChip active={row.exemptions.cardio} label="Exempt" onPress={() => updateRow(row.memberId, (current) => ({ ...current, exemptions: { ...current.exemptions, cardio: !current.exemptions.cardio } }))} />
                         </View>
                       </View>
                       <View style={{ width: CELL_WIDTHS.total }} className="px-3 py-3 border-r border-white/10 items-center justify-center">
@@ -918,6 +1076,59 @@ export default function BulkPFRAEntryScreen() {
           </ThemeChrome>
           </View>
         </ScrollView>
+        <Modal
+          visible={Boolean(confirmDialog)}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setConfirmDialog(null)}
+        >
+          <View className="flex-1 items-center justify-center px-6" style={{ backgroundColor: 'rgba(3, 7, 18, 0.7)' }}>
+            <Pressable className="absolute inset-0" onPress={() => setConfirmDialog(null)} />
+            <View style={{ width: '100%', maxWidth: 440 }}>
+              <ThemeChrome theme={theme} variant="feature" blurIntensity={88} forceBlur>
+                <View className="p-5">
+                  <Text style={getThemeHeadingStyle(theme, 20)}>{confirmDialog?.title}</Text>
+                  <Text
+                    style={[
+                      getThemeBodyStyle(theme, 14, theme.textSecondary),
+                      { marginTop: 12, lineHeight: 22 },
+                    ]}
+                  >
+                    {confirmDialog?.message}
+                  </Text>
+                  <View className="mt-5 flex-row justify-end" style={{ gap: 10 }}>
+                    <Pressable
+                      onPress={() => setConfirmDialog(null)}
+                      className="rounded-xl border px-4 py-3"
+                      style={getThemeControlStyle(theme)}
+                    >
+                      <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { fontWeight: '600' }]}>
+                        Cancel
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={handleConfirmDialog}
+                      className="rounded-xl border px-4 py-3"
+                      style={{
+                        borderColor: confirmDialog?.destructive ? '#EF4444' : theme.accent,
+                        backgroundColor: confirmDialog?.destructive ? 'rgba(239,68,68,0.14)' : theme.accentSoft,
+                      }}
+                    >
+                      <Text
+                        style={[
+                          getThemeBodyStyle(theme, 14, confirmDialog?.destructive ? '#EF4444' : theme.accent),
+                          { fontWeight: '700' },
+                        ]}
+                      >
+                        {confirmDialog?.confirmLabel ?? 'Confirm'}
+                      </Text>
+                    </Pressable>
+                  </View>
+                </View>
+              </ThemeChrome>
+            </View>
+          </View>
+        </Modal>
       </SafeAreaView>
     </View>
   );
