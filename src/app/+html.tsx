@@ -71,8 +71,8 @@ html {
   background-color: #0A1628;
   height: 100%;
   min-height: 100%;
+  height: 100dvh;
   min-height: 100dvh;
-  min-height: 100svh;
   width: 100%;
 }
 
@@ -80,11 +80,9 @@ body {
   background-color: #0A1628;
   margin: 0;
   width: 100%;
-  height: 100%;
-  min-height: 100vh;
+  height: 100dvh;
   min-height: 100dvh;
-  min-height: 100svh;
-  min-height: -webkit-fill-available;
+  min-height: 100vh;
   padding: 0;
   overflow: hidden;
   overscroll-behavior-y: none;
@@ -100,22 +98,21 @@ body > div:first-child,
 #root,
 [data-expo-root] {
   width: 100%;
-  height: 100%;
-  min-height: 100vh;
+  height: 100dvh;
   min-height: 100dvh;
-  min-height: 100svh;
-  min-height: -webkit-fill-available;
+  min-height: 100vh;
   background-color: #0A1628;
   overflow: hidden;
 }
 
-@supports (-webkit-touch-callout: none) {
+@supports (height: 100lvh) {
   html,
   body,
   body > div:first-child,
   #root,
   [data-expo-root] {
-    height: -webkit-fill-available;
+    height: 100lvh;
+    min-height: 100lvh;
   }
 }
 

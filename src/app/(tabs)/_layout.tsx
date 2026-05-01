@@ -50,7 +50,7 @@ function TabsInner() {
     typeof window !== 'undefined' &&
     (window.matchMedia?.('(display-mode: standalone)')?.matches ||
       ((window.navigator as Navigator & { standalone?: boolean }).standalone ?? false));
-  const tabBarBottomInset = 0;
+  const tabBarBottomInset = Platform.OS === 'web' ? ('env(safe-area-inset-bottom)' as unknown as number) : 0;
   const tabBarHeight = 66;
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const hasCheckedAuth = useAuthStore((state) => state.hasCheckedAuth);
@@ -733,10 +733,11 @@ function TabsInner() {
             backgroundColor: theme.tabBar,
             borderTopWidth: 1,
             borderTopColor: theme.tabBarBorder,
-          height: tabBarHeight,
+          height: Platform.OS === 'web' ? undefined : tabBarHeight,
+          minHeight: tabBarHeight,
           paddingBottom: tabBarBottomInset,
           paddingTop: 0,
-          position: "absolute",
+          position: Platform.OS === 'web' ? ("fixed" as const) : "absolute",
           left: 0,
           right: 0,
           bottom: 0,

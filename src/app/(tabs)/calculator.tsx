@@ -1506,64 +1506,6 @@ export default function CalculatorScreen() {
               </TutorialTarget>
             </View>
           </View>
-          <Modal
-            visible={showPfraActionsMenu}
-            transparent
-            animationType="none"
-            onRequestClose={() => setShowPfraActionsMenu(false)}
-          >
-            <View className="flex-1">
-              <Pressable className="flex-1 bg-black/12" onPress={() => setShowPfraActionsMenu(false)} />
-              {pfraActionsAnchor ? (
-                <View
-                  pointerEvents="box-none"
-                  style={{
-                    position: 'absolute',
-                    top: pfraActionsAnchor.y + pfraActionsAnchor.height + 8,
-                    left: Math.max(16, Math.min(pfraActionsAnchor.x + pfraActionsAnchor.width - 264, width - 280)),
-                    width: 264,
-                    zIndex: 999,
-                    elevation: 30,
-                  }}
-                >
-                  <ThemeChrome theme={theme} variant="feature" blurIntensity={84} forceBlur style={{ width: '100%' }}>
-                    <View className="p-2">
-                      <Pressable
-                        onPress={() => {
-                          setShowPfraActionsMenu(false);
-                          setShowSaveModal(true);
-                        }}
-                        className="rounded-xl px-4 py-3"
-                      >
-                        <Text className="font-semibold text-af-accent">Export Results</Text>
-                      </Pressable>
-                      <Pressable
-                        onPress={() => {
-                          setShowPfraActionsMenu(false);
-                          setShowOfficialSaveModal(true);
-                        }}
-                        className="rounded-xl px-4 py-3"
-                      >
-                        <Text className="font-semibold text-af-gold">Save PFRA to My Account</Text>
-                      </Pressable>
-                      {canBulkSavePFRA ? (
-                        <Pressable
-                          onPress={() => {
-                            setShowPfraActionsMenu(false);
-                            router.push('/bulk-pfra-entry');
-                          }}
-                          className="rounded-xl px-4 py-3"
-                        >
-                          <Text className="font-semibold text-violet-300">Bulk PFRA Entry</Text>
-                        </Pressable>
-                      ) : null}
-                    </View>
-                  </ThemeChrome>
-                </View>
-              ) : null}
-            </View>
-          </Modal>
-
           {isWide ? (
             <View style={{ width: '100%', maxWidth: contentMaxWidth, alignSelf: 'center' }} className="px-6">
               <View className="mt-2 flex-row items-start" style={{ gap: 16 }}>
@@ -1691,6 +1633,64 @@ export default function CalculatorScreen() {
           )}
         </ScrollView>
       </SafeAreaView>
+
+      <Modal
+        visible={showPfraActionsMenu}
+        transparent
+        animationType="none"
+        onRequestClose={() => setShowPfraActionsMenu(false)}
+      >
+        <View className="flex-1">
+          <Pressable className="flex-1 bg-black/12" onPress={() => setShowPfraActionsMenu(false)} />
+          {pfraActionsAnchor ? (
+            <View
+              pointerEvents="box-none"
+              style={{
+                position: 'absolute',
+                top: pfraActionsAnchor.y + pfraActionsAnchor.height + 8,
+                left: Math.max(16, Math.min(pfraActionsAnchor.x + pfraActionsAnchor.width - 264, width - 280)),
+                width: 264,
+                zIndex: 999,
+                elevation: 30,
+              }}
+            >
+              <ThemeChrome theme={theme} variant="feature" blurIntensity={84} forceBlur style={{ width: '100%' }}>
+                <View className="p-2">
+                  <Pressable
+                    onPress={() => {
+                      setShowPfraActionsMenu(false);
+                      setShowSaveModal(true);
+                    }}
+                    className="rounded-xl px-4 py-3"
+                  >
+                    <Text className="font-semibold text-af-accent">Export Results</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => {
+                      setShowPfraActionsMenu(false);
+                      setShowOfficialSaveModal(true);
+                    }}
+                    className="rounded-xl px-4 py-3"
+                  >
+                    <Text className="font-semibold text-af-gold">Save PFRA to My Account</Text>
+                  </Pressable>
+                  {canBulkSavePFRA ? (
+                    <Pressable
+                      onPress={() => {
+                        setShowPfraActionsMenu(false);
+                        router.push('/bulk-pfra-entry');
+                      }}
+                      className="rounded-xl px-4 py-3"
+                    >
+                      <Text className="font-semibold text-violet-300">Bulk PFRA Entry</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              </ThemeChrome>
+            </View>
+          ) : null}
+        </View>
+      </Modal>
 
       <Modal visible={showSaveModal} transparent animationType="fade">
         <View className="flex-1 items-center justify-center bg-black/75 p-6">
