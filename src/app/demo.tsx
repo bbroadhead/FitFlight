@@ -38,6 +38,23 @@ type DemoLoginResponse = {
   };
 };
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallbackValue: T): Promise<T> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race<T>([
+      promise,
+      new Promise<T>((resolve) => {
+        timeoutHandle = setTimeout(() => resolve(fallbackValue), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+}
+
 function findMatchingMember<T extends Pick<Member, 'id' | 'email' | 'firstName' | 'lastName'>>(
   members: T[],
   options: { email?: string; firstName?: string; lastName?: string }
@@ -151,12 +168,29 @@ export default function DemoLoginScreen() {
       }
 
       setStatusMessage('Signing you into FitFlight...');
-      const authUser = payload.user ?? payload.session?.user ?? await getUserForAccessToken(accessToken);
+      const authUser =
+        payload.user ??
+        payload.session?.user ??
+        await withTimeout(
+          getUserForAccessToken(accessToken),
+          5000,
+          {
+            id: `demo-${Date.now()}`,
+            email: DEMO_ACCOUNT_EMAIL,
+            user_metadata: {
+              firstName: DEMO_ACCOUNT_NAME.firstName,
+              lastName: DEMO_ACCOUNT_NAME.lastName,
+              rank: DEMO_ACCOUNT_RANK,
+              squadron: 'Hawks',
+              flight: 'Doom',
+            },
+          }
+        );
       const metadata = authUser.user_metadata ?? {};
       const normalizedEmail = (authUser.email ?? DEMO_ACCOUNT_EMAIL).toLowerCase();
-      const roleRecord = await fetchRoleForEmail(normalizedEmail, accessToken).catch(() => null);
       const resolvedSquadron = (typeof metadata.squadron === 'string' ? metadata.squadron : 'Hawks') as Squadron;
-      const rosterMembers = await fetchRosterMembers(accessToken, resolvedSquadron).catch(() => []);
+      const roleRecord = await withTimeout(fetchRoleForEmail(normalizedEmail, accessToken), 3000, null).catch(() => null);
+      const rosterMembers = await withTimeout(fetchRosterMembers(accessToken, resolvedSquadron), 4000, [] as Member[]).catch(() => []);
       const currentMembers = useMemberStore.getState().members;
       const localExistingMember = findMatchingMember(currentMembers, {
         email: normalizedEmail,
@@ -282,6 +316,8 @@ export default function DemoLoginScreen() {
       login(nextUser, { rememberSession: true });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.replace('/');
+
+      void withTimeout(ensureMemberRole(normalizedEmail, member.accountType, accessToken), 3000, null).catch(() => undefined);
     };
 
     void run().catch((error) => {
