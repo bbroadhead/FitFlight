@@ -288,8 +288,6 @@ export default function DemoLoginScreen() {
         });
       }
 
-      await ensureMemberRole(normalizedEmail, member.accountType, accessToken).catch(() => undefined);
-
       const nextUser: UserType = {
         id: member.id,
         rank: member.rank,
