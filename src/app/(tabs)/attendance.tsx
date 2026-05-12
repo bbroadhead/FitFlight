@@ -11,7 +11,7 @@ import * as FileSystem from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { format, startOfWeek, addDays, subWeeks, addWeeks, isSameDay } from 'date-fns';
-import { useMemberStore, useAuthStore, formatFlightDisplay, type AttendanceSource, type Flight, type ScheduledPTSession, canEditAttendance, canManagePTPrograms, formatRankDisplay, isPFLAccountType } from '@/lib/store';
+import { useMemberStore, useAuthStore, formatFlightDisplay, type AttendanceSource, type Flight, type ScheduledPTSession, canEditAttendance, canManagePTPrograms, formatRankDisplay, isPFLAccountType, shouldIncludeFlightInSquadronRollups } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { useTabSwipe } from '@/contexts/TabSwipeContext';
@@ -221,7 +221,7 @@ export default function AttendanceScreen() {
   const showRightIndicator = horizontalOverflow > 0 && currentScrollX < horizontalOverflow - edgeThreshold;
 
   const flightMembers = useMemo(() => {
-    const squadronMembers = members.filter((member) => member.squadron === userSquadron);
+    const squadronMembers = members.filter((member) => member.squadron === userSquadron && shouldIncludeFlightInSquadronRollups(member.flight));
     const filteredMembers = selectedFlight === 'all'
       ? [...squadronMembers]
       : squadronMembers.filter((member) => member.flight === selectedFlight);

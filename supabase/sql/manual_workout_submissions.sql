@@ -30,6 +30,40 @@ alter table public.manual_workout_submissions
 alter table public.manual_workout_submissions
   add column if not exists duration_seconds integer not null default 0;
 
+alter table public.manual_workout_submissions
+  add column if not exists proof_image_data_list text[] null;
+
+alter table public.manual_workout_submissions
+  add column if not exists workout_types text[] null;
+
+alter table public.manual_workout_submissions
+  add column if not exists workout_details jsonb null;
+
+update public.manual_workout_submissions
+set proof_image_data_list = array[proof_image_data]
+where proof_image_data is not null
+  and (
+    proof_image_data_list is null
+    or cardinality(proof_image_data_list) = 0
+  );
+
+update public.manual_workout_submissions
+set workout_types = array[workout_type]
+where workout_types is null
+  or cardinality(workout_types) = 0;
+
+update public.manual_workout_submissions
+set workout_details = jsonb_build_array(
+  jsonb_build_object(
+    'type', workout_type,
+    'duration', duration,
+    'durationSeconds', coalesce(duration_seconds, 0),
+    'distance', distance
+  )
+)
+where workout_details is null
+  or jsonb_array_length(workout_details) = 0;
+
 create index if not exists idx_manual_workout_submissions_member_id
   on public.manual_workout_submissions(member_id);
 

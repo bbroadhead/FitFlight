@@ -6,7 +6,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ChevronLeft, Timer, MapPin, Trophy, Lock, Unlock, TrendingUp, Shield, Camera, Dumbbell, Activity, Image as ImageIcon, BarChart3, User, X, FileText } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeInUp, useAnimatedStyle, useSharedValue, withSpring, withDelay } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import { useMemberStore, useAuthStore, formatFlightDisplay, getClosedMonthPlacements, getDisplayName, ALL_ACHIEVEMENTS, canManagePTPrograms, type AccountType, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
+import { useMemberStore, useAuthStore, formatFlightDisplay, getClosedMonthPlacements, getDisplayName, ALL_ACHIEVEMENTS, canManagePTPrograms, shouldIncludeFlightInSquadronRollups, type AccountType, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { TrophyCase, CompactTrophyBadges } from '@/components/TrophyCase';
 import { ThemeBackdrop } from '@/components/ThemeBackdrop';
@@ -26,8 +26,52 @@ function getWorkoutDisplayTitle(type: WorkoutType) {
       return 'Ride';
     case 'Swimming':
       return 'Swim';
+    case 'Weightlifting':
+    case 'Strength':
+      return 'Lift';
     default:
       return type;
+  }
+}
+
+function formatPFRAComponentLabel(value?: string | null, category?: 'cardio' | 'strength' | 'core') {
+  if (!value) {
+    return category === 'cardio' ? 'Cardio' : category === 'strength' ? 'Strength' : category === 'core' ? 'Core' : 'Component';
+  }
+
+  const normalized = value.trim().toLowerCase();
+  switch (normalized) {
+    case 'pushups':
+    case 'push-ups':
+      return 'Pushups';
+    case 'hand_release_pushups':
+    case 'hand-release push-ups':
+    case 'hand-release pushups':
+      return 'Hand-Release Pushups';
+    case 'plank':
+      return 'Plank';
+    case 'situps':
+    case 'sit-ups':
+      return 'Situps';
+    case 'cross_leg_reverse_crunch':
+    case 'cross-leg reverse crunch':
+      return 'Cross-Leg Reverse Crunch';
+    case 'run_2mile':
+    case '2-mile run':
+    case '2 mile run':
+      return '2 Mile Run';
+    case 'hamr_20m':
+    case '20m hamr':
+    case 'hamr':
+      return 'HAMR';
+    case 'walk_2k':
+    case '2k walk':
+    case 'walk':
+      return 'Walk';
+    default:
+      return value
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, (match) => match.toUpperCase());
   }
 }
 
@@ -35,13 +79,20 @@ function getWorkoutDisplayTitle(type: WorkoutType) {
 const WORKOUT_TYPE_COLORS: Record<WorkoutType, string> = {
   Running: '#22C55E',
   Walking: '#84CC16',
+  Hiking: '#65A30D',
+  Rucking: '#B45309',
   Cycling: '#06B6D4',
+  Swimming: '#3B82F6',
+  Weightlifting: '#F59E0B',
   Strength: '#F59E0B',
   HIIT: '#EF4444',
-  Swimming: '#3B82F6',
   Sports: '#8B5CF6',
   Cardio: '#EC4899',
   Flexibility: '#14B8A6',
+  Climbing: '#F97316',
+  Surfing: '#0EA5E9',
+  Diving: '#2563EB',
+  Combatives: '#DC2626',
   Other: '#6B7280',
 };
 
@@ -208,7 +259,7 @@ export default function MemberProfileScreen() {
   const sortedMembers = useMemo(() => {
     const currentMonthKey = getMonthKey();
     return members
-      .filter((candidate) => candidate.squadron === (member?.squadron ?? currentUserSquadron))
+      .filter((candidate) => candidate.squadron === (member?.squadron ?? currentUserSquadron) && shouldIncludeFlightInSquadronRollups(candidate.flight))
       .sort((a, b) => {
       const scoreA = getMemberMonthSummary(a, currentMonthKey, ptSessions).score;
       const scoreB = getMemberMonthSummary(b, currentMonthKey, ptSessions).score;
@@ -656,7 +707,7 @@ export default function MemberProfileScreen() {
                 {/* Component Breakdown */}
                 <View className="space-y-3">
                   <View className="flex-row items-center justify-between">
-                    <Text className="text-af-silver">Cardio</Text>
+                    <Text className="text-af-silver">{formatPFRAComponentLabel(latestAssessment.components.cardio.test, 'cardio')}</Text>
                     <Text className="text-white font-semibold">
                       {latestAssessment.components.cardio.exempt
                         ? 'Exempt'
@@ -664,7 +715,7 @@ export default function MemberProfileScreen() {
                     </Text>
                   </View>
                   <View className="flex-row items-center justify-between">
-                    <Text className="text-af-silver">{latestAssessment.components.pushups.test ?? 'Strength'}</Text>
+                    <Text className="text-af-silver">{formatPFRAComponentLabel(latestAssessment.components.pushups.test, 'strength')}</Text>
                     <Text className="text-white font-semibold">
                       {latestAssessment.components.pushups.exempt
                         ? 'Exempt'
@@ -672,7 +723,7 @@ export default function MemberProfileScreen() {
                     </Text>
                   </View>
                   <View className="flex-row items-center justify-between">
-                    <Text className="text-af-silver">{latestAssessment.components.situps.test ?? 'Core'}</Text>
+                    <Text className="text-af-silver">{formatPFRAComponentLabel(latestAssessment.components.situps.test, 'core')}</Text>
                     <Text className="text-white font-semibold">
                       {latestAssessment.components.situps.exempt
                         ? 'Exempt'
@@ -891,19 +942,19 @@ export default function MemberProfileScreen() {
                         </View>
                         <View className="mt-4">
                           <View className="flex-row justify-between mb-2">
-                            <Text className="text-af-silver text-sm">Cardio</Text>
+                            <Text className="text-af-silver text-sm">{formatPFRAComponentLabel(assessment.components.cardio.test, 'cardio')}</Text>
                             <Text className="text-white text-sm">
                               {assessment.components.cardio.exempt ? 'Exempt' : `${assessment.components.cardio.score} pts`}
                             </Text>
                           </View>
                           <View className="flex-row justify-between mb-2">
-                            <Text className="text-af-silver text-sm">{assessment.components.pushups.test ?? 'Strength'}</Text>
+                            <Text className="text-af-silver text-sm">{formatPFRAComponentLabel(assessment.components.pushups.test, 'strength')}</Text>
                             <Text className="text-white text-sm">
                               {assessment.components.pushups.exempt ? 'Exempt' : `${assessment.components.pushups.score} pts (${assessment.components.pushups.reps} reps)`}
                             </Text>
                           </View>
                           <View className="flex-row justify-between mb-2">
-                            <Text className="text-af-silver text-sm">{assessment.components.situps.test ?? 'Core'}</Text>
+                            <Text className="text-af-silver text-sm">{formatPFRAComponentLabel(assessment.components.situps.test, 'core')}</Text>
                             <Text className="text-white text-sm">
                               {assessment.components.situps.exempt ? 'Exempt' : `${assessment.components.situps.score} pts (${assessment.components.situps.time ?? `${assessment.components.situps.reps} reps`})`}
                             </Text>

@@ -263,16 +263,16 @@ export default function LoginScreen() {
           firstName: typeof metadata.firstName === 'string' ? metadata.firstName : '',
           lastName: typeof metadata.lastName === 'string' ? metadata.lastName : '',
         });
-        const existingMember = localExistingMember ?? rosterExistingMember;
+        const preferredExistingMember = rosterExistingMember ?? localExistingMember;
         const normalizedSpecialName = normalizeSpecialMemberName(
-          typeof metadata.firstName === 'string' ? metadata.firstName : existingMember?.firstName ?? 'Airman',
-          typeof metadata.lastName === 'string' ? metadata.lastName : existingMember?.lastName ?? 'Member',
+          typeof metadata.firstName === 'string' ? metadata.firstName : preferredExistingMember?.firstName ?? 'Airman',
+          typeof metadata.lastName === 'string' ? metadata.lastName : preferredExistingMember?.lastName ?? 'Member',
           normalizedEmail
         );
 
-        const member = existingMember
+        const member = preferredExistingMember
           ? {
-              ...existingMember,
+              ...preferredExistingMember,
               id: authUser.id,
               firstName: normalizedSpecialName.firstName,
               lastName: normalizedSpecialName.lastName,
@@ -324,21 +324,23 @@ export default function LoginScreen() {
         const isPresentationDemoUser = normalizedEmail === DEMO_ACCOUNT_EMAIL;
 
         if (isPresentationDemoUser) {
-          if (existingMember) {
-            removeMember(existingMember.id);
+          if (localExistingMember) {
+            removeMember(localExistingMember.id);
+          } else if (preferredExistingMember) {
+            removeMember(preferredExistingMember.id);
           }
-        } else if (!existingMember) {
+        } else if (!preferredExistingMember) {
           addMember(member);
           await createRosterMember(member, sessionFromHash.accessToken).catch(() => undefined);
         } else if (!localExistingMember) {
           addMember({
-            ...existingMember,
+            ...preferredExistingMember,
             id: authUser.id,
             email: normalizedEmail,
             isVerified: true,
           });
         } else {
-          updateMember(existingMember.id, {
+          updateMember(localExistingMember.id, {
             email: normalizedEmail,
             rank: member.rank,
             firstName: member.firstName,
@@ -349,10 +351,17 @@ export default function LoginScreen() {
             isVerified: true,
             ptlPendingApproval: member.ptlPendingApproval,
             profilePicture: member.profilePicture,
+            showWorkoutHistoryOnProfile: member.showWorkoutHistoryOnProfile,
+            showWorkoutUploadsOnProfile: member.showWorkoutUploadsOnProfile,
+            showPFRARecordsOnProfile: member.showPFRARecordsOnProfile,
+            showUpdateNotes: member.showUpdateNotes,
+            appTheme: member.appTheme,
+            mustChangePassword: member.mustChangePassword,
+            hasLoggedIntoApp: member.hasLoggedIntoApp,
           });
         }
 
-        await syncRosterMemberAfterRegistration(member, sessionFromHash.accessToken, rosterExistingMember ?? existingMember);
+        await syncRosterMemberAfterRegistration(member, sessionFromHash.accessToken, rosterExistingMember ?? preferredExistingMember);
         await sendPtlRequestNotifications({
           requester: member,
           accessToken: sessionFromHash.accessToken,
@@ -386,6 +395,11 @@ export default function LoginScreen() {
           hasSeenTutorial: member.hasSeenTutorial ?? false,
           mustChangePassword: member.mustChangePassword ?? false,
           hasLoggedIntoApp: member.hasLoggedIntoApp ?? false,
+          showWorkoutHistoryOnProfile: member.showWorkoutHistoryOnProfile,
+          showWorkoutUploadsOnProfile: member.showWorkoutUploadsOnProfile,
+          showPFRARecordsOnProfile: member.showPFRARecordsOnProfile,
+          showUpdateNotes: member.showUpdateNotes ?? true,
+          appTheme: member.appTheme ?? 'default',
         }, { rememberSession: true });
 
         clearUrlHashSession();
@@ -429,21 +443,21 @@ export default function LoginScreen() {
         firstName: typeof metadata.firstName === 'string' ? metadata.firstName : '',
         lastName: typeof metadata.lastName === 'string' ? metadata.lastName : '',
       });
-      const existingMember = localExistingMember ?? rosterExistingMember;
+      const preferredExistingMember = rosterExistingMember ?? localExistingMember;
       const normalizedSpecialName = normalizeSpecialMemberName(
-        typeof metadata.firstName === 'string' ? metadata.firstName : existingMember?.firstName ?? 'Airman',
-        typeof metadata.lastName === 'string' ? metadata.lastName : existingMember?.lastName ?? 'Member',
+        typeof metadata.firstName === 'string' ? metadata.firstName : preferredExistingMember?.firstName ?? 'Airman',
+        typeof metadata.lastName === 'string' ? metadata.lastName : preferredExistingMember?.lastName ?? 'Member',
         normalizedEmail
       );
 
-      const member = existingMember
+      const member = preferredExistingMember
         ? {
-            ...existingMember,
+            ...preferredExistingMember,
             id: response.user.id,
             firstName: normalizedSpecialName.firstName,
             lastName: normalizedSpecialName.lastName,
             email: normalizedEmail,
-            accountType: roleRecord?.app_role ?? existingMember.accountType,
+            accountType: roleRecord?.app_role ?? preferredExistingMember.accountType,
             isVerified: true,
           }
         : {
@@ -491,21 +505,23 @@ export default function LoginScreen() {
       const isPresentationDemoUser = normalizedEmail === DEMO_ACCOUNT_EMAIL;
 
       if (isPresentationDemoUser) {
-        if (existingMember) {
-          removeMember(existingMember.id);
+        if (localExistingMember) {
+          removeMember(localExistingMember.id);
+        } else if (preferredExistingMember) {
+          removeMember(preferredExistingMember.id);
         }
-      } else if (!existingMember) {
+      } else if (!preferredExistingMember) {
         addMember(member);
         await createRosterMember(member, response.access_token).catch(() => undefined);
       } else if (!localExistingMember) {
         addMember({
-          ...existingMember,
+          ...preferredExistingMember,
           id: response.user.id,
           email: member.email,
           isVerified: true,
         });
       } else {
-        updateMember(existingMember.id, {
+        updateMember(localExistingMember.id, {
           email: member.email,
           rank: member.rank,
           firstName: member.firstName,
@@ -516,10 +532,17 @@ export default function LoginScreen() {
           isVerified: true,
           ptlPendingApproval: member.ptlPendingApproval,
           profilePicture: member.profilePicture,
+          showWorkoutHistoryOnProfile: member.showWorkoutHistoryOnProfile,
+          showWorkoutUploadsOnProfile: member.showWorkoutUploadsOnProfile,
+          showPFRARecordsOnProfile: member.showPFRARecordsOnProfile,
+          showUpdateNotes: member.showUpdateNotes,
+          appTheme: member.appTheme,
+          mustChangePassword: member.mustChangePassword,
+          hasLoggedIntoApp: member.hasLoggedIntoApp,
         });
       }
 
-      await syncRosterMemberAfterRegistration(member, response.access_token, rosterExistingMember ?? existingMember);
+      await syncRosterMemberAfterRegistration(member, response.access_token, rosterExistingMember ?? preferredExistingMember);
 
       await ensureMemberRole(normalizedEmail, member.accountType, response.access_token).catch(() => undefined);
 
@@ -539,6 +562,11 @@ export default function LoginScreen() {
         hasSeenTutorial: member.hasSeenTutorial ?? false,
         mustChangePassword: member.mustChangePassword ?? false,
         hasLoggedIntoApp: member.hasLoggedIntoApp ?? false,
+        showWorkoutHistoryOnProfile: member.showWorkoutHistoryOnProfile,
+        showWorkoutUploadsOnProfile: member.showWorkoutUploadsOnProfile,
+        showPFRARecordsOnProfile: member.showPFRARecordsOnProfile,
+        showUpdateNotes: member.showUpdateNotes ?? true,
+        appTheme: member.appTheme ?? 'default',
       };
 
       setSessionTokens({
@@ -711,6 +739,11 @@ export default function LoginScreen() {
       hasSeenTutorial: false, // New users haven't seen tutorial
       mustChangePassword: false,
       hasLoggedIntoApp: false,
+      showWorkoutHistoryOnProfile: true,
+      showWorkoutUploadsOnProfile: true,
+      showPFRARecordsOnProfile: true,
+      showUpdateNotes: true,
+      appTheme: 'default',
     };
 
     setSessionTokens({

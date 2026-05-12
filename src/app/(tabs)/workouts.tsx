@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, View, Text, Pressable, RefreshControl, ScrollView, TextInput, Modal, KeyboardAvoidingView, Platform, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Plus, Search, X, ThumbsUp, ThumbsDown, Star, Trash2, Clock, Flame, ChevronDown, ChevronUp, Check, ListOrdered, Filter, Pencil, CalendarPlus } from 'lucide-react-native';
+import { Plus, Search, X, ThumbsUp, Star, Trash2, Clock, Flame, ChevronDown, ChevronUp, Check, ListOrdered, Filter, Pencil, CalendarPlus } from 'lucide-react-native';
 import Animated, { FadeIn, FadeInDown, FadeInRight, SlideInDown } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import SmartSlider from "../../components/SmartSlider";
@@ -40,10 +40,6 @@ function getLegacyWorkoutMemberId(member: { rank: string; firstName: string; las
 
 function getWorkoutVoteScore(workout: SharedWorkout) {
   return workout.thumbsUp.length;
-}
-
-function getWorkoutNetScore(workout: SharedWorkout) {
-  return workout.thumbsUp.length - workout.thumbsDown.length;
 }
 
 function getSharedWorkoutErrorMessage(error: unknown) {
@@ -110,14 +106,6 @@ function WorkoutCard({
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     onRate(userRating === 'up' ? 'none' : 'up');
-  };
-
-  const handleThumbsDown = () => {
-    if (!allowFeedback) {
-      return;
-    }
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    onRate(userRating === 'down' ? 'none' : 'down');
   };
 
   const handleFavorite = () => {
@@ -253,25 +241,6 @@ function WorkoutCard({
                   {workout.thumbsUp.length}
                 </Text>
               </Pressable>
-              <Pressable
-                onPress={handleThumbsDown}
-                className={cn(
-                  "flex-row items-center px-3 py-1.5 rounded-full",
-                  userRating === 'down' ? "bg-af-danger/30" : "bg-white/10"
-                )}
-              >
-                <ThumbsDown
-                  size={16}
-                  color={userRating === 'down' ? '#EF4444' : theme.textMuted}
-                  fill={userRating === 'down' ? '#EF4444' : 'transparent'}
-                />
-                <Text className={cn(
-                  "text-sm ml-1 font-medium",
-                  userRating === 'down' ? "text-af-danger" : "text-af-silver"
-                )}>
-                  {workout.thumbsDown.length}
-                </Text>
-              </Pressable>
             </View>
           ) : (
             <Text style={getThemeBodyStyle(theme, 14)}>Reference workout</Text>
@@ -344,7 +313,8 @@ function WorkoutCard({
 
 export default function WorkoutsScreen() {
   const theme = useAppTheme();
-  const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
   const contentMaxWidth = width >= 1440 ? 1280 : width >= 1180 ? 1180 : 1024;
   const useDesktopGrid = width >= 1180;
   const desktopWorkoutColumns = useDesktopGrid ? 3 : 1;
@@ -354,6 +324,10 @@ export default function WorkoutsScreen() {
   const desktopWorkoutRailWidth = useDesktopGrid
     ? Math.min(contentMaxWidth, workoutCardWidth * desktopWorkoutColumns + desktopWorkoutGap * (desktopWorkoutColumns - 1) + desktopWorkoutRailPadding)
     : undefined;
+  const createWorkoutModalHeight = Math.min(
+    height - Math.max(insets.top, 12) - 12,
+    useDesktopGrid ? 760 : height * 0.92
+  );
   const { setSwipeEnabled } = useTabSwipe();
   const router = useRouter();
   const params = useLocalSearchParams<{ openWorkoutId?: string }>();
@@ -392,7 +366,7 @@ export default function WorkoutsScreen() {
 
   // Create modal state
   const [newName, setNewName] = useState('');
-  const [newType, setNewType] = useState<WorkoutType>('Strength');
+  const [newType, setNewType] = useState<WorkoutType>('Weightlifting');
   const [newDuration, setNewDuration] = useState('30');
   const [newIntensity, setNewIntensity] = useState(5);
   const [newDescription, setNewDescription] = useState('');
@@ -565,11 +539,6 @@ export default function WorkoutsScreen() {
         return voteDifference;
       }
 
-      const netDifference = getWorkoutNetScore(b) - getWorkoutNetScore(a);
-      if (netDifference !== 0) {
-        return netDifference;
-      }
-
       if (sortType === 'duration') {
         const durationDifference = a.duration - b.duration;
         if (durationDifference !== 0) {
@@ -586,7 +555,7 @@ export default function WorkoutsScreen() {
   const resetCreateForm = () => {
     setEditingWorkoutId(null);
     setNewName('');
-    setNewType('Strength');
+    setNewType('Weightlifting');
     setNewDuration('30');
     setNewIntensity(5);
     setNewDescription('');
@@ -861,10 +830,10 @@ export default function WorkoutsScreen() {
           className="px-6 pt-4 pb-2"
           style={useDesktopGrid ? { width: '100%', maxWidth: desktopWorkoutRailWidth, alignSelf: 'center' } : undefined}
         >
-          <View className="flex-row items-center justify-between">
-            <View>
-              <Text style={getThemeHeadingStyle(theme, 28)}>Workouts</Text>
-              <Text style={getThemeBodyStyle(theme, 14)}>{filteredWorkouts.length} workouts available</Text>
+          <View className="flex-row items-start justify-between">
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Text style={getThemeHeadingStyle(theme, 28)}>Workout Templates</Text>
+              <Text style={getThemeBodyStyle(theme, 14)}>Create, share, favorite, and reuse workout templates for PT sessions.</Text>
             </View>
             <TutorialTarget id="workouts-new">
                 <Pressable
@@ -873,7 +842,7 @@ export default function WorkoutsScreen() {
                     openCreateModal();
                   }}
                   className="px-4 py-2 flex-row items-center"
-                  style={getThemeButtonStyle(theme, 'accent')}
+                  style={[getThemeButtonStyle(theme, 'accent'), { flexShrink: 0, marginTop: 2 }]}
                 >
                 <Plus size={18} color={theme.id === 'pixel' ? '#0F181D' : '#08111B'} />
                 <Text className="ml-1" style={getThemeButtonTextStyle(theme, 'accent')}>New</Text>
@@ -1032,15 +1001,33 @@ export default function WorkoutsScreen() {
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           className="flex-1"
         >
-          <Animated.View entering={FadeIn.duration(180)} className="flex-1 bg-black/80 justify-end">
+          <Animated.View
+            entering={FadeIn.duration(180)}
+            className="flex-1 bg-black/80 justify-end"
+            style={{ paddingTop: Math.max(insets.top, 8) }}
+          >
             <Animated.View entering={SlideInDown.duration(260)}>
             <ThemeChrome
               theme={theme}
               variant="feature"
               fill
-              style={{ borderTopLeftRadius: 24, borderTopRightRadius: 24, height: '84%', overflow: 'hidden' }}
+              style={{
+                borderTopLeftRadius: 24,
+                borderTopRightRadius: 24,
+                height: createWorkoutModalHeight,
+                maxHeight: createWorkoutModalHeight,
+                overflow: 'hidden',
+              }}
             >
-            <View style={{ flex: 1, minHeight: 0, paddingHorizontal: 24, paddingTop: 24, paddingBottom: 48 }}>
+            <View
+              style={{
+                flex: 1,
+                minHeight: 0,
+                paddingHorizontal: 24,
+                paddingTop: 24,
+                paddingBottom: Math.max(insets.bottom + 18, 28),
+              }}
+            >
                 <View className="flex-row items-center justify-between mb-6">
                   <Text style={getThemeHeadingStyle(theme, 22)}>{editingWorkoutId ? 'Edit Workout' : 'Create Workout'}</Text>
                   <Pressable
@@ -1058,7 +1045,7 @@ export default function WorkoutsScreen() {
               <ScrollView
                 style={{ flex: 1, minHeight: 0 }}
                 showsVerticalScrollIndicator={false}
-                contentContainerStyle={{ paddingBottom: 16 }}
+                contentContainerStyle={{ paddingBottom: Math.max(insets.bottom + 12, 16) }}
                 keyboardShouldPersistTaps="handled"
                 nestedScrollEnabled
               >

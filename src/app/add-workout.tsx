@@ -1,37 +1,306 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, Pressable, ScrollView, TextInput, Modal, Image, Platform, useWindowDimensions } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ChevronLeft, Camera, Upload, X, Check, Clock, MapPin, Lock, Unlock, AlertCircle } from 'lucide-react-native';
-import Animated, { FadeInDown, FadeIn, ZoomIn } from 'react-native-reanimated';
+import { ChevronLeft, Camera, Upload, X, Check, Clock, AlertCircle, Dumbbell, Info, Plus, Pencil } from 'lucide-react-native';
+import Animated, { FadeInDown } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { format } from 'date-fns';
-import { useMemberStore, useAuthStore, canManagePTPrograms, getDisplayName, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
+import { useMemberStore, useAuthStore, canManagePTPrograms, getDisplayName, type WorkoutSegment, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
-import { createManualWorkoutSubmission, fetchApprovedManualWorkouts, fetchAttendanceSessions, reviewManualWorkoutSubmission, setAttendanceStatus, updateManualWorkoutSubmission, uploadWorkoutProofImage } from '@/lib/supabaseData';
+import { createManualWorkoutSubmission, fetchApprovedManualWorkouts, fetchAttendanceSessions, fetchManualWorkoutSubmissions, reviewManualWorkoutSubmission, setAttendanceStatus, updateManualWorkoutSubmission, uploadWorkoutProofImage } from '@/lib/supabaseData';
 import { PageContainer } from '@/components/PageContainer';
 import { ThemeBackdrop } from '@/components/ThemeBackdrop';
 import { ThemeChrome } from '@/components/ThemeChrome';
 import { getThemeBodyStyle, getThemeButtonStyle, getThemeButtonTextStyle, getThemeControlStyle, getThemeHeadingStyle, useAppTheme } from '@/lib/theme';
 
+type ProofImage = {
+  uri: string;
+  mimeType?: string;
+};
+
+type WorkoutSegmentForm = WorkoutSegment & {
+  key: string;
+  durationInput: string;
+  durationSecondsInput: string;
+  distanceInput: string;
+  weightInput: string;
+  repsInput: string;
+  setsInput: string;
+  roundsInput: string;
+  elevationGainInput: string;
+  depthInput: string;
+  stepsInput: string;
+  waveConditionsInput: string;
+};
+
+const WEIGHTLIFTING_SUBTYPES = [
+  'Bench Press',
+  'Squat',
+  'Deadlift',
+  'Shoulder Press',
+  'Bicep Curl',
+] as const;
+
 const getLocalDateString = (date: Date) => format(date, 'yyyy-MM-dd');
+
 const getWorkoutDisplayTitle = (type: WorkoutType) => {
   switch (type) {
     case 'Running':
       return 'Run';
     case 'Walking':
       return 'Walk';
+    case 'Hiking':
+      return 'Hike';
+    case 'Rucking':
+      return 'Ruck';
     case 'Cycling':
       return 'Ride';
     case 'Swimming':
       return 'Swim';
+    case 'Weightlifting':
+    case 'Strength':
+      return 'Lift';
     default:
       return type;
   }
 };
+
+const getWorkoutTypeLabel = (type: WorkoutType) => (
+  type === 'Strength' ? 'Weightlifting' : type
+);
+
+const getWorkoutTypeDescription = (type: WorkoutType) => {
+  switch (type) {
+    case 'Running':
+      return 'Track time, distance, and running-specific notes.';
+    case 'Walking':
+      return 'Track time, distance, and walking-specific notes.';
+    case 'Hiking':
+      return 'Track time, distance, vertical gain, steps, and hiking notes.';
+    case 'Rucking':
+      return 'Track time, distance, carried ruck weight, and rucking notes.';
+    case 'Cycling':
+      return 'Track time, distance, and ride-specific notes.';
+    case 'Swimming':
+      return 'Track time, distance, and pool/open-water notes.';
+    case 'Weightlifting':
+    case 'Strength':
+      return 'Track the lift type, time, weight, reps, sets, and lifting notes.';
+    case 'HIIT':
+      return 'Track time, rounds, and interval notes.';
+    case 'Sports':
+      return 'Track session time and sport-specific notes.';
+    case 'Cardio':
+      return 'Track session time and cardio-specific notes.';
+    case 'Flexibility':
+      return 'Track time and mobility/flexibility notes.';
+    case 'Climbing':
+      return 'Track time, vertical gain, and climbing notes.';
+    case 'Surfing':
+      return 'Track time, wave conditions, and surf notes.';
+    case 'Diving':
+      return 'Track time, depth, and dive notes.';
+    case 'Combatives':
+      return 'Track time, rounds, and training notes.';
+    default:
+      return 'Track time and any additional workout details.';
+  }
+};
+
+const WORKOUT_TYPE_OPTIONS: WorkoutType[] = WORKOUT_TYPES.map((type) => (type === 'Strength' ? 'Weightlifting' : type)).filter(
+  (type, index, array) => array.indexOf(type) === index
+) as WorkoutType[];
+
+function createSegmentKey(type: WorkoutType) {
+  return `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createDefaultSegment(type: WorkoutType): WorkoutSegmentForm {
+  return {
+    key: createSegmentKey(type),
+    type,
+    subtype: undefined,
+    duration: 0,
+    durationSeconds: 0,
+    distance: undefined,
+    weight: undefined,
+    reps: undefined,
+    sets: undefined,
+    rounds: undefined,
+    elevationGain: undefined,
+    depth: undefined,
+    steps: undefined,
+    waveConditions: '',
+    additionalInfo: '',
+    durationInput: '',
+    durationSecondsInput: '',
+    distanceInput: '',
+    weightInput: '',
+    repsInput: '',
+    setsInput: '',
+    roundsInput: '',
+    elevationGainInput: '',
+    depthInput: '',
+    stepsInput: '',
+    waveConditionsInput: '',
+  };
+}
+
+function createSegmentFormFromSegment(segment: WorkoutSegment): WorkoutSegmentForm {
+  return {
+    key: segment.id ?? createSegmentKey(segment.type),
+    type: segment.type === 'Strength' ? 'Weightlifting' : segment.type,
+    subtype: segment.subtype,
+    duration: segment.duration ?? 0,
+    durationSeconds: segment.durationSeconds ?? 0,
+    distance: segment.distance,
+    weight: segment.weight,
+    reps: segment.reps,
+    sets: segment.sets,
+    rounds: segment.rounds,
+    elevationGain: segment.elevationGain,
+    depth: segment.depth,
+    steps: segment.steps,
+    waveConditions: segment.waveConditions ?? '',
+    additionalInfo: segment.additionalInfo ?? '',
+    durationInput: segment.duration ? String(segment.duration) : '',
+    durationSecondsInput: segment.durationSeconds ? String(segment.durationSeconds) : '',
+    distanceInput: typeof segment.distance === 'number' ? String(segment.distance) : '',
+    weightInput: typeof segment.weight === 'number' ? String(segment.weight) : '',
+    repsInput: typeof segment.reps === 'number' ? String(segment.reps) : '',
+    setsInput: typeof segment.sets === 'number' ? String(segment.sets) : '',
+    roundsInput: typeof segment.rounds === 'number' ? String(segment.rounds) : '',
+    elevationGainInput: typeof segment.elevationGain === 'number' ? String(segment.elevationGain) : '',
+    depthInput: typeof segment.depth === 'number' ? String(segment.depth) : '',
+    stepsInput: typeof segment.steps === 'number' ? String(segment.steps) : '',
+    waveConditionsInput: segment.waveConditions ?? '',
+  };
+}
+
+function getRequiredFieldErrors(segment: WorkoutSegmentForm) {
+  const errors: string[] = [];
+  const durationValue = parseInt(segment.durationInput || '0', 10) || 0;
+
+  if (durationValue <= 0) {
+    errors.push('Duration is required.');
+  }
+
+  if (['Running', 'Walking', 'Hiking', 'Rucking', 'Cycling', 'Swimming', 'Diving'].includes(segment.type)) {
+    const distanceValue = parseFloat(segment.distanceInput || '0') || 0;
+    if (distanceValue <= 0) {
+      errors.push('Distance is required.');
+    }
+  }
+
+  if (segment.type === 'Rucking') {
+    const weightValue = parseFloat(segment.weightInput || '0') || 0;
+    if (weightValue <= 0) {
+      errors.push('Ruck weight is required.');
+    }
+  }
+
+  if (segment.type === 'Surfing' && !segment.waveConditionsInput.trim()) {
+    errors.push('Wave conditions are required.');
+  }
+
+  if (segment.type === 'Weightlifting' || segment.type === 'Strength') {
+    const weightValue = parseFloat(segment.weightInput || '0') || 0;
+    const repsValue = parseInt(segment.repsInput || '0', 10) || 0;
+    if (!segment.subtype?.trim()) {
+      errors.push('Lift type is required.');
+    }
+    if (weightValue <= 0) {
+      errors.push('Weight is required.');
+    }
+    if (repsValue <= 0) {
+      errors.push('Reps are required.');
+    }
+  }
+
+  return errors;
+}
+
+function normalizeSegment(segment: WorkoutSegmentForm): WorkoutSegment {
+  return {
+    id: segment.key,
+    type: segment.type,
+    subtype: segment.subtype?.trim() || undefined,
+    duration: parseInt(segment.durationInput || '0', 10) || 0,
+    durationSeconds: Math.min(59, Math.max(0, parseInt(segment.durationSecondsInput || '0', 10) || 0)),
+    distance: segment.distanceInput ? parseFloat(segment.distanceInput) || 0 : undefined,
+    weight: segment.weightInput ? parseFloat(segment.weightInput) || 0 : undefined,
+    reps: segment.repsInput ? parseInt(segment.repsInput, 10) || 0 : undefined,
+    sets: segment.setsInput ? parseInt(segment.setsInput, 10) || 0 : undefined,
+    rounds: segment.roundsInput ? parseInt(segment.roundsInput, 10) || 0 : undefined,
+    elevationGain: segment.elevationGainInput ? parseFloat(segment.elevationGainInput) || 0 : undefined,
+    depth: segment.depthInput ? parseFloat(segment.depthInput) || 0 : undefined,
+    steps: segment.stepsInput ? parseInt(segment.stepsInput, 10) || 0 : undefined,
+    waveConditions: segment.waveConditionsInput.trim() || undefined,
+    additionalInfo: segment.additionalInfo?.trim() || undefined,
+  };
+}
+
+function updateSegmentsForSelection(current: WorkoutSegmentForm[], selectedTypes: WorkoutType[]) {
+  return selectedTypes.map((type) => {
+    const existing = current.find((segment) => segment.type === type);
+    return existing ?? createDefaultSegment(type);
+  });
+}
+
+function NumericField({
+  label,
+  value,
+  onChangeText,
+  placeholder,
+  widthClassName = 'flex-1',
+}: {
+  label: string;
+  value: string;
+  onChangeText: (value: string) => void;
+  placeholder: string;
+  widthClassName?: string;
+}) {
+  return (
+    <View className={cn(widthClassName)}>
+      <Text className="text-white/60 text-sm mb-2">{label}</Text>
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor="#ffffff40"
+        keyboardType="numeric"
+        className="rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white"
+      />
+    </View>
+  );
+}
+
+function SelectPill({
+  label,
+  selected,
+  onPress,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      className={cn(
+        'rounded-full border px-3 py-2 mb-2 mr-2',
+        selected ? 'bg-af-accent/20 border-af-accent' : 'bg-white/5 border-white/10'
+      )}
+    >
+      <Text className={selected ? 'text-white font-semibold text-sm' : 'text-af-silver text-sm'}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
 
 export default function AddWorkoutScreen() {
   const theme = useAppTheme();
@@ -51,58 +320,122 @@ export default function AddWorkoutScreen() {
   }>();
   const user = useAuthStore(s => s.user);
   const accessToken = useAuthStore(s => s.accessToken);
-  const members = useMemberStore(s => s.members);
   const syncApprovedManualWorkouts = useMemberStore(s => s.syncApprovedManualWorkouts);
   const syncPTSessions = useMemberStore(s => s.syncPTSessions);
   const isEditing = params.mode === 'edit' && !!params.submissionId;
   const canAutoApproveOwnWorkout = user ? canManagePTPrograms(user.accountType) : false;
   const contentMaxWidth = width >= 1440 ? 1120 : width >= 1180 ? 980 : 840;
 
-  const [screenshotUri, setScreenshotUri] = useState<string | null>(params.screenshotUri ?? null);
-  const [workoutType, setWorkoutType] = useState<WorkoutType>(params.workoutType ?? 'Running');
   const [selectedDate, setSelectedDate] = useState(() => {
     const seed = params.workoutDate ? new Date(`${params.workoutDate}T00:00:00`) : new Date();
     return Number.isNaN(seed.getTime()) ? new Date() : seed;
   });
   const [showDatePicker, setShowDatePicker] = useState(false);
-  const [duration, setDuration] = useState(params.duration ?? '');
-  const [durationSeconds, setDurationSeconds] = useState(params.durationSeconds ?? '');
-  const [distance, setDistance] = useState(params.distance ?? '');
+  const [proofImages, setProofImages] = useState<ProofImage[]>(
+    params.screenshotUri ? [{ uri: params.screenshotUri }] : []
+  );
+  const [selectedWorkoutTypes, setSelectedWorkoutTypes] = useState<WorkoutType[]>(
+    params.workoutType ? [params.workoutType === 'Strength' ? 'Weightlifting' : params.workoutType] : []
+  );
+  const [workoutSegments, setWorkoutSegments] = useState<WorkoutSegmentForm[]>(
+    params.workoutType
+      ? [{
+          ...createDefaultSegment(params.workoutType === 'Strength' ? 'Weightlifting' : params.workoutType),
+          durationInput: params.duration ?? '',
+          durationSecondsInput: params.durationSeconds ?? '',
+          distanceInput: params.distance ?? '',
+        }]
+      : []
+  );
   const [isPrivate, setIsPrivate] = useState(params.isPrivate === 'true');
-  const [showConfirmation, setShowConfirmation] = useState(false);
+  const [showWorkoutTypeModal, setShowWorkoutTypeModal] = useState(false);
+  const [draftWorkoutTypes, setDraftWorkoutTypes] = useState<WorkoutType[]>(selectedWorkoutTypes);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const workoutTypeScrollRef = useRef<ScrollView>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [screenshotMimeType, setScreenshotMimeType] = useState<string | undefined>(undefined);
   const existingProofUri = useMemo(() => params.screenshotUri ?? null, [params.screenshotUri]);
   const attendanceMarkedBySubmission = params.attendanceMarkedBySubmission === 'true';
   const isWeb = Platform.OS === 'web';
 
-  const canSubmit = !!((duration || durationSeconds) && screenshotUri);
-  const webWorkoutTypeScrollProps = Platform.OS === 'web'
-    ? ({
-        onWheel: (event: any) => {
-          const delta = typeof event?.nativeEvent?.deltaY === 'number'
-            ? event.nativeEvent.deltaY
-            : event?.deltaY ?? 0;
-          if (delta && workoutTypeScrollRef.current) {
-            const currentX = event?.currentTarget?.scrollLeft ?? 0;
-            workoutTypeScrollRef.current.scrollTo({ x: currentX + delta, animated: false });
-          }
-        },
-      } as any)
-    : {};
+  const segmentValidationErrors = workoutSegments.flatMap((segment) => getRequiredFieldErrors(segment));
+  const canSubmit = !!user && proofImages.length > 0 && workoutSegments.length > 0 && segmentValidationErrors.length === 0;
 
-  const pickImage = async () => {
+  useEffect(() => {
+    if (!isEditing || !params.submissionId || !user || !accessToken) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadSubmission = async () => {
+      try {
+        const { mine, reviewQueue } = await fetchManualWorkoutSubmissions({
+          memberId: user.id,
+          memberEmail: user.email,
+          squadron: user.squadron,
+          canReview: canManagePTPrograms(user.accountType),
+          accessToken,
+        });
+        const submission = [...mine, ...reviewQueue].find((item) => item.id === params.submissionId);
+        if (!submission || cancelled) {
+          return;
+        }
+
+        const nextTypes = (submission.workoutTypes?.length
+          ? submission.workoutTypes
+          : [submission.workoutType]
+        ).map((type) => (type === 'Strength' ? 'Weightlifting' : type));
+        const nextSegments = (submission.workoutDetails?.length
+          ? submission.workoutDetails
+          : [{
+              type: submission.workoutType,
+              duration: submission.duration,
+              durationSeconds: submission.durationSeconds,
+              distance: submission.distance,
+            }]
+        ).map(createSegmentFormFromSegment);
+        const nextProofImages = (
+          submission.proofImageDataList?.length
+            ? submission.proofImageDataList
+            : submission.proofImageData
+              ? [submission.proofImageData]
+              : []
+        ).map((uri) => ({ uri }));
+
+        const nextDate = new Date(`${submission.workoutDate}T00:00:00`);
+        if (!Number.isNaN(nextDate.getTime())) {
+          setSelectedDate(nextDate);
+        }
+        setProofImages(nextProofImages);
+        setSelectedWorkoutTypes(nextTypes);
+        setDraftWorkoutTypes(nextTypes);
+        setWorkoutSegments(nextSegments);
+        setIsPrivate(submission.isPrivate);
+      } catch {
+        // Keep the route-param fallback if we cannot hydrate the full submission.
+      }
+    };
+
+    void loadSubmission();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, isEditing, params.submissionId, user]);
+
+  const addProofImages = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: false,
+      allowsMultipleSelection: true,
       quality: 0.8,
+      selectionLimit: 10,
     });
 
-    if (!result.canceled && result.assets[0]) {
-      setScreenshotUri(result.assets[0].uri);
-      setScreenshotMimeType(result.assets[0].mimeType ?? undefined);
+    if (!result.canceled && result.assets.length > 0) {
+      setProofImages((current) => [
+        ...current,
+        ...result.assets.map((asset) => ({ uri: asset.uri, mimeType: asset.mimeType ?? undefined })),
+      ]);
     }
   };
 
@@ -116,31 +449,51 @@ export default function AddWorkoutScreen() {
     });
 
     if (!result.canceled && result.assets[0]) {
-      setScreenshotUri(result.assets[0].uri);
-      setScreenshotMimeType(result.assets[0].mimeType ?? undefined);
+      setProofImages((current) => [
+        ...current,
+        { uri: result.assets[0].uri, mimeType: result.assets[0].mimeType ?? undefined },
+      ]);
     }
+  };
+
+  const handleConfirmWorkoutTypes = () => {
+    setSelectedWorkoutTypes(draftWorkoutTypes);
+    setWorkoutSegments((current) => updateSegmentsForSelection(current, draftWorkoutTypes));
+    setShowWorkoutTypeModal(false);
+  };
+
+  const handleSegmentChange = (key: string, updates: Partial<WorkoutSegmentForm>) => {
+    setWorkoutSegments((current) => current.map((segment) => (
+      segment.key === key ? { ...segment, ...updates } : segment
+    )));
   };
 
   const handleSubmit = () => {
     const run = async () => {
-      if (!user || !(duration || durationSeconds) || !screenshotUri || !accessToken) return;
+      if (!user || !accessToken || !canSubmit) return;
 
       setSubmitError(null);
       setIsSubmitting(true);
 
       try {
-        const parsedMinutes = parseInt(duration || '0', 10) || 0;
-        const parsedSeconds = Math.min(59, Math.max(0, parseInt(durationSeconds || '0', 10) || 0));
+        const normalizedSegments = workoutSegments.map(normalizeSegment);
+        const primarySegment = normalizedSegments[0];
         const submissionId = params.submissionId ?? `manual-workout-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-        const proofImageData = existingProofUri && screenshotUri === existingProofUri
-          ? screenshotUri
-          : await uploadWorkoutProofImage({
-              memberId: user.id,
-              submissionId,
-              localUri: screenshotUri,
-              mimeType: screenshotMimeType,
-              accessToken,
-            });
+        const proofImageDataList: string[] = [];
+
+        for (let index = 0; index < proofImages.length; index += 1) {
+          const proofImage = proofImages[index];
+          const uploaded = existingProofUri && proofImage.uri === existingProofUri
+            ? proofImage.uri
+            : await uploadWorkoutProofImage({
+                memberId: user.id,
+                submissionId: `${submissionId}-${index}`,
+                localUri: proofImage.uri,
+                mimeType: proofImage.mimeType,
+                accessToken,
+              });
+          proofImageDataList.push(uploaded);
+        }
 
         if (isEditing) {
           if (attendanceMarkedBySubmission) {
@@ -158,25 +511,17 @@ export default function AddWorkoutScreen() {
           await updateManualWorkoutSubmission({
             submissionId,
             workoutDate: getLocalDateString(selectedDate),
-            workoutType,
-            duration: parsedMinutes,
-            durationSeconds: parsedSeconds,
-            distance: distance ? parseFloat(distance) : undefined,
+            workoutType: primarySegment.type,
+            workoutTypes: normalizedSegments.map((segment) => segment.type),
+            workoutDetails: normalizedSegments,
+            duration: primarySegment.duration,
+            durationSeconds: primarySegment.durationSeconds,
+            distance: primarySegment.distance,
             isPrivate,
-            proofImageData,
+            proofImageData: proofImageDataList[0] ?? '',
+            proofImageDataList,
             accessToken,
           });
-
-          const [approvedManualWorkouts, nextSessions] = await Promise.all([
-            fetchApprovedManualWorkouts(accessToken, user.squadron).catch(() => [{ memberId: user.id, workouts: [] }]),
-            fetchAttendanceSessions(accessToken).catch(() => []),
-          ]);
-          syncApprovedManualWorkouts(
-            approvedManualWorkouts.some((entry) => entry.memberId === user.id)
-              ? approvedManualWorkouts
-              : [...approvedManualWorkouts, { memberId: user.id, workouts: [] }]
-          );
-          syncPTSessions(nextSessions);
         } else {
           const submission = await createManualWorkoutSubmission({
             submissionId,
@@ -187,12 +532,15 @@ export default function AddWorkoutScreen() {
             memberFlight: user.flight,
             squadron: user.squadron,
             workoutDate: getLocalDateString(selectedDate),
-            workoutType,
-            duration: parsedMinutes,
-            durationSeconds: parsedSeconds,
-            distance: distance ? parseFloat(distance) : undefined,
+            workoutType: primarySegment.type,
+            workoutTypes: normalizedSegments.map((segment) => segment.type),
+            workoutDetails: normalizedSegments,
+            duration: primarySegment.duration,
+            durationSeconds: primarySegment.durationSeconds,
+            distance: primarySegment.distance,
             isPrivate,
-            proofImageData,
+            proofImageData: proofImageDataList[0] ?? '',
+            proofImageDataList,
             accessToken,
           });
 
@@ -216,15 +564,15 @@ export default function AddWorkoutScreen() {
               source: 'workout',
               accessToken,
             }).catch(() => undefined);
-
-            const [approvedManualWorkouts, nextSessions] = await Promise.all([
-              fetchApprovedManualWorkouts(accessToken, user.squadron).catch(() => []),
-              fetchAttendanceSessions(accessToken).catch(() => []),
-            ]);
-            syncApprovedManualWorkouts(approvedManualWorkouts);
-            syncPTSessions(nextSessions);
           }
         }
+
+        const [approvedManualWorkouts, nextSessions] = await Promise.all([
+          fetchApprovedManualWorkouts(accessToken, user.squadron).catch(() => []),
+          fetchAttendanceSessions(accessToken).catch(() => []),
+        ]);
+        syncApprovedManualWorkouts(approvedManualWorkouts);
+        syncPTSessions(nextSessions);
 
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         router.back();
@@ -260,397 +608,453 @@ export default function AddWorkoutScreen() {
 
       <SafeAreaView edges={['top', 'bottom']} className="flex-1">
         <PageContainer maxWidth={contentMaxWidth}>
-        {/* Header */}
-        <Animated.View
-          entering={FadeInDown.delay(100).springify()}
-          className="px-6 pt-4 pb-2 flex-row items-center"
-        >
-          <Pressable
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              router.back();
-            }}
-            className="w-10 h-10 rounded-full items-center justify-center mr-4"
-            style={getThemeControlStyle(theme)}
-          >
-            <ChevronLeft size={24} color={theme.textSecondary} />
-          </Pressable>
-          <Text style={getThemeHeadingStyle(theme, 22)}>{isEditing ? 'Edit Manual Workout' : 'Add Manual Workout'}</Text>
-        </Animated.View>
-        </PageContainer>
-
-        <ScrollView
-          className="flex-1"
-          contentContainerStyle={{ paddingBottom: 40, alignItems: 'center' }}
-          showsVerticalScrollIndicator={false}
-        >
-          <PageContainer maxWidth={contentMaxWidth} className="px-6">
-          {isEditing ? (
-            <Animated.View entering={FadeInDown.delay(125).springify()} className="mt-4 rounded-2xl border border-af-warning/30 bg-af-warning/10 p-4">
-              <Text className="text-af-warning font-semibold">Editing requires re-approval</Text>
-              <Text className="text-af-silver text-sm mt-1">
-                Once you resubmit this workout, it will go back to pending review before it counts toward your attendance again.
-              </Text>
-            </Animated.View>
-          ) : null}
-          <ThemeChrome theme={theme} variant="feature">
-          <View className="p-4">
-          {/* Screenshot Upload - Required */}
-          <Animated.View
-            entering={FadeInDown.delay(150).springify()}
-            className={isEditing ? "mt-4" : ""}
-          >
-            <View className="flex-row items-center mb-2">
-              <Text className="text-white/60 text-sm">Workout Proof Image *</Text>
-              <View className="ml-2 flex-row items-center bg-af-warning/20 px-2 py-1 rounded">
-                <AlertCircle size={12} color="#F59E0B" />
-                <Text className="text-af-warning text-xs ml-1">Required</Text>
-              </View>
-            </View>
-              {!screenshotUri ? (
-                <View className="bg-white/5 rounded-2xl border border-white/10 border-dashed p-8">
-                  <Text className="text-white font-semibold text-center mb-4">
-                    Upload workout proof
-                  </Text>
-                  <Text className="text-af-silver text-center text-sm mb-6">
-                    Take a photo or select an image proving you completed the workout. It will be reviewed before it is counted.
-                  </Text>
-                  <View className="flex-row justify-center">
-                    <Pressable
-                      onPress={takePhoto}
-                      className="flex-row items-center bg-af-accent px-6 py-3 rounded-xl mr-2"
-                    >
-                      <Camera size={20} color="white" />
-                      <Text className="text-white font-semibold ml-2">Camera</Text>
-                    </Pressable>
-                    <Pressable
-                      onPress={pickImage}
-                      className="flex-row items-center bg-white/10 px-6 py-3 rounded-xl ml-2"
-                    >
-                      <Upload size={20} color="#C0C0C0" />
-                      <Text className="text-white font-semibold ml-2">Gallery</Text>
-                    </Pressable>
-                  </View>
-                </View>
-              ) : (
-                <View className="relative">
-                  <Image
-                    source={{ uri: screenshotUri }}
-                    className="w-full h-48 rounded-2xl"
-                    resizeMode="cover"
-                  />
-                  <Pressable
-                    onPress={() => {
-                      setScreenshotUri(null);
-                      setScreenshotMimeType(undefined);
-                    }}
-                    className="absolute top-2 right-2 w-8 h-8 bg-black/50 rounded-full items-center justify-center"
-                  >
-                    <X size={18} color="white" />
-                  </Pressable>
-                </View>
-              )}
-            </Animated.View>
-
-          {/* Workout Type */}
-          <Animated.View
-            entering={FadeInDown.delay(250).springify()}
-            className="mt-4"
-          >
-            <Text className="text-white/60 text-sm mb-2">Workout Type</Text>
-            <ScrollView
-              ref={workoutTypeScrollRef}
-              horizontal
-              showsHorizontalScrollIndicator={Platform.OS === 'web'}
-              style={{ flexGrow: 0 }}
-              {...webWorkoutTypeScrollProps}
-            >
-              <View className="flex-row">
-                {WORKOUT_TYPES.map((type) => (
-                  <Pressable
-                    key={type}
-                    onPress={() => { setWorkoutType(type); Haptics.selectionAsync(); }}
-                    className={cn(
-                      "px-4 py-2 rounded-xl mr-2 border",
-                      workoutType === type
-                        ? "bg-af-accent border-af-accent"
-                        : "bg-white/5 border-white/10"
-                    )}
-                  >
-                    <Text className={cn(
-                      "font-medium",
-                      workoutType === type ? "text-white" : "text-white/60"
-                    )}>{type}</Text>
-                  </Pressable>
-                ))}
-              </View>
-            </ScrollView>
-          </Animated.View>
-
-          <Animated.View
-            entering={FadeInDown.delay(275).springify()}
-            className="mt-4"
-          >
-            <Text className="text-white/60 text-sm mb-2">Workout Date</Text>
-            {isWeb ? (
-              <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10">
-                <Clock size={20} color="#C0C0C0" />
-                <View className="flex-1 ml-3">
-                  <Text className="text-white/60 text-xs mb-1">Date</Text>
-                  <input
-                    type="date"
-                    value={getLocalDateString(selectedDate)}
-                    max={getLocalDateString(new Date())}
-                    onChange={(event) => handleWebDateChange(event.target.value)}
-                    style={{
-                      width: '100%',
-                      background: 'transparent',
-                      border: 'none',
-                      color: 'white',
-                      outline: 'none',
-                      fontSize: 16,
-                    }}
-                  />
-                </View>
-              </View>
-            ) : (
-              <Pressable
-                onPress={() => setShowDatePicker(true)}
-                className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10"
-              >
-                <Clock size={20} color="#C0C0C0" />
-                <View className="flex-1 ml-3">
-                  <Text className="text-white/60 text-xs mb-1">Date</Text>
-                  <Text className="text-white text-base">{format(selectedDate, 'EEEE, MMMM d, yyyy')}</Text>
-                </View>
-              </Pressable>
-            )}
-          </Animated.View>
-
-          {/* Duration */}
-          <Animated.View
-            entering={FadeInDown.delay(300).springify()}
-            className="mt-4"
-          >
-            <Text className="text-white/60 text-sm mb-2">Duration *</Text>
-            <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10">
-              <Clock size={20} color="#C0C0C0" />
-              <TextInput
-                value={duration}
-                onChangeText={setDuration}
-                placeholder="30"
-                placeholderTextColor="#ffffff40"
-                keyboardType="numeric"
-                className="flex-1 ml-3 text-white text-base"
-              />
-              <Text className="text-af-silver mr-3">min</Text>
-              <TextInput
-                value={durationSeconds}
-                onChangeText={(value) => setDurationSeconds(value.replace(/[^0-9]/g, '').slice(0, 2))}
-                placeholder="00"
-                placeholderTextColor="#ffffff40"
-                keyboardType="numeric"
-                className="w-12 text-white text-base text-right"
-              />
-              <Text className="text-af-silver ml-2">sec</Text>
-            </View>
-          </Animated.View>
-
-          {/* Distance */}
-          <Animated.View
-            entering={FadeInDown.delay(350).springify()}
-            className="mt-4"
-          >
-            <Text className="text-white/60 text-sm mb-2">Distance (optional)</Text>
-            <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10">
-              <MapPin size={20} color="#C0C0C0" />
-              <TextInput
-                value={distance}
-                onChangeText={setDistance}
-                placeholder="3.1"
-                placeholderTextColor="#ffffff40"
-                keyboardType="decimal-pad"
-                className="flex-1 ml-3 text-white text-base"
-              />
-              <Text className="text-af-silver">miles</Text>
-            </View>
-          </Animated.View>
-
-          {/* Privacy Toggle */}
-          <Animated.View
-            entering={FadeInDown.delay(400).springify()}
-            className="mt-4"
-          >
-            <Pressable
-              onPress={() => { setIsPrivate(!isPrivate); Haptics.selectionAsync(); }}
-              className={cn(
-                "flex-row items-center justify-between p-4 rounded-xl border",
-                isPrivate ? "bg-af-accent/20 border-af-accent/50" : "bg-white/5 border-white/10"
-              )}
-            >
-              <View className="flex-row items-center flex-1">
-                {isPrivate ? (
-                  <Lock size={20} color="#4A90D9" />
-                ) : (
-                  <Unlock size={20} color="#C0C0C0" />
-                )}
-                <View className="ml-3 flex-1">
-                  <Text className={cn(
-                    "font-medium",
-                    isPrivate ? "text-af-accent" : "text-white/70"
-                  )}>
-                    {isPrivate ? 'Private Workout' : 'Public Workout'}
-                  </Text>
-                  <Text className="text-white/40 text-xs">
-                    {isPrivate
-                      ? 'Only visible to PFLs, UFPM, and Owner'
-                      : 'Visible to all squadron members'}
-                  </Text>
-                </View>
-              </View>
-              <View className={cn(
-                "w-6 h-6 rounded-full border-2",
-                isPrivate ? "bg-af-accent border-af-accent" : "border-white/30"
-              )}>
-                {isPrivate && <View className="flex-1 items-center justify-center">
-                  <View className="w-2 h-2 bg-white rounded-full" />
-                </View>}
-              </View>
-            </Pressable>
-          </Animated.View>
-
-          {/* Submit Button */}
-          <Animated.View
-            entering={FadeInDown.delay(450).springify()}
-            className="mt-6"
-          >
-            {submitError ? (
-              <View className="flex-row items-center justify-center mb-3 bg-af-danger/10 p-3 rounded-xl">
-                <AlertCircle size={16} color="#EF4444" />
-                <Text className="text-af-danger text-sm ml-2">{submitError}</Text>
-              </View>
-            ) : null}
-            {!screenshotUri && (
-              <View className="flex-row items-center justify-center mb-3 bg-af-warning/10 p-3 rounded-xl">
-                <AlertCircle size={16} color="#F59E0B" />
-                  <Text className="text-af-warning text-sm ml-2">Screenshot/image proof is required to add workout</Text>
-              </View>
-            )}
+          <Animated.View entering={FadeInDown.delay(100).springify()} className="px-6 pt-4 pb-2 flex-row items-center">
             <Pressable
               onPress={() => {
-                if (canSubmit && !isSubmitting) {
-                  setShowConfirmation(true);
-                }
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                router.back();
               }}
-              disabled={!canSubmit || isSubmitting}
-              className="py-4 rounded-xl flex-row items-center justify-center"
-              style={canSubmit && !isSubmitting ? getThemeButtonStyle(theme, 'accent') : getThemeControlStyle(theme)}
+              className="w-10 h-10 rounded-full items-center justify-center mr-4"
+              style={getThemeControlStyle(theme)}
             >
-              <Check size={20} color={canSubmit && !isSubmitting ? "white" : "#666666"} />
-              <Text className={cn(
-                "font-bold text-lg ml-2",
-                canSubmit && !isSubmitting ? "text-white" : "text-white/40"
-              )}>
-                {isSubmitting ? 'Submitting...' : 'Submit for Approval'}
-              </Text>
+              <ChevronLeft size={24} color={theme.textSecondary} />
             </Pressable>
+            <View className="flex-1">
+              <Text style={getThemeHeadingStyle(theme, 22)}>{isEditing ? 'Edit Manual Workout' : 'Add Manual Workout'}</Text>
+              <Text style={getThemeBodyStyle(theme, 13, theme.textSecondary)} className="mt-1">
+                Log one session with one or more workout types and proof images.
+              </Text>
+            </View>
           </Animated.View>
-          </View>
-          </ThemeChrome>
+        </PageContainer>
+
+        <ScrollView className="flex-1" contentContainerStyle={{ paddingBottom: 40, alignItems: 'center' }} showsVerticalScrollIndicator={false}>
+          <PageContainer maxWidth={contentMaxWidth} className="px-6">
+            {isEditing ? (
+              <Animated.View entering={FadeInDown.delay(125).springify()} className="mt-4 rounded-2xl border border-af-warning/30 bg-af-warning/10 p-4">
+                <Text className="text-af-warning font-semibold">Editing requires re-approval</Text>
+                <Text className="text-af-silver text-sm mt-1">
+                  Once you resubmit this workout, it will go back to pending review before it counts toward your attendance again.
+                </Text>
+              </Animated.View>
+            ) : null}
+
+            <ThemeChrome theme={theme} variant="feature">
+              <View className="p-4">
+                <Animated.View entering={FadeInDown.delay(150).springify()}>
+                  <View className="flex-row items-center mb-2">
+                    <Text className="text-white/60 text-sm">Workout Proof Images *</Text>
+                    <View className="ml-2 flex-row items-center bg-af-warning/20 px-2 py-1 rounded">
+                      <AlertCircle size={12} color="#F59E0B" />
+                      <Text className="text-af-warning text-xs ml-1">Required</Text>
+                    </View>
+                  </View>
+                  {proofImages.length === 0 ? (
+                    <View className="bg-white/5 rounded-2xl border border-white/10 border-dashed p-6">
+                      <Text className="text-white font-semibold text-center mb-3">Attach one or more proof images</Text>
+                      <Text className="text-af-silver text-center text-sm mb-5">
+                        Add screenshots or photos that prove the full session. You can attach multiple images if needed.
+                      </Text>
+                      <View className="flex-row justify-center">
+                        <Pressable onPress={takePhoto} className="flex-row items-center bg-af-accent px-5 py-3 rounded-xl mr-2">
+                          <Camera size={18} color="white" />
+                          <Text className="text-white font-semibold ml-2">Camera</Text>
+                        </Pressable>
+                        <Pressable onPress={addProofImages} className="flex-row items-center bg-white/10 px-5 py-3 rounded-xl ml-2">
+                          <Upload size={18} color="#C0C0C0" />
+                          <Text className="text-white font-semibold ml-2">Gallery</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  ) : (
+                    <View>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                        <View className="flex-row">
+                          {proofImages.map((image, index) => (
+                            <View key={`${image.uri}-${index}`} className="mr-3 relative">
+                              <Image source={{ uri: image.uri }} className="w-28 h-28 rounded-2xl" resizeMode="cover" />
+                              <Pressable
+                                onPress={() => setProofImages((current) => current.filter((_, imageIndex) => imageIndex !== index))}
+                                className="absolute top-2 right-2 w-7 h-7 bg-black/60 rounded-full items-center justify-center"
+                              >
+                                <X size={16} color="white" />
+                              </Pressable>
+                            </View>
+                          ))}
+                        </View>
+                      </ScrollView>
+                      <View className="flex-row mt-3">
+                        <Pressable onPress={takePhoto} className="flex-row items-center bg-af-accent px-4 py-3 rounded-xl mr-2">
+                          <Camera size={18} color="white" />
+                          <Text className="text-white font-semibold ml-2">Add Photo</Text>
+                        </Pressable>
+                        <Pressable onPress={addProofImages} className="flex-row items-center bg-white/10 px-4 py-3 rounded-xl ml-2">
+                          <Upload size={18} color="#C0C0C0" />
+                          <Text className="text-white font-semibold ml-2">Add Images</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  )}
+                </Animated.View>
+
+                <Animated.View entering={FadeInDown.delay(200).springify()} className="mt-4">
+                  <Text className="text-white/60 text-sm mb-2">Workout Types</Text>
+                  {selectedWorkoutTypes.length === 0 ? (
+                    <View className="rounded-2xl border border-sky-400/30 bg-sky-400/10 p-4 mb-3">
+                      <View className="flex-row items-start">
+                        <Info size={18} color="#7DD3FC" />
+                        <Text className="text-af-silver text-sm ml-3 flex-1">
+                          Input boxes will populate once workout types are selected using the Select button below.
+                        </Text>
+                      </View>
+                    </View>
+                  ) : null}
+                  <Pressable
+                    onPress={() => {
+                      setDraftWorkoutTypes(selectedWorkoutTypes);
+                      setShowWorkoutTypeModal(true);
+                      Haptics.selectionAsync();
+                    }}
+                    className="flex-row items-center justify-between rounded-xl border border-white/10 bg-white/10 px-4 py-3"
+                  >
+                    <View className="flex-row items-center">
+                      {selectedWorkoutTypes.length > 0 ? <Pencil size={18} color="#C0C0C0" /> : <Plus size={18} color="#C0C0C0" />}
+                      <Text className="text-white font-semibold ml-3">
+                        {selectedWorkoutTypes.length > 0 ? 'Edit Selections' : 'Select'}
+                      </Text>
+                    </View>
+                    <Text className="text-af-silver text-xs">
+                      {selectedWorkoutTypes.length > 0 ? `${selectedWorkoutTypes.length} selected` : 'Multiple allowed'}
+                    </Text>
+                  </Pressable>
+                </Animated.View>
+
+                <Animated.View entering={FadeInDown.delay(225).springify()} className="mt-4">
+                  <Text className="text-white/60 text-sm mb-2">Workout Date</Text>
+                  {isWeb ? (
+                    <View className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10">
+                      <Clock size={20} color="#C0C0C0" />
+                      <View className="flex-1 ml-3">
+                        <Text className="text-white/60 text-xs mb-1">Date</Text>
+                        <input
+                          type="date"
+                          value={getLocalDateString(selectedDate)}
+                          max={getLocalDateString(new Date())}
+                          onChange={(event) => handleWebDateChange(event.target.value)}
+                          style={{ width: '100%', background: 'transparent', border: 'none', color: 'white', outline: 'none', fontSize: 16 }}
+                        />
+                      </View>
+                    </View>
+                  ) : (
+                    <Pressable onPress={() => setShowDatePicker(true)} className="flex-row items-center bg-white/10 rounded-xl px-4 py-3 border border-white/10">
+                      <Clock size={20} color="#C0C0C0" />
+                      <View className="ml-3">
+                        <Text className="text-white/60 text-xs">Date</Text>
+                        <Text className="text-white font-semibold mt-1">{format(selectedDate, 'MMMM d, yyyy')}</Text>
+                      </View>
+                    </Pressable>
+                  )}
+                </Animated.View>
+
+                {selectedWorkoutTypes.length > 1 ? (
+                  <Animated.View entering={FadeInDown.delay(235).springify()} className="mt-4 rounded-2xl border border-af-accent/20 bg-af-accent/10 p-4">
+                    <View className="flex-row items-start">
+                      <Info size={16} color="#7DD3FC" />
+                      <Text className="text-af-silver text-sm ml-3 flex-1">
+                        For multi-type sessions, enter the portion of the workout that belongs to each selected type so leaderboard points and analytics stay accurate.
+                      </Text>
+                    </View>
+                  </Animated.View>
+                ) : null}
+
+                {workoutSegments.map((segment) => (
+                  <Animated.View key={segment.key} entering={FadeInDown.delay(250).springify()} className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
+                    <Text className="text-white font-semibold text-lg">{getWorkoutTypeLabel(segment.type)}</Text>
+                    <Text className="text-af-silver text-sm mt-1 mb-4">{getWorkoutTypeDescription(segment.type)}</Text>
+
+                    <View className="flex-row" style={{ gap: 12 }}>
+                      <NumericField
+                        label="Duration (minutes) *"
+                        value={segment.durationInput}
+                        onChangeText={(value) => handleSegmentChange(segment.key, { durationInput: value })}
+                        placeholder="30"
+                      />
+                      <NumericField
+                        label="Seconds"
+                        value={segment.durationSecondsInput}
+                        onChangeText={(value) => handleSegmentChange(segment.key, { durationSecondsInput: value })}
+                        placeholder="00"
+                        widthClassName="w-28"
+                      />
+                    </View>
+
+                    {['Running', 'Walking', 'Hiking', 'Rucking', 'Cycling', 'Swimming', 'Diving'].includes(segment.type) ? (
+                      <View className="mt-4">
+                        <NumericField
+                          label="Distance *"
+                          value={segment.distanceInput}
+                          onChangeText={(value) => handleSegmentChange(segment.key, { distanceInput: value })}
+                          placeholder="Miles"
+                          widthClassName="w-full"
+                        />
+                      </View>
+                    ) : null}
+
+                    {segment.type === 'Hiking' ? (
+                      <View className="flex-row mt-4" style={{ gap: 12 }}>
+                        <NumericField
+                          label="Vertical Gain"
+                          value={segment.elevationGainInput}
+                          onChangeText={(value) => handleSegmentChange(segment.key, { elevationGainInput: value })}
+                          placeholder="Feet"
+                        />
+                        <NumericField
+                          label="Steps"
+                          value={segment.stepsInput}
+                          onChangeText={(value) => handleSegmentChange(segment.key, { stepsInput: value })}
+                          placeholder="8000"
+                        />
+                      </View>
+                    ) : null}
+
+                    {segment.type === 'Rucking' ? (
+                      <View className="mt-4">
+                        <NumericField
+                          label="Ruck Weight *"
+                          value={segment.weightInput}
+                          onChangeText={(value) => handleSegmentChange(segment.key, { weightInput: value })}
+                          placeholder="35"
+                          widthClassName="w-full"
+                        />
+                      </View>
+                    ) : null}
+
+                    {(segment.type === 'Weightlifting' || segment.type === 'Strength') ? (
+                      <>
+                        <View className="mt-4">
+                          <Text className="text-white/60 text-sm mb-2">Lift Type *</Text>
+                          <View className="flex-row flex-wrap">
+                            {WEIGHTLIFTING_SUBTYPES.map((subtype) => (
+                              <SelectPill
+                                key={`${segment.key}-${subtype}`}
+                                label={subtype}
+                                selected={segment.subtype === subtype}
+                                onPress={() => handleSegmentChange(segment.key, { subtype })}
+                              />
+                            ))}
+                          </View>
+                        </View>
+                        <View className="flex-row mt-4" style={{ gap: 12 }}>
+                          <NumericField
+                            label="Weight Amount *"
+                            value={segment.weightInput}
+                            onChangeText={(value) => handleSegmentChange(segment.key, { weightInput: value })}
+                            placeholder="185"
+                          />
+                          <NumericField
+                            label="Reps *"
+                            value={segment.repsInput}
+                            onChangeText={(value) => handleSegmentChange(segment.key, { repsInput: value })}
+                            placeholder="5"
+                          />
+                        </View>
+                        <View className="mt-4">
+                          <NumericField
+                            label="Sets"
+                            value={segment.setsInput}
+                            onChangeText={(value) => handleSegmentChange(segment.key, { setsInput: value })}
+                            placeholder="3"
+                            widthClassName="w-full"
+                          />
+                        </View>
+                      </>
+                    ) : null}
+
+                    {segment.type === 'HIIT' || segment.type === 'Combatives' ? (
+                      <View className="mt-4">
+                        <NumericField
+                          label="Rounds"
+                          value={segment.roundsInput}
+                          onChangeText={(value) => handleSegmentChange(segment.key, { roundsInput: value })}
+                          placeholder="6"
+                          widthClassName="w-full"
+                        />
+                      </View>
+                    ) : null}
+
+                    {segment.type === 'Climbing' ? (
+                      <View className="mt-4">
+                        <NumericField
+                          label="Vertical Gain"
+                          value={segment.elevationGainInput}
+                          onChangeText={(value) => handleSegmentChange(segment.key, { elevationGainInput: value })}
+                          placeholder="Feet"
+                          widthClassName="w-full"
+                        />
+                      </View>
+                    ) : null}
+
+                    {segment.type === 'Diving' ? (
+                      <View className="mt-4">
+                        <NumericField
+                          label="Depth"
+                          value={segment.depthInput}
+                          onChangeText={(value) => handleSegmentChange(segment.key, { depthInput: value })}
+                          placeholder="Feet"
+                          widthClassName="w-full"
+                        />
+                      </View>
+                    ) : null}
+
+                    {segment.type === 'Surfing' ? (
+                      <View className="mt-4">
+                        <Text className="text-white/60 text-sm mb-2">Wave Conditions *</Text>
+                        <TextInput
+                          value={segment.waveConditionsInput}
+                          onChangeText={(value) => handleSegmentChange(segment.key, { waveConditionsInput: value })}
+                          placeholder="e.g. clean waist-high sets"
+                          placeholderTextColor="#ffffff40"
+                          className="rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white"
+                        />
+                      </View>
+                    ) : null}
+
+                    <View className="mt-4">
+                      <Text className="text-white/60 text-sm mb-2">Additional Information</Text>
+                      <TextInput
+                        value={segment.additionalInfo ?? ''}
+                        onChangeText={(value) => handleSegmentChange(segment.key, { additionalInfo: value })}
+                        placeholder="Add context for this workout type"
+                        placeholderTextColor="#ffffff40"
+                        multiline
+                        textAlignVertical="top"
+                        className="rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white min-h-[96px]"
+                      />
+                    </View>
+                  </Animated.View>
+                ))}
+
+                <Animated.View entering={FadeInDown.delay(300).springify()} className="mt-4">
+                  <Text className="text-white/60 text-sm mb-2">Privacy</Text>
+                  <Pressable
+                    onPress={() => {
+                      setIsPrivate((current) => !current);
+                      Haptics.selectionAsync();
+                    }}
+                    className="flex-row items-center justify-between rounded-xl border border-white/10 bg-white/10 px-4 py-3"
+                  >
+                    <View>
+                      <Text className="text-white font-semibold">{isPrivate ? 'Private workout' : 'Visible to squadron'}</Text>
+                      <Text className="text-af-silver text-xs mt-1">
+                        Private workouts still count for you, but details stay hidden from other users.
+                      </Text>
+                    </View>
+                    <View className={cn("w-6 h-6 rounded-full border-2 items-center justify-center", isPrivate ? "bg-af-accent border-af-accent" : "border-white/30")}>
+                      {isPrivate ? <Check size={14} color="#fff" /> : null}
+                    </View>
+                  </Pressable>
+                </Animated.View>
+
+                {submitError ? (
+                  <View className="mt-4 rounded-xl border border-af-danger/40 bg-af-danger/10 px-4 py-3">
+                    <Text className="text-af-danger">{submitError}</Text>
+                  </View>
+                ) : null}
+
+                {!canSubmit && selectedWorkoutTypes.length > 0 ? (
+                  <View className="mt-4 rounded-xl border border-af-warning/30 bg-af-warning/10 px-4 py-3">
+                    <Text className="text-af-warning text-sm">
+                      Complete the required fields for each selected workout type and attach at least one proof image before submitting.
+                    </Text>
+                  </View>
+                ) : null}
+
+                <Pressable
+                  onPress={handleSubmit}
+                  disabled={!canSubmit || isSubmitting}
+                  className="mt-6 rounded-xl px-4 py-4"
+                  style={!canSubmit || isSubmitting ? getThemeControlStyle(theme) : getThemeButtonStyle(theme, 'accent')}
+                >
+                  <Text style={!canSubmit || isSubmitting ? getThemeBodyStyle(theme, 15, theme.textMuted) : getThemeButtonTextStyle(theme, 'accent')}>
+                    {isSubmitting ? 'Submitting...' : isEditing ? 'Resubmit Workout' : 'Submit Workout'}
+                  </Text>
+                </Pressable>
+              </View>
+            </ThemeChrome>
           </PageContainer>
         </ScrollView>
-      </SafeAreaView>
 
-      {/* Confirmation Modal for Screenshot Uploads */}
-      <Modal visible={showConfirmation} transparent animationType="fade">
-        <View className="flex-1 bg-black/80 items-center justify-center p-6">
-          <Animated.View entering={ZoomIn.duration(300)} style={{ width: '100%', maxWidth: 384 }}>
-            <ThemeChrome theme={theme} variant="feature">
-            <View className="p-6">
-            <Text className="text-white text-xl font-bold mb-4">{isEditing ? 'Resubmit Manual Workout' : 'Submit Manual Workout'}</Text>
+        {showDatePicker && !isWeb ? (
+          <DateTimePicker
+            value={selectedDate}
+            mode="date"
+            maximumDate={new Date()}
+            onChange={handleDateChange}
+          />
+        ) : null}
 
-            {screenshotUri && (
-              <Image
-                source={{ uri: screenshotUri }}
-                className="w-full h-32 rounded-xl mb-4"
-                resizeMode="cover"
-              />
-            )}
-
-            <View className="bg-white/5 rounded-xl p-4 mb-4">
-              <View className="flex-row justify-between mb-2">
-                <Text className="text-af-silver">Type</Text>
-                <Text className="text-white font-semibold">{getWorkoutDisplayTitle(workoutType)}</Text>
-              </View>
-              <View className="flex-row justify-between mb-2">
-                <Text className="text-af-silver">Date</Text>
-                <Text className="text-white font-semibold">{getLocalDateString(selectedDate)}</Text>
-              </View>
-              <View className="flex-row justify-between mb-2">
-                <Text className="text-af-silver">Duration</Text>
-                <Text className="text-white font-semibold">
-                  {(parseInt(duration || '0', 10) || 0)} min {String(Math.min(59, Math.max(0, parseInt(durationSeconds || '0', 10) || 0))).padStart(2, '0')} sec
-                </Text>
-              </View>
-              {distance && (
-                <View className="flex-row justify-between mb-2">
-                  <Text className="text-af-silver">Distance</Text>
-                  <Text className="text-white font-semibold">{distance} mi</Text>
+        <Modal visible={showWorkoutTypeModal} transparent animationType="fade">
+          <View className="flex-1 bg-black/80 items-center justify-center p-6">
+            <View className="w-full max-w-md rounded-3xl border border-white/20 bg-af-navy p-6">
+              <View className="flex-row items-center justify-between mb-4">
+                <View className="flex-1 pr-4">
+                  <Text className="text-white text-xl font-bold">Select Workout Types</Text>
+                  <Text className="text-af-silver text-sm mt-1">
+                    You can select multiple workout types for the same session.
+                  </Text>
                 </View>
-              )}
-              <View className="flex-row justify-between">
-                <Text className="text-af-silver">Privacy</Text>
-                <Text className={cn(
-                  "font-semibold",
-                  isPrivate ? "text-af-accent" : "text-white"
-                )}>
-                  {isPrivate ? 'Private' : 'Public'}
-                </Text>
+                <Pressable
+                  onPress={() => setShowWorkoutTypeModal(false)}
+                  className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+                >
+                  <X size={20} color="#C0C0C0" />
+                </Pressable>
               </View>
-            </View>
 
-            <View className="bg-af-accent/10 border border-af-accent/20 rounded-xl p-4 mb-4">
-              <Text className="text-white text-sm leading-5">
-                {isEditing
-                  ? 'This edited workout will be re-submitted to your squadron\'s PFLs and UFPM for approval. It will not count toward your attendance until it is approved again.'
-                  : 'This workout will be sent to your squadron\'s PFLs and UFPM for approval. It will only count toward your attendance after approval.'}
-              </Text>
-            </View>
+              <ScrollView style={{ maxHeight: 420 }} contentContainerStyle={{ paddingBottom: 8 }}>
+                {WORKOUT_TYPE_OPTIONS.map((type) => {
+                  const selected = draftWorkoutTypes.includes(type);
+                  return (
+                    <Pressable
+                      key={type}
+                      onPress={() => {
+                        Haptics.selectionAsync();
+                        setDraftWorkoutTypes((current) => (
+                          current.includes(type)
+                            ? current.filter((item) => item !== type)
+                            : [...current, type]
+                        ));
+                      }}
+                      className={cn(
+                        "rounded-xl border px-4 py-4 mb-3",
+                        selected ? "bg-af-accent/20 border-af-accent" : "bg-white/5 border-white/10"
+                      )}
+                    >
+                      <View className="flex-row items-center justify-between">
+                        <View className="flex-1 pr-4">
+                          <Text className={selected ? "text-white font-semibold" : "text-white font-medium"}>
+                            {getWorkoutTypeLabel(type)}
+                          </Text>
+                          <Text className="text-af-silver text-xs mt-1">
+                            {getWorkoutTypeDescription(type)}
+                          </Text>
+                        </View>
+                        <View className={cn("w-6 h-6 rounded-full border-2 items-center justify-center", selected ? "bg-af-accent border-af-accent" : "border-white/30")}>
+                          {selected ? <Check size={14} color="#fff" /> : null}
+                        </View>
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
 
-            <View className="flex-row">
-              <Pressable
-                onPress={() => setShowConfirmation(false)}
-                className="flex-1 py-3 rounded-xl mr-2"
-                style={getThemeControlStyle(theme)}
-              >
-                <Text className="text-white text-center font-semibold">Edit</Text>
-              </Pressable>
-              <Pressable
-                onPress={() => {
-                  setShowConfirmation(false);
-                  handleSubmit();
-                }}
-                className="flex-1 py-3 rounded-xl ml-2"
-                style={getThemeButtonStyle(theme, 'accent')}
-              >
-                <Text style={[getThemeButtonTextStyle(theme, 'accent'), { textAlign: 'center' }]}>{isEditing ? 'Resubmit for Review' : 'Send for Review'}</Text>
+              <Pressable onPress={handleConfirmWorkoutTypes} className="mt-4 rounded-xl bg-af-accent px-4 py-4">
+                <Text className="text-white text-center font-semibold">Confirm</Text>
               </Pressable>
             </View>
-            </View>
-            </ThemeChrome>
-          </Animated.View>
-        </View>
-      </Modal>
-      {showDatePicker ? (
-        <DateTimePicker
-          value={selectedDate}
-          mode="date"
-          display="spinner"
-          onChange={handleDateChange}
-          maximumDate={new Date()}
-          themeVariant="dark"
-        />
-      ) : null}
+          </View>
+        </Modal>
+      </SafeAreaView>
     </View>
   );
 }

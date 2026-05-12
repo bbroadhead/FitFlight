@@ -13,9 +13,11 @@ import type {
   ScheduledPTSession,
   SharedWorkout,
   Squadron,
+  Workout,
+  WorkoutSegment,
   WorkoutType,
 } from '@/lib/store';
-import { normalizeAccountType } from '@/lib/store';
+import { normalizeAccountType, PCS_OUTPRO_FLIGHT, isPCSOutproFlight } from '@/lib/store';
 import { getValidAccessToken } from '@/lib/supabaseAuth';
 import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
@@ -249,6 +251,9 @@ type ManualWorkoutSubmissionRow = {
   distance: number | null;
   is_private: boolean;
   proof_image_data?: string | null;
+  proof_image_data_list?: string[] | null;
+  workout_types?: WorkoutType[] | null;
+  workout_details?: WorkoutSegment[] | null;
   status: ManualWorkoutSubmissionStatus;
   reviewer_member_id: string | null;
   reviewer_name: string | null;
@@ -307,6 +312,9 @@ export type ManualWorkoutSubmission = {
   distance?: number;
   isPrivate: boolean;
   proofImageData: string;
+  proofImageDataList?: string[];
+  workoutTypes?: WorkoutType[];
+  workoutDetails?: WorkoutSegment[];
   status: ManualWorkoutSubmissionStatus;
   reviewerMemberId: string | null;
   reviewerName: string | null;
@@ -551,6 +559,11 @@ const FLIGHT_MAP: Record<string, Flight> = {
   'f flt': 'Foxhound',
   'do flt': 'DO',
   'det 1': 'DET',
+  'pcs/outpro': PCS_OUTPRO_FLIGHT,
+  'pcs outpro': PCS_OUTPRO_FLIGHT,
+  'pcs-outpro': PCS_OUTPRO_FLIGHT,
+  pcs: PCS_OUTPRO_FLIGHT,
+  outpro: PCS_OUTPRO_FLIGHT,
 };
 
 const RANK_MAP: Record<string, string> = {
@@ -613,6 +626,7 @@ const FLIGHT_TO_ROSTER: Record<Flight, string> = {
   DO: 'DO',
   ADF: 'ADF',
   DET: 'DET 1',
+  'PCS/Outpro': 'PCS/OUTPRO',
 };
 
 async function getHeaders(accessToken?: string) {
@@ -906,7 +920,26 @@ function isMissingSharedWorkoutEditColumnsError(message: string) {
   return normalized.includes('edited_by') || normalized.includes('edited_at');
 }
 
+function isMissingExtendedManualWorkoutColumnsError(message: string) {
+  const normalized = message.toLowerCase();
+  return normalized.includes('proof_image_data_list')
+    || normalized.includes('workout_types')
+    || normalized.includes('workout_details');
+}
+
 function normalizeManualWorkoutSubmissionRow(row: ManualWorkoutSubmissionRow): ManualWorkoutSubmission {
+  const proofImageDataList = Array.isArray(row.proof_image_data_list)
+    ? row.proof_image_data_list
+        .map((item) => getDisplayImageUri(item ?? undefined) ?? item)
+        .filter((item): item is string => typeof item === 'string' && item.length > 0)
+    : [];
+  const workoutDetails = Array.isArray(row.workout_details) ? row.workout_details : [];
+  const workoutTypes = Array.isArray(row.workout_types) && row.workout_types.length > 0
+    ? row.workout_types
+    : workoutDetails.length > 0
+      ? workoutDetails.map((detail) => detail.type)
+      : [row.workout_type];
+
   return {
     id: row.id,
     memberId: row.member_id,
@@ -922,6 +955,9 @@ function normalizeManualWorkoutSubmissionRow(row: ManualWorkoutSubmissionRow): M
     distance: typeof row.distance === 'number' ? row.distance : undefined,
     isPrivate: row.is_private,
     proofImageData: getDisplayImageUri(row.proof_image_data ?? undefined) ?? row.proof_image_data ?? '',
+    proofImageDataList,
+    workoutTypes,
+    workoutDetails,
     status: row.status,
     reviewerMemberId: row.reviewer_member_id,
     reviewerName: row.reviewer_name,
@@ -947,6 +983,54 @@ function normalizeScheduledPTSessionRow(row: ScheduledPTSessionRow): ScheduledPT
     scope: row.session_scope ?? 'flight',
     kind: row.session_kind ?? 'pt',
   };
+}
+
+function getWorkoutDisplayTitle(type: WorkoutType) {
+  switch (type) {
+    case 'Running':
+      return 'Run';
+    case 'Walking':
+      return 'Walk';
+    case 'Cycling':
+      return 'Ride';
+    case 'Swimming':
+      return 'Swim';
+    case 'Weightlifting':
+    case 'Strength':
+      return 'Lift';
+    default:
+      return type;
+  }
+}
+
+function getManualWorkoutSegments(submission: ManualWorkoutSubmission): WorkoutSegment[] {
+  if (Array.isArray(submission.workoutDetails) && submission.workoutDetails.length > 0) {
+    return submission.workoutDetails.map((detail, index) => ({
+      id: detail.id ?? `${submission.id}-segment-${index}`,
+      type: detail.type,
+      subtype: detail.subtype,
+      duration: detail.duration,
+      durationSeconds: detail.durationSeconds ?? 0,
+      distance: detail.distance,
+      weight: detail.weight,
+      reps: detail.reps,
+      sets: detail.sets,
+      rounds: detail.rounds,
+      elevationGain: detail.elevationGain,
+      depth: detail.depth,
+      steps: detail.steps,
+      waveConditions: detail.waveConditions,
+      additionalInfo: detail.additionalInfo,
+    }));
+  }
+
+  return [{
+    id: `${submission.id}-segment-0`,
+    type: submission.workoutType,
+    duration: submission.duration,
+    durationSeconds: submission.durationSeconds,
+    distance: submission.distance,
+  }];
 }
 
 function normalizePFRARecordRow(row: PFRARecordRow): FitnessAssessment {
@@ -1441,6 +1525,9 @@ export async function fetchRosterMembers(accessToken?: string, squadron: Squadro
     .map((member) => {
       if (!member) {
         return null;
+      }
+      if (isPCSOutproFlight(member.flight)) {
+        return { ...member, accountType: 'standard' };
       }
       if (member.flight === 'DO') {
         return { ...member, accountType: 'squadron_leadership' };
@@ -3871,10 +3958,14 @@ export async function fetchManualWorkoutSubmissions(params: {
   canReview: boolean;
   accessToken?: string;
 }) {
+  const extendedSelect =
+    'id,member_id,member_email,member_name,member_rank,member_flight,squadron,workout_date,workout_type,workout_types,workout_details,duration,duration_seconds,distance,is_private,proof_image_data,proof_image_data_list,status,reviewer_member_id,reviewer_name,reviewer_note,attendance_marked_by_submission,requester_read,reviewer_read,created_at,updated_at';
+  const legacySelect =
+    'id,member_id,member_email,member_name,member_rank,member_flight,squadron,workout_date,workout_type,duration,duration_seconds,distance,is_private,proof_image_data,status,reviewer_member_id,reviewer_name,reviewer_note,attendance_marked_by_submission,requester_read,reviewer_read,created_at,updated_at';
   const mineQuery = new URLSearchParams();
   mineQuery.set(
     'select',
-    'id,member_id,member_email,member_name,member_rank,member_flight,squadron,workout_date,workout_type,duration,duration_seconds,distance,is_private,proof_image_data,status,reviewer_member_id,reviewer_name,reviewer_note,attendance_marked_by_submission,requester_read,reviewer_read,created_at,updated_at'
+    extendedSelect
   );
   mineQuery.set('order', 'updated_at.desc');
   if (params.memberEmail?.trim()) {
@@ -3886,30 +3977,46 @@ export async function fetchManualWorkoutSubmissions(params: {
     mineQuery.set('member_id', `eq.${params.memberId}`);
   }
 
-  const requests: Promise<Response>[] = [
+  const headers = await getHeaders(params.accessToken);
+  const loadMine = async (selectValue: string) => {
+    mineQuery.set('select', selectValue);
+    return fetch(`${SUPABASE_URL}/rest/v1/manual_workout_submissions?${mineQuery.toString()}`, {
+      method: 'GET',
+      headers,
+    });
+  };
+  const loadReview = async (selectValue: string) =>
     fetch(
-      `${SUPABASE_URL}/rest/v1/manual_workout_submissions?${mineQuery.toString()}`,
+      `${SUPABASE_URL}/rest/v1/manual_workout_submissions?select=${encodeURIComponent(selectValue)}&squadron=eq.${encodeURIComponent(params.squadron)}&status=eq.pending&order=created_at.asc`,
       {
         method: 'GET',
-        headers: await getHeaders(params.accessToken),
+        headers,
       }
-    ),
-  ];
+    );
+
+  const requests: Promise<Response>[] = [loadMine(extendedSelect)];
 
   if (params.canReview) {
-    requests.push(
-      fetch(
-        `${SUPABASE_URL}/rest/v1/manual_workout_submissions?select=id,member_id,member_email,member_name,member_rank,member_flight,squadron,workout_date,workout_type,duration,duration_seconds,distance,is_private,proof_image_data,status,reviewer_member_id,reviewer_name,reviewer_note,attendance_marked_by_submission,requester_read,reviewer_read,created_at,updated_at&squadron=eq.${encodeURIComponent(params.squadron)}&status=eq.pending&order=created_at.asc`,
-        {
-          method: 'GET',
-          headers: await getHeaders(params.accessToken),
-        }
-      )
-    );
+    requests.push(loadReview(extendedSelect));
   }
 
-  const [mineResponse, reviewResponse] = await Promise.all(requests);
-  const minePayload = await mineResponse.json().catch(() => []);
+  let [mineResponse, reviewResponse] = await Promise.all(requests);
+  let minePayload = await mineResponse.json().catch(() => []);
+  if (!mineResponse.ok) {
+    const message =
+      typeof (minePayload as { message?: unknown }).message === 'string'
+        ? (minePayload as { message: string }).message
+        : 'Unable to load manual workout submissions.';
+    if (isMissingExtendedManualWorkoutColumnsError(message)) {
+      mineResponse = await loadMine(legacySelect);
+      minePayload = await mineResponse.json().catch(() => []);
+      if (params.canReview) {
+        reviewResponse = await loadReview(legacySelect);
+      }
+    } else {
+      throw new Error(message);
+    }
+  }
   if (!mineResponse.ok) {
     const message =
       typeof (minePayload as { message?: unknown }).message === 'string'
@@ -3946,11 +4053,14 @@ export async function createManualWorkoutSubmission(params: {
   squadron: Squadron;
   workoutDate: string;
   workoutType: WorkoutType;
+  workoutTypes?: WorkoutType[];
+  workoutDetails?: WorkoutSegment[];
   duration: number;
   durationSeconds?: number;
   distance?: number;
   isPrivate: boolean;
   proofImageData: string;
+  proofImageDataList?: string[];
   submissionId?: string;
   accessToken?: string;
 }) {
@@ -3971,6 +4081,14 @@ export async function createManualWorkoutSubmission(params: {
     distance: params.distance ?? null,
     is_private: params.isPrivate,
     proof_image_data: serializeImageReference(params.proofImageData),
+    proof_image_data_list: (params.proofImageDataList ?? []).map((value) => serializeImageReference(value)),
+    workout_types: params.workoutTypes ?? [params.workoutType],
+    workout_details: params.workoutDetails ?? [{
+      type: params.workoutType,
+      duration: params.duration,
+      durationSeconds: params.durationSeconds ?? 0,
+      distance: params.distance,
+    }],
     status: 'pending',
     reviewer_member_id: null,
     reviewer_name: null,
@@ -4003,6 +4121,23 @@ export async function createManualWorkoutSubmission(params: {
         method: 'POST',
         headers,
         body: JSON.stringify(basePayload),
+      });
+      payload = await response.json().catch(() => []);
+    } else if (isMissingExtendedManualWorkoutColumnsError(message)) {
+      const legacyPayload = {
+        ...basePayload,
+        proof_image_data: serializeImageReference(params.proofImageData),
+      };
+      delete (legacyPayload as any).proof_image_data_list;
+      delete (legacyPayload as any).workout_types;
+      delete (legacyPayload as any).workout_details;
+      response = await fetch(`${SUPABASE_URL}/rest/v1/manual_workout_submissions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          ...legacyPayload,
+          attendance_marked_by_submission: false,
+        }),
       });
       payload = await response.json().catch(() => []);
     } else {
@@ -4081,11 +4216,14 @@ export async function updateManualWorkoutSubmission(params: {
   submissionId: string;
   workoutDate: string;
   workoutType: WorkoutType;
+  workoutTypes?: WorkoutType[];
+  workoutDetails?: WorkoutSegment[];
   duration: number;
   durationSeconds?: number;
   distance?: number;
   isPrivate: boolean;
   proofImageData: string;
+  proofImageDataList?: string[];
   accessToken?: string;
 }) {
   const headers = {
@@ -4101,6 +4239,14 @@ export async function updateManualWorkoutSubmission(params: {
     distance: params.distance ?? null,
     is_private: params.isPrivate,
     proof_image_data: serializeImageReference(params.proofImageData),
+    proof_image_data_list: (params.proofImageDataList ?? []).map((value) => serializeImageReference(value)),
+    workout_types: params.workoutTypes ?? [params.workoutType],
+    workout_details: params.workoutDetails ?? [{
+      type: params.workoutType,
+      duration: params.duration,
+      durationSeconds: params.durationSeconds ?? 0,
+      distance: params.distance,
+    }],
     status: 'pending',
     reviewer_member_id: null,
     reviewer_name: null,
@@ -4131,6 +4277,26 @@ export async function updateManualWorkoutSubmission(params: {
           method: 'PATCH',
           headers,
           body: JSON.stringify(basePayload),
+        }
+      );
+      payload = await response.json().catch(() => []);
+    } else if (isMissingExtendedManualWorkoutColumnsError(message)) {
+      const legacyPayload = {
+        ...basePayload,
+        proof_image_data: serializeImageReference(params.proofImageData),
+      };
+      delete (legacyPayload as any).proof_image_data_list;
+      delete (legacyPayload as any).workout_types;
+      delete (legacyPayload as any).workout_details;
+      response = await fetch(
+        `${SUPABASE_URL}/rest/v1/manual_workout_submissions?id=eq.${encodeURIComponent(params.submissionId)}`,
+        {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({
+            ...legacyPayload,
+            attendance_marked_by_submission: false,
+          }),
         }
       );
       payload = await response.json().catch(() => []);
@@ -4183,13 +4349,14 @@ export async function fetchApprovedManualWorkouts(
   squadron?: Squadron,
   options?: { includeProofImage?: boolean; updatedAfter?: string }
 ) {
+  const extendedSelect = options?.includeProofImage === false
+    ? 'id,member_id,member_email,member_name,member_rank,member_flight,squadron,workout_date,workout_type,workout_types,workout_details,duration,duration_seconds,distance,is_private,proof_image_data_list,status,reviewer_member_id,reviewer_name,reviewer_note,attendance_marked_by_submission,requester_read,reviewer_read,created_at,updated_at'
+    : 'id,member_id,member_email,member_name,member_rank,member_flight,squadron,workout_date,workout_type,workout_types,workout_details,duration,duration_seconds,distance,is_private,proof_image_data,proof_image_data_list,status,reviewer_member_id,reviewer_name,reviewer_note,attendance_marked_by_submission,requester_read,reviewer_read,created_at,updated_at';
+  const legacySelect = options?.includeProofImage === false
+    ? 'id,member_id,member_email,member_name,member_rank,member_flight,squadron,workout_date,workout_type,duration,duration_seconds,distance,is_private,status,reviewer_member_id,reviewer_name,reviewer_note,attendance_marked_by_submission,requester_read,reviewer_read,created_at,updated_at'
+    : 'id,member_id,member_email,member_name,member_rank,member_flight,squadron,workout_date,workout_type,duration,duration_seconds,distance,is_private,proof_image_data,status,reviewer_member_id,reviewer_name,reviewer_note,attendance_marked_by_submission,requester_read,reviewer_read,created_at,updated_at';
   const query = new URLSearchParams();
-  query.set(
-    'select',
-    options?.includeProofImage === false
-      ? 'id,member_id,member_email,member_name,member_rank,member_flight,squadron,workout_date,workout_type,duration,duration_seconds,distance,is_private,status,reviewer_member_id,reviewer_name,reviewer_note,attendance_marked_by_submission,requester_read,reviewer_read,created_at,updated_at'
-      : 'id,member_id,member_email,member_name,member_rank,member_flight,squadron,workout_date,workout_type,duration,duration_seconds,distance,is_private,proof_image_data,status,reviewer_member_id,reviewer_name,reviewer_note,attendance_marked_by_submission,requester_read,reviewer_read,created_at,updated_at'
-  );
+  query.set('select', extendedSelect);
   query.set('status', 'eq.approved');
   query.set('order', 'workout_date.desc');
   if (squadron) {
@@ -4199,12 +4366,29 @@ export async function fetchApprovedManualWorkouts(
     query.set('updated_at', `gt.${options.updatedAfter}`);
   }
 
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/manual_workout_submissions?${query.toString()}`, {
-    method: 'GET',
-    headers: await getHeaders(accessToken),
-  });
+  const headers = await getHeaders(accessToken);
+  const loadApproved = async (selectValue: string) => {
+    query.set('select', selectValue);
+    return fetch(`${SUPABASE_URL}/rest/v1/manual_workout_submissions?${query.toString()}`, {
+      method: 'GET',
+      headers,
+    });
+  };
 
-  const payload = await response.json().catch(() => []);
+  let response = await loadApproved(extendedSelect);
+  let payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to load approved manual workouts.';
+    if (isMissingExtendedManualWorkoutColumnsError(message)) {
+      response = await loadApproved(legacySelect);
+      payload = await response.json().catch(() => []);
+    } else {
+      throw new Error(message);
+    }
+  }
   if (!response.ok) {
     const message =
       typeof (payload as { message?: unknown }).message === 'string'
@@ -4217,36 +4401,51 @@ export async function fetchApprovedManualWorkouts(
   const grouped = new Map<string, { memberId?: string; memberEmail?: string; workouts: Member['workouts'][number][] }>();
 
   submissions.forEach((submission) => {
-    const workout = {
-      id: submission.id,
-      externalId: submission.id,
-      date: submission.workoutDate,
-      type: submission.workoutType,
-      duration: submission.duration,
-      durationSeconds: submission.durationSeconds,
-      distance: submission.distance,
-      source: 'manual' as const,
-      screenshotUri: submission.proofImageData || undefined,
-      title:
-        submission.workoutType === 'Running'
-          ? 'Run'
-          : submission.workoutType === 'Walking'
-            ? 'Walk'
-            : submission.workoutType === 'Cycling'
-              ? 'Ride'
-              : submission.workoutType === 'Swimming'
-                ? 'Swim'
-                : submission.workoutType,
-      isPrivate: submission.isPrivate,
-      attendanceMarkedBySubmission: submission.attendanceMarkedBySubmission,
-    };
     const key = submission.memberId || submission.memberEmail.toLowerCase();
     const current = grouped.get(key) ?? {
       memberId: submission.memberId,
       memberEmail: submission.memberEmail.toLowerCase(),
       workouts: [],
     };
-    current.workouts.push(workout);
+    const proofImageUris = submission.proofImageDataList && submission.proofImageDataList.length > 0
+      ? submission.proofImageDataList
+      : submission.proofImageData
+        ? [submission.proofImageData]
+        : [];
+    const segments = getManualWorkoutSegments(submission);
+    segments.forEach((segment, index) => {
+      const workout: Workout = {
+        id: `${submission.id}:${index}`,
+        externalId: submission.id,
+        sessionId: submission.id,
+        date: submission.workoutDate,
+        type: segment.type,
+        duration: segment.duration,
+        durationSeconds: segment.durationSeconds,
+        distance: segment.distance,
+        source: 'manual',
+        screenshotUri: proofImageUris[0] || undefined,
+        proofImageUris,
+        segments,
+        metrics: {
+          subtype: segment.subtype,
+          weight: segment.weight,
+          reps: segment.reps,
+          sets: segment.sets,
+          rounds: segment.rounds,
+          elevationGain: segment.elevationGain,
+          depth: segment.depth,
+          steps: segment.steps,
+          waveConditions: segment.waveConditions,
+          additionalInfo: segment.additionalInfo,
+          distance: segment.distance,
+        },
+        title: getWorkoutDisplayTitle(segment.type),
+        isPrivate: submission.isPrivate,
+        attendanceMarkedBySubmission: submission.attendanceMarkedBySubmission,
+      };
+      current.workouts.push(workout);
+    });
     grouped.set(key, current);
   });
 

@@ -4,10 +4,27 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { buildLeaderboardHistory, getMonthKey } from '@/lib/monthlyStats';
 
 // Types
-export type Flight = 'Apex' | 'Bomber' | 'Cryptid' | 'Doom' | 'Ewok' | 'Foxhound' | 'DO' | 'ADF' | 'DET';
+export type Flight = 'Apex' | 'Bomber' | 'Cryptid' | 'Doom' | 'Ewok' | 'Foxhound' | 'DO' | 'ADF' | 'DET' | 'PCS/Outpro';
 export type AccountType = 'fitflight_creator' | 'ufpm' | 'demo' | 'squadron_leadership' | 'pfl' | 'ptl' | 'standard';
 export type Squadron = 'Hawks' | 'Tigers';
-export type WorkoutType = 'Running' | 'Walking' | 'Cycling' | 'Strength' | 'HIIT' | 'Swimming' | 'Sports' | 'Cardio' | 'Flexibility' | 'Other';
+export type WorkoutType =
+  | 'Running'
+  | 'Walking'
+  | 'Hiking'
+  | 'Rucking'
+  | 'Cycling'
+  | 'Swimming'
+  | 'Weightlifting'
+  | 'Strength'
+  | 'HIIT'
+  | 'Sports'
+  | 'Cardio'
+  | 'Flexibility'
+  | 'Climbing'
+  | 'Surfing'
+  | 'Diving'
+  | 'Combatives'
+  | 'Other';
 export type IntegrationService = 'apple_health' | 'strava' | 'garmin';
 export type ScheduledPTScope = 'squadron' | 'flight' | 'personal';
 export type ScheduledPTKind = 'pt' | 'pfra_mock' | 'pfra_diagnostic' | 'pfra_official';
@@ -17,8 +34,45 @@ export type AttendanceSource = 'manual' | 'workout' | 'strava' | 'pfra' | 'excus
 export type AppTheme = 'default' | 'dark' | 'pixel' | 'cyber' | 'space' | 'flowery';
 
 export const SQUADRONS: Squadron[] = ['Hawks', 'Tigers'];
-export const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'DO', 'ADF', 'DET'];
-export const WORKOUT_TYPES: WorkoutType[] = ['Running', 'Walking', 'Cycling', 'Strength', 'HIIT', 'Swimming', 'Sports', 'Cardio', 'Flexibility', 'Other'];
+export const PCS_OUTPRO_FLIGHT: Flight = 'PCS/Outpro';
+export const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'DO', 'ADF', 'DET', PCS_OUTPRO_FLIGHT];
+export const ACTIVE_SQUADRON_FLIGHTS: Flight[] = FLIGHTS.filter((flight) => flight !== PCS_OUTPRO_FLIGHT) as Flight[];
+export const WORKOUT_TYPES: WorkoutType[] = [
+  'Running',
+  'Walking',
+  'Hiking',
+  'Rucking',
+  'Cycling',
+  'Swimming',
+  'Weightlifting',
+  'HIIT',
+  'Sports',
+  'Cardio',
+  'Flexibility',
+  'Climbing',
+  'Surfing',
+  'Diving',
+  'Combatives',
+  'Other',
+];
+
+export interface WorkoutSegment {
+  id?: string;
+  type: WorkoutType;
+  subtype?: string;
+  duration: number;
+  durationSeconds?: number;
+  distance?: number;
+  weight?: number;
+  reps?: number;
+  sets?: number;
+  rounds?: number;
+  elevationGain?: number;
+  depth?: number;
+  steps?: number;
+  waveConditions?: string;
+  additionalInfo?: string;
+}
 export const ENLISTED_RANKS = ['AB', 'Amn', 'A1C', 'SrA', 'SSgt', 'TSgt', 'MSgt', 'SMSgt', 'CMSgt'] as const;
 export const OFFICER_RANKS = ['2nd Lt.', '1st Lt.', 'Capt.', 'Maj.', 'Lt. Col.', 'Col.'] as const;
 export const ALL_RANKS = [...ENLISTED_RANKS, ...OFFICER_RANKS] as const;
@@ -114,11 +168,17 @@ export interface FitnessAssessment {
 export interface Workout {
   id: string;
   externalId?: string;
+  sessionId?: string;
   date: string;
   type: WorkoutType;
   duration: number; // minutes
   durationSeconds?: number;
   distance?: number; // miles
+  proofImageUris?: string[];
+  segments?: WorkoutSegment[];
+  metrics?: Omit<WorkoutSegment, 'id' | 'type' | 'duration' | 'durationSeconds' | 'distance'> & {
+    distance?: number;
+  };
   source: 'manual' | 'screenshot' | 'apple_health' | 'strava' | 'garmin' | 'attendance';
   screenshotUri?: string;
   title?: string;
@@ -257,6 +317,12 @@ export const formatRankDisplay = (rank: string) => {
 
 export const formatFlightDisplay = (flight: string) =>
   flight.trim().replace(/\s+flight$/i, '');
+
+export const isPCSOutproFlight = (flight: Flight | string | null | undefined) =>
+  flight?.trim().toLowerCase() === PCS_OUTPRO_FLIGHT.toLowerCase();
+
+export const shouldIncludeFlightInSquadronRollups = (flight: Flight | string | null | undefined) =>
+  !isPCSOutproFlight(flight);
 
 export const normalizeAccountType = (accountType: AccountType | string | null | undefined): AccountType => {
   if (accountType === 'ptl') {

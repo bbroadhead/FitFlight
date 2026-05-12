@@ -1,8 +1,5 @@
 import type { AttendanceSource, Member, MonthlyLeaderboardEntry, PTSession, Workout } from '@/lib/store';
-
-export const ATTENDANCE_CHECK_IN_POINTS = 10;
-export const WORKOUT_POINTS_PER_MINUTE = 1;
-export const WORKOUT_POINTS_PER_MILE = 15;
+import { getWorkoutScoreHistory } from '@/lib/workoutScoreEngine';
 
 const slugify = (value: string) =>
   value
@@ -124,25 +121,21 @@ export function getMemberMonthSummary(
   monthKey: string,
   ptSessions: Pick<PTSession, 'id' | 'date' | 'flight' | 'attendees'>[] = []
 ) {
-  const workouts = getMemberMonthWorkouts(member, monthKey, ptSessions);
+  const scoredWorkouts = getWorkoutScoreHistory(member, ptSessions).filter(
+    (entry) => monthKeyFromDateString(entry.workout.date) === monthKey
+  );
+  const workouts = scoredWorkouts.map((entry) => entry.workout);
   const minutes = workouts.reduce((total, workout) => total + workout.duration, 0);
   const miles = workouts.reduce((total, workout) => total + (workout.distance ?? 0), 0);
-  const score = workouts.reduce((total, workout) => {
-    if (workout.source === 'attendance') {
-      return total + ATTENDANCE_CHECK_IN_POINTS;
-    }
-
-    const durationPoints = Math.max(0, Math.round(workout.duration * WORKOUT_POINTS_PER_MINUTE));
-    const distancePoints = Math.max(0, Math.round((workout.distance ?? 0) * WORKOUT_POINTS_PER_MILE));
-    return total + Math.max(durationPoints, distancePoints);
-  }, 0);
+  const score = scoredWorkouts.reduce((total, workout) => total + workout.points, 0);
 
   return {
     workouts,
+    scoredWorkouts,
     workoutCount: workouts.length,
     minutes,
     miles: Number(miles.toFixed(2)),
-    score,
+    score: Math.round(score),
   };
 }
 

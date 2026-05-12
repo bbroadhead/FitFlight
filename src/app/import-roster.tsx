@@ -8,12 +8,12 @@ import Animated, { FadeInDown } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
-import { ALL_RANKS, useMemberStore, useAuthStore, type Flight, type Member, type Squadron } from '@/lib/store';
+import { ALL_RANKS, PCS_OUTPRO_FLIGHT, useMemberStore, useAuthStore, type Flight, type Member, type Squadron } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { createRosterMember } from '@/lib/supabaseData';
 import { PageContainer } from '@/components/PageContainer';
 
-const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'DO', 'ADF', 'DET'];
+const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'DO', 'ADF', 'DET', PCS_OUTPRO_FLIGHT];
 const RANKS = [...ALL_RANKS];
 
 interface ParsedRow {
@@ -187,6 +187,11 @@ export default function ImportRosterScreen() {
       'do': 'DO',
       'adf': 'ADF',
       'det': 'DET',
+      'pcs/outpro': PCS_OUTPRO_FLIGHT,
+      'pcs outpro': PCS_OUTPRO_FLIGHT,
+      'pcs-outpro': PCS_OUTPRO_FLIGHT,
+      'pcs': PCS_OUTPRO_FLIGHT,
+      'outpro': PCS_OUTPRO_FLIGHT,
       // Common variations
       'a': 'Apex',
       'b': 'Bomber',

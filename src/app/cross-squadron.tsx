@@ -6,7 +6,7 @@ import { useRouter } from 'expo-router';
 import { ChevronLeft, Building2, Users, Trophy, Timer, MapPin, Dumbbell, TrendingUp, FileText } from 'lucide-react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import { useAuthStore, useMemberStore, formatFlightDisplay, type Squadron, SQUADRONS, getDisplayName } from '@/lib/store';
+import { useAuthStore, useMemberStore, formatFlightDisplay, type Squadron, SQUADRONS, getDisplayName, shouldIncludeFlightInSquadronRollups } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { getMemberMonthSummary } from '@/lib/monthlyStats';
 import { PageContainer } from '@/components/PageContainer';
@@ -28,7 +28,7 @@ export default function CrossSquadronScreen() {
   // Get stats for each squadron - must be before conditional return
   const squadronStats = useMemo(() => {
     return SQUADRONS.map(squadron => {
-      const squadronMembers = members.filter(m => m.squadron === squadron);
+      const squadronMembers = members.filter(m => m.squadron === squadron && shouldIncludeFlightInSquadronRollups(m.flight));
       const squadronSessions = ptSessions.filter(session => session.squadron === squadron);
       const totalMinutes = squadronMembers.reduce((acc, m) => acc + getMemberMonthSummary(m, currentMonthKey, squadronSessions).minutes, 0);
       const totalDistance = squadronMembers.reduce((acc, m) => acc + getMemberMonthSummary(m, currentMonthKey, squadronSessions).miles, 0);

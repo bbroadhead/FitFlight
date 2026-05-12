@@ -17,7 +17,7 @@ import { requestRegisteredSync } from '@/lib/appSync';
 import { useErrorLogScreenContext } from '@/lib/errorLog';
 import { getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
 import { fetchDashboardLayoutPreference, saveDashboardLayoutPreference } from '@/lib/supabaseData';
-import { canManagePFRARecords, canManagePTPrograms, getShortDisplayName, type ScheduledPTSession, useAuthStore, useMemberStore } from '@/lib/store';
+import { canManagePFRARecords, canManagePTPrograms, getShortDisplayName, shouldIncludeFlightInSquadronRollups, type ScheduledPTSession, useAuthStore, useMemberStore } from '@/lib/store';
 import { getThemeBodyStyle, getThemeCardStyle, getThemeControlStyle, getThemeHeadingStyle, getThemeIconWellStyle, getThemeLabelStyle, useAppTheme } from '@/lib/theme';
 
 function getCompetitionPosition(scores: number[], index: number): number {
@@ -293,7 +293,7 @@ export default function HomeScreen() {
     [members, user?.email, user?.id]
   );
   const squadronMembers = useMemo(
-    () => members.filter((m) => m.squadron === (user?.squadron ?? 'Hawks')),
+    () => members.filter((m) => m.squadron === (user?.squadron ?? 'Hawks') && shouldIncludeFlightInSquadronRollups(m.flight)),
     [members, user?.squadron]
   );
   const currentMonthKey = useMemo(() => getMonthKey(), []);

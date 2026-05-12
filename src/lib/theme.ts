@@ -126,7 +126,7 @@ export const APP_THEMES: Record<AppThemeName, AppThemePalette> = {
   },
   pixel: {
     id: 'pixel',
-    label: 'Pixel',
+    label: 'Pixelated',
     gradient: ['#0D1510', '#213128', '#101913'],
     background: '#101812',
     surface: 'rgba(34, 47, 40, 0.54)',
@@ -224,7 +224,7 @@ export const APP_THEMES: Record<AppThemeName, AppThemePalette> = {
   },
   flowery: {
     id: 'flowery',
-    label: 'Flowery',
+    label: 'Floral',
     gradient: ['#2D1434', '#6F325F', '#1C3E54'],
     background: '#24102B',
     surface: 'rgba(63,28,63,0.72)',

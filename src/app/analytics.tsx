@@ -12,7 +12,7 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import Svg, { Circle } from 'react-native-svg';
 import { format, startOfMonth, startOfWeek, addDays, endOfWeek } from 'date-fns';
-import { useMemberStore, useAuthStore, formatFlightDisplay, getDisplayName, type Flight, type PFRARecordType, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
+import { useMemberStore, useAuthStore, formatFlightDisplay, getDisplayName, type Flight, type PFRARecordType, type WorkoutType, WORKOUT_TYPES, PCS_OUTPRO_FLIGHT, shouldIncludeFlightInSquadronRollups } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { fetchPFRABatchMembers, fetchPFRABatches, fetchWeeklyAttendanceExcusals, type PFRABatchMemberEntry, type PFRABatchSummary } from '@/lib/supabaseData';
@@ -25,20 +25,27 @@ import { ThemeChrome } from '@/components/ThemeChrome';
 import { getThemeBodyStyle, getThemeControlStyle, getThemeHeadingStyle } from '@/lib/theme';
 import { PFRA_MINIMUM_COMPONENT_POINTS } from '@/lib/pfraScoring2026';
 
-const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'DO', 'ADF', 'DET'];
+const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'DO', 'ADF', 'DET', PCS_OUTPRO_FLIGHT];
 const WEEKLY_ATTENDANCE_TARGET = 5;
 
 // Workout type colors
 const WORKOUT_TYPE_COLORS: Record<WorkoutType, string> = {
   Running: '#22C55E',
   Walking: '#84CC16',
+  Hiking: '#65A30D',
+  Rucking: '#B45309',
   Cycling: '#06B6D4',
+  Swimming: '#3B82F6',
+  Weightlifting: '#F59E0B',
   Strength: '#F59E0B',
   HIIT: '#EF4444',
-  Swimming: '#3B82F6',
   Sports: '#8B5CF6',
   Cardio: '#EC4899',
   Flexibility: '#14B8A6',
+  Climbing: '#F97316',
+  Surfing: '#0EA5E9',
+  Diving: '#2563EB',
+  Combatives: '#DC2626',
   Other: '#6B7280',
 };
 
@@ -247,13 +254,17 @@ export default function AnalyticsScreen() {
     () => allMembers.filter((member) => member.squadron === userSquadron),
     [allMembers, userSquadron]
   );
+  const activeMembers = useMemo(
+    () => members.filter((member) => shouldIncludeFlightInSquadronRollups(member.flight)),
+    [members]
+  );
   const ptSessions = useMemo(
     () => allPtSessions.filter((session) => (session.squadron ?? 'Hawks') === userSquadron),
     [allPtSessions, userSquadron]
   );
   const availableMonthKeys = useMemo(
-    () => getAvailableMonthKeys(members, ptSessions),
-    [members, ptSessions]
+    () => getAvailableMonthKeys(activeMembers, ptSessions),
+    [activeMembers, ptSessions]
   );
   const selectedWeekMonthKey = getMonthKey(selectedWeekStart);
   const visibleMonthKey = analyticsView === 'week'
@@ -357,8 +368,8 @@ export default function AnalyticsScreen() {
 
       return keys;
     };
-    const totalMembers = members.length;
-    const totalPFLs = members.filter((member) => member.accountType === 'pfl' || member.accountType === 'ptl').length;
+    const totalMembers = activeMembers.length;
+    const totalPFLs = activeMembers.filter((member) => member.accountType === 'pfl' || member.accountType === 'ptl').length;
     const selectedWeekSessions = ptSessions.filter((session) => weekDates.has(session.date));
     const monthSessions = getMonthSessions(ptSessions, activeMonthKey);
     const periodSessions =
@@ -454,7 +465,7 @@ export default function AnalyticsScreen() {
       };
     };
 
-    const memberPeriodSummaries = members.map((member) => {
+    const memberPeriodSummaries = activeMembers.map((member) => {
       const effectiveWorkouts = getMemberEffectiveWorkouts(member, ptSessions);
       const periodWorkouts = effectiveWorkouts.filter((workout) => matchesTimeframe(workout.date));
       const selectedWeekWorkouts = effectiveWorkouts.filter((workout) => weekDates.has(workout.date));
@@ -490,10 +501,10 @@ export default function AnalyticsScreen() {
     const totalAttendanceMarksThisWeek = selectedWeekSessions.reduce((acc, session) => (
       acc + Object.values(session.attendeeSources ?? {}).filter((source) => source && source !== 'excused').length
     ), 0);
-    const excusedThisWeekCount = members.filter((member) => weeklyExcusedMemberIds.includes(member.id)).length;
+    const excusedThisWeekCount = activeMembers.filter((member) => weeklyExcusedMemberIds.includes(member.id)).length;
     const weeklyComplianceEligibleMembers = Math.max(totalMembers - excusedThisWeekCount, 0);
-    const totalRequiredSessionsThisWeek = members.reduce((sum, member) => sum + getMemberWeeklyRequiredSessions(member.id), 0);
-    const membersMeetingWeeklyTarget = members.filter((member) => {
+    const totalRequiredSessionsThisWeek = activeMembers.reduce((sum, member) => sum + getMemberWeeklyRequiredSessions(member.id), 0);
+    const membersMeetingWeeklyTarget = activeMembers.filter((member) => {
       if (weeklyExcusedMemberIds.includes(member.id)) {
         return true;
       }
@@ -508,10 +519,11 @@ export default function AnalyticsScreen() {
     const flightStats = FLIGHTS.map((flight) => {
       const flightMembers = memberPeriodSummaries.filter((member) => member.flight === flight);
       const rawFlightMembers = members.filter((member) => member.flight === flight);
+      const activeFlightMembers = activeMembers.filter((member) => member.flight === flight);
       const flightSessions = periodSessions.filter((session) => session.flight === flight);
-      const excusedMemberCount = rawFlightMembers.filter((member) => weeklyExcusedMemberIds.includes(member.id)).length;
-      const eligibleMembers = Math.max(rawFlightMembers.length - excusedMemberCount, 0);
-      const compliantMembers = rawFlightMembers.filter((member) => (
+      const excusedMemberCount = activeFlightMembers.filter((member) => weeklyExcusedMemberIds.includes(member.id)).length;
+      const eligibleMembers = Math.max(activeFlightMembers.length - excusedMemberCount, 0);
+      const compliantMembers = activeFlightMembers.filter((member) => (
         !weeklyExcusedMemberIds.includes(member.id) &&
         getMemberWeeklyAttendance(member.id) >= getMemberWeeklyRequiredSessions(member.id)
       )).length;
@@ -521,9 +533,29 @@ export default function AnalyticsScreen() {
           return source && source !== 'excused';
         }).length, 0) / flightSessions.length
         : 0;
-      const monthComplianceEntries = rawFlightMembers.map((member) => getMemberMonthlyCompliance(member.id));
+      const monthComplianceEntries = activeFlightMembers.map((member) => getMemberMonthlyCompliance(member.id));
       const monthEligibleWeeks = monthComplianceEntries.reduce((sum, entry) => sum + entry.eligibleWeeks, 0);
       const monthCompliantWeeks = monthComplianceEntries.reduce((sum, entry) => sum + entry.compliantWeeks, 0);
+      const trackedFlightMembers = rawFlightMembers.map((member) => {
+        const activeSummary = flightMembers.find((entry) => entry.id === member.id);
+        return activeSummary ?? {
+          id: member.id,
+          displayName: getDisplayName(member),
+          firstName: member.firstName,
+          lastName: member.lastName,
+          flight: member.flight,
+          attendance: 0,
+          weeklyRequired: 0,
+          isExcused: false,
+          workouts: 0,
+          minutes: 0,
+          miles: 0,
+          periodMinutes: 0,
+          periodMiles: 0,
+          periodWorkoutCount: 0,
+          monthCompliance: { compliantWeeks: 0, eligibleWeeks: 0, percent: 0 },
+        };
+      });
 
       return {
         flight,
@@ -536,11 +568,11 @@ export default function AnalyticsScreen() {
         monthCompliancePercent: monthEligibleWeeks > 0 ? Math.round((monthCompliantWeeks / monthEligibleWeeks) * 100) : 0,
         compliantMembers,
         eligibleMembers,
-        members: flightMembers,
+        members: trackedFlightMembers,
       };
     });
 
-    const pfraEntries = members.flatMap((member) =>
+    const pfraEntries = activeMembers.flatMap((member) =>
       member.fitnessAssessments
         .filter((assessment) => matchesTimeframe(assessment.date))
         .map((assessment) => ({
@@ -562,7 +594,7 @@ export default function AnalyticsScreen() {
 
     const workoutTypeCounts = new Map<string, number>();
     WORKOUT_TYPES.forEach((type) => workoutTypeCounts.set(type, 0));
-    members.forEach((member) => {
+    activeMembers.forEach((member) => {
       getMemberEffectiveWorkouts(member, ptSessions)
         .filter((workout) => matchesTimeframe(workout.date))
         .forEach((workout) => {
@@ -589,7 +621,7 @@ export default function AnalyticsScreen() {
       .filter((item) => item.count > 0)
       .sort((left, right) => right.count - left.count);
 
-    const longestWorkout = members
+    const longestWorkout = activeMembers
       .flatMap((member) => getMemberEffectiveWorkouts(member, ptSessions)
         .filter((workout) => matchesTimeframe(workout.date))
         .map((workout) => ({ member, workout })))
@@ -841,7 +873,7 @@ export default function AnalyticsScreen() {
       { header: 'Latest PFRA', key: 'pfra', width: 14 },
     ];
     analytics.memberPeriodSummaries.forEach((memberSummary) => {
-      const member = members.find((entry) => entry.id === memberSummary.id);
+      const member = activeMembers.find((entry) => entry.id === memberSummary.id);
       if (!member) {
         return;
       }
@@ -936,7 +968,7 @@ export default function AnalyticsScreen() {
   const buildPFRASummariesForExport = () => {
     const recordTypes = getPFRALeadershipFilters();
     return recordTypes.map((recordType) => {
-      const entries = members.flatMap((member) =>
+      const entries = activeMembers.flatMap((member) =>
         member.fitnessAssessments
           .filter((assessment) => {
             const type = assessment.recordType ?? 'self';

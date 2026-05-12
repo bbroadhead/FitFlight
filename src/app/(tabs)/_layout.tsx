@@ -736,7 +736,7 @@ function TabsInner() {
           height: Platform.OS === 'web' ? undefined : tabBarHeight,
           minHeight: tabBarHeight,
           paddingBottom: tabBarBottomInset,
-          paddingTop: 0,
+          paddingTop: 3,
           position: Platform.OS === 'web' ? ("fixed" as const) : "absolute",
           left: 0,
           right: 0,

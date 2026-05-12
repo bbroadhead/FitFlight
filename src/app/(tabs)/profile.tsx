@@ -10,7 +10,7 @@ import Animated, { FadeIn, FadeInDown, FadeInUp, SlideInDown } from 'react-nativ
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import SmartSlider from '@/components/SmartSlider';
-import { useAuthStore, useMemberStore, formatFlightDisplay, type Flight, type Member, type AccountType, type Squadron, type IntegrationService, type WorkoutType, type AppTheme, RANK_GROUPS, getDisplayName, canEditAttendance, canManagePTL, canManagePTPrograms, isAdmin, SQUADRONS, ALL_ACHIEVEMENTS, isPFLAccountType, normalizeAccountType } from '@/lib/store';
+import { useAuthStore, useMemberStore, formatFlightDisplay, type Flight, type Member, type AccountType, type Squadron, type IntegrationService, type WorkoutType, type AppTheme, RANK_GROUPS, getDisplayName, canEditAttendance, canManagePTL, canManagePTPrograms, isAdmin, SQUADRONS, ALL_ACHIEVEMENTS, isPFLAccountType, normalizeAccountType, PCS_OUTPRO_FLIGHT, isPCSOutproFlight, shouldIncludeFlightInSquadronRollups } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { AchievementCelebration } from '@/components/AchievementCelebration';
@@ -25,6 +25,7 @@ import { canUseStravaSync, disconnectStrava, getStravaSetupError, mapImportedWor
 import { signOutFromSupabase } from '@/lib/supabaseAuth';
 import { buildTrophyStats, getRarestEarnedTrophies } from '@/lib/trophies';
 import { formatMonthLabel, getAvailableMonthKeys, getMemberEffectiveWorkouts, getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
+import { getWorkoutScoreHistory, WORKOUT_SCORE_ENGINE_NAME } from '@/lib/workoutScoreEngine';
 import { APP_THEMES, useAppTheme } from '@/lib/theme';
 import { getThemeBodyStyle, getThemeCardStyle, getThemeControlStyle, getThemeHeadingStyle } from '@/lib/theme';
 import {
@@ -68,12 +69,20 @@ import { createOfflineActionId, requestRegisteredSync, runOrQueueOfflineMutation
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'DO', 'ADF', 'DET'];
 const OWNER_EMAIL = 'benjamin.broadhead.2@us.af.mil';
 const PROJECT_COORDINATOR_EMAIL = 'jacob.de_la_rosa@us.af.mil';
-const FITFLIGHT_VERSION = 'v1.0.9';
+const FITFLIGHT_VERSION = 'v1.1.0';
 const DEVELOPER_NAME = 'SSgt Benjamin Broadhead';
 const DEVELOPER_TITLE = 'Developer';
 const PROJECT_COORDINATOR_NAME = 'SSgt Jacob De La Rosa';
 const PROJECT_COORDINATOR_TITLE = 'Project Coordinator';
 const DEMO_TROPHY_ID = 'top_3_month';
+
+function getCompetitionPosition(scores: number[], index: number): number {
+  if (index <= 0) {
+    return 1;
+  }
+
+  return scores[index] === scores[index - 1] ? getCompetitionPosition(scores, index - 1) : index + 1;
+}
 
 type SupportContact = {
   key: 'developer' | 'project_coordinator';
@@ -255,6 +264,47 @@ function getWorkoutDisplayTitle(type: WorkoutType) {
   }
 }
 
+function formatPFRAComponentLabel(value?: string | null, category?: 'cardio' | 'strength' | 'core') {
+  if (!value) {
+    return category === 'cardio' ? 'Cardio' : category === 'strength' ? 'Strength' : category === 'core' ? 'Core' : 'Component';
+  }
+
+  const normalized = value.trim().toLowerCase();
+  switch (normalized) {
+    case 'pushups':
+    case 'push-ups':
+      return 'Pushups';
+    case 'hand_release_pushups':
+    case 'hand-release push-ups':
+    case 'hand-release pushups':
+      return 'Hand-Release Pushups';
+    case 'plank':
+      return 'Plank';
+    case 'situps':
+    case 'sit-ups':
+      return 'Situps';
+    case 'cross_leg_reverse_crunch':
+    case 'cross-leg reverse crunch':
+      return 'Cross-Leg Reverse Crunch';
+    case 'run_2mile':
+    case '2-mile run':
+    case '2 mile run':
+      return '2 Mile Run';
+    case 'hamr_20m':
+    case '20m hamr':
+    case 'hamr':
+      return 'HAMR';
+    case 'walk_2k':
+    case '2k walk':
+    case 'walk':
+      return 'Walk';
+    default:
+      return value
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, (match) => match.toUpperCase());
+  }
+}
+
 function areSupportThreadsEqual(left: SupportThreadSummary[], right: SupportThreadSummary[]) {
   if (left.length !== right.length) {
     return false;
@@ -326,6 +376,7 @@ export default function ProfileScreen() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showAuditTrailModal, setShowAuditTrailModal] = useState(false);
   const [showChangeRankModal, setShowChangeRankModal] = useState(false);
+  const [showSelfPCSConfirmModal, setShowSelfPCSConfirmModal] = useState(false);
   const [showPTLRequestModal, setShowPTLRequestModal] = useState(false);
   const [showChangeSquadronModal, setShowChangeSquadronModal] = useState(false);
   const [showDisconnectModal, setShowDisconnectModal] = useState(false);
@@ -344,6 +395,7 @@ export default function ProfileScreen() {
   const [updateNotesHistoryError, setUpdateNotesHistoryError] = useState<string | null>(null);
   const [memberPendingDeleteId, setMemberPendingDeleteId] = useState<string | null>(null);
   const [showUFPMConfirmModal, setShowUFPMConfirmModal] = useState(false);
+  const [showPCSOutproConfirmModal, setShowPCSOutproConfirmModal] = useState(false);
   const [showResetUserPasswordModal, setShowResetUserPasswordModal] = useState(false);
   const [showTrophyCase, setShowTrophyCase] = useState(false);
   const [showWorkoutReviewModal, setShowWorkoutReviewModal] = useState(false);
@@ -538,6 +590,11 @@ export default function ProfileScreen() {
     userAccountType === 'demo' ||
     userAccountType === 'squadron_leadership';
   const canManageMembers = canManagePTPrograms(userAccountType);
+  const canDeleteMembers =
+    userAccountType === 'fitflight_creator' ||
+    userAccountType === 'ufpm' ||
+    userAccountType === 'demo' ||
+    userAccountType === 'squadron_leadership';
   const canReviewManualWorkouts = canManagePTPrograms(userAccountType);
   const canResetUserPasswords = userAccountType === 'fitflight_creator' || userAccountType === 'ufpm' || userAccountType === 'demo';
   const isOwnerUser = userAccountType === 'fitflight_creator' || user?.email?.toLowerCase() === OWNER_EMAIL;
@@ -581,7 +638,7 @@ export default function ProfileScreen() {
     targetMember?: Member | null;
     details?: Record<string, unknown>;
   }) => {
-    if (!user || !accessToken || !hasAdminAccess) {
+    if (!user || !accessToken || !(hasAdminAccess || isPFLAccountType(user.accountType))) {
       return;
     }
 
@@ -1150,7 +1207,9 @@ export default function ProfileScreen() {
         accountType:
           previousMember?.accountType === 'fitflight_creator'
             ? 'fitflight_creator'
-            : previousMember?.accountType === 'ufpm'
+            : isPCSOutproFlight(newMemberFlight)
+              ? 'standard'
+              : previousMember?.accountType === 'ufpm'
               ? 'ufpm'
               : newMemberFlight === 'DO'
                 ? 'squadron_leadership'
@@ -1231,8 +1290,70 @@ export default function ProfileScreen() {
     });
   };
 
+  const handleConfirmPCSOutpro = () => {
+    const run = async () => {
+      if (!editingMemberId || !editingMember || !accessToken) {
+        setMemberActionError('You must be signed in to update that member.');
+        return;
+      }
+
+      const previousMember = members.find((member) => member.id === editingMemberId);
+      if (!previousMember) {
+        setMemberActionError('Unable to find that member to update.');
+        return;
+      }
+
+      setMemberActionError('');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+      const updatedMember: Member = {
+        ...previousMember,
+        rank: newMemberRank,
+        firstName: newMemberFirstName.trim(),
+        lastName: newMemberLastName.trim(),
+        email: (newMemberEmail || previousMember.email).trim().toLowerCase(),
+        flight: PCS_OUTPRO_FLIGHT,
+        squadron: previousMember.squadron ?? 'Hawks',
+        accountType: previousMember.accountType === 'fitflight_creator' ? 'fitflight_creator' : 'standard',
+      };
+
+      await updateRosterMember(previousMember, updatedMember, accessToken);
+      if (previousMember.email.toLowerCase() !== updatedMember.email.toLowerCase()) {
+        await ensureMemberRole(updatedMember.email, updatedMember.accountType, accessToken).catch(() => undefined);
+      }
+      await updateMemberRole(updatedMember.email, updatedMember.accountType, accessToken).catch(() => undefined);
+
+      updateMember(editingMemberId, updatedMember);
+      await logAdminAction({
+        actionType: 'mark_member_pcs_outpro',
+        targetMember: updatedMember,
+        details: {
+          previousEmail: previousMember.email,
+          nextEmail: updatedMember.email,
+          previousFlight: previousMember.flight,
+          nextFlight: updatedMember.flight,
+          previousAccountType: previousMember.accountType,
+          nextAccountType: updatedMember.accountType,
+        },
+      });
+
+      setShowPCSOutproConfirmModal(false);
+      setShowAddModal(false);
+      resetForm();
+    };
+
+    run().catch((error) => {
+      setMemberActionError(error instanceof Error ? error.message : 'Unable to move member to PCS/Outpro.');
+    });
+  };
+
   const handleRemoveMember = (id: string) => {
     const run = async () => {
+      if (!canDeleteMembers) {
+        setMemberActionError('PFL access can add and edit members, but cannot delete members from the roster.');
+        return;
+      }
+
       const memberToRemove = members.find((member) => member.id === id);
       if (!memberToRemove) {
         return;
@@ -1758,6 +1879,54 @@ export default function ProfileScreen() {
       const message = error instanceof Error ? error.message : 'Unable to update your rank.';
       setMemberActionError(message);
       Alert.alert('Unable to update rank', message);
+    } finally {
+      setIsUpdatingProfileSettings(false);
+    }
+  };
+
+  const handlePlaceSelfInPCSStatus = async () => {
+    if (!user) {
+      return;
+    }
+
+    const resolvedMember = resolveMemberForUser(user);
+    if (!resolvedMember) {
+      const nextAccountType = user.accountType === 'fitflight_creator' ? 'fitflight_creator' : 'standard';
+      updateUser({ flight: PCS_OUTPRO_FLIGHT, accountType: nextAccountType });
+      setShowSelfPCSConfirmModal(false);
+      setShowSettingsModal(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      return;
+    }
+
+    const updatedMember: Member = {
+      ...resolvedMember,
+      flight: PCS_OUTPRO_FLIGHT,
+      accountType: resolvedMember.accountType === 'fitflight_creator' ? 'fitflight_creator' : 'standard',
+    };
+
+    try {
+      setIsUpdatingProfileSettings(true);
+      if (accessToken) {
+        await updateRosterMember(resolvedMember, updatedMember, accessToken);
+        await updateMemberRole(updatedMember.email, updatedMember.accountType, accessToken).catch(() => undefined);
+      }
+
+      updateMember(resolvedMember.id, {
+        flight: PCS_OUTPRO_FLIGHT,
+        accountType: updatedMember.accountType,
+      });
+      updateUser({
+        flight: PCS_OUTPRO_FLIGHT,
+        accountType: updatedMember.accountType,
+      });
+      setShowSelfPCSConfirmModal(false);
+      setShowSettingsModal(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to place your account in PCS status.';
+      setMemberActionError(message);
+      Alert.alert('Unable to update PCS status', message);
     } finally {
       setIsUpdatingProfileSettings(false);
     }
@@ -2389,11 +2558,44 @@ export default function ProfileScreen() {
     : availableSummaryMonths[0] ?? getMonthKey();
   const monthlyUserSummary = userStats && 'workouts' in userStats
     ? getMemberMonthSummary(userStats as Member, summaryMonth, ptSessions)
-    : { workouts: [], workoutCount: 0, minutes: 0, miles: 0, score: 0 };
+    : { workouts: [], scoredWorkouts: [], workoutCount: 0, minutes: 0, miles: 0, score: 0 };
+  const scoredWorkoutHistory = useMemo(
+    () => (userStats && 'workouts' in userStats ? getWorkoutScoreHistory(userStats as Member, ptSessions) : []),
+    [ptSessions, userStats]
+  );
   const monthlyPFRAEntries = userStats && 'fitnessAssessments' in userStats
     ? (userStats as Member).fitnessAssessments.filter((assessment) => assessment.date.startsWith(summaryMonth))
     : [];
   const latestMonthlyPFRA = monthlyPFRAEntries[monthlyPFRAEntries.length - 1] ?? null;
+  const latestScoreEntry = useMemo(
+    () => {
+      const ordered = [...scoredWorkoutHistory].sort((left, right) => right.workout.date.localeCompare(left.workout.date));
+      return ordered.find((entry) => entry.workout.source !== 'attendance') ?? ordered[0] ?? null;
+    },
+    [scoredWorkoutHistory]
+  );
+  const currentLeaderboardStanding = useMemo(() => {
+    if (!user?.id || !(userStats && 'id' in userStats)) {
+      return 0;
+    }
+
+    const currentMonthKey = getMonthKey();
+    const rankedMembers = members
+      .filter((candidate) => candidate.squadron === user.squadron && shouldIncludeFlightInSquadronRollups(candidate.flight))
+      .sort((left, right) => {
+        const scoreA = getMemberMonthSummary(left, currentMonthKey, ptSessions).score;
+        const scoreB = getMemberMonthSummary(right, currentMonthKey, ptSessions).score;
+        return scoreB - scoreA;
+      });
+
+    const index = rankedMembers.findIndex((candidate) => candidate.id === (userStats as Member).id);
+    if (index < 0) {
+      return 0;
+    }
+
+    const scores = rankedMembers.map((candidate) => getMemberMonthSummary(candidate, currentMonthKey, ptSessions).score);
+    return getCompetitionPosition(scores, index);
+  }, [members, ptSessions, user?.id, user?.squadron, userStats]);
   const personalAnalyticsSummary = useMemo(() => {
     const typeCounts = new Map<string, number>();
     const dayKeys = new Set<string>();
@@ -2417,6 +2619,37 @@ export default function ProfileScreen() {
         : 0,
     };
   }, [monthlyUserSummary]);
+  const latestBaselinePreview = useMemo(() => {
+    if (!latestScoreEntry) {
+      return {
+        title: 'No workout score baseline yet',
+        details: '',
+        formula: `${WORKOUT_SCORE_ENGINE_NAME} compares you against your own recent history, not other members.`,
+      };
+    }
+
+    const breakdown = latestScoreEntry.breakdown;
+    const latestWorkout = latestScoreEntry.workout;
+    const durationPoints = Math.max(0, Math.round(latestWorkout.duration));
+    const distancePoints = Math.max(0, Math.round((latestWorkout.distance ?? 0) * 15));
+    const metricPreview = breakdown.metrics.length > 0
+      ? breakdown.metrics
+          .map((metric) => `${metric.label} (${Math.round(metric.weight * 100)}% x ${metric.ratio.toFixed(2)}x from ${metric.currentDisplay} vs ${metric.baselineDisplay})`)
+          .join(' • ')
+      : 'Base workout score = 30 points.';
+
+    return {
+      title: breakdown.typeLabel,
+      details: '',
+      formula: breakdown.engine === 'legacy'
+        ? latestWorkout.source === 'attendance'
+          ? `Latest session: ${latestScoreEntry.points} pts = attendance check-in`
+          : `Latest session: ${latestScoreEntry.points} pts = max(duration ${Math.round(latestWorkout.duration)} min → ${durationPoints} pts, distance ${(latestWorkout.distance ?? 0).toFixed(2)} mi × 15 = ${distancePoints} pts)`
+        : breakdown.baselineSampleSize > 0
+        ? `Latest session: ${latestScoreEntry.points} pts = ${breakdown.workoutPoints.toLocaleString('en-US', { maximumFractionDigits: 1 })} workout points from ${metricPreview} + ${breakdown.participationBonus.toLocaleString('en-US', { maximumFractionDigits: 1 })} participation + ${breakdown.streakBonus.toLocaleString('en-US', { maximumFractionDigits: 1 })} streak`
+        : `Latest session: ${latestScoreEntry.points} pts = base workout score (first logged ${breakdown.typeLabel} workout)`,
+    };
+  }, [latestScoreEntry]);
 
   useEffect(() => {
     if (!accessToken || !user?.id || !user?.squadron) {
@@ -3002,6 +3235,46 @@ export default function ProfileScreen() {
 
           {useDesktopCardGrid ? (
             <>
+              <Animated.View
+                entering={getWebSafeFadeInDown(202)}
+                style={{ width: desktopWideCardWidth }}
+              >
+                <ThemeChrome theme={themePalette}>
+                  <View className="p-4">
+                    <View className="flex-row items-center justify-between mb-3">
+                      <Text className="text-white/60 text-xs uppercase tracking-wider">Leaderboard</Text>
+                      <Text className="text-af-silver text-xs">{currentLeaderboardStanding > 0 ? `#${currentLeaderboardStanding}` : 'Unranked'}</Text>
+                    </View>
+                    <View className="flex-row justify-between">
+                      <View className="items-center flex-1">
+                        <Trophy size={20} color="#FFD700" />
+                        <Text className="text-white font-bold text-lg mt-1">{currentLeaderboardStanding > 0 ? `#${currentLeaderboardStanding}` : '--'}</Text>
+                        <Text className="text-af-silver text-xs text-center">Standing</Text>
+                      </View>
+                      <View className="w-px bg-white/10" />
+                      <View className="items-center flex-1">
+                        <Dumbbell size={20} color="#A855F7" />
+                        <Text className="text-white font-bold text-lg mt-1">{monthlyUserSummary.score}</Text>
+                        <Text className="text-af-silver text-xs text-center">Month Points</Text>
+                      </View>
+                      <View className="w-px bg-white/10" />
+                      <View className="items-center flex-1">
+                        <Activity size={20} color="#4A90D9" />
+                        <Text className="text-white font-bold text-lg mt-1">{latestScoreEntry?.points ?? 30}</Text>
+                        <Text className="text-af-silver text-xs text-center">Latest Workout</Text>
+                      </View>
+                    </View>
+                    <View className="mt-3 rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
+                      <Text className="text-white font-semibold">{latestBaselinePreview.title}</Text>
+                      {latestBaselinePreview.details ? (
+                        <Text className="text-af-silver text-xs mt-2">{latestBaselinePreview.details}</Text>
+                      ) : null}
+                      <Text className="text-af-silver text-xs mt-2">{latestBaselinePreview.formula}</Text>
+                    </View>
+                  </View>
+                </ThemeChrome>
+              </Animated.View>
+
               <View className="flex-row items-start" style={{ gap: 12 }}>
                 <Animated.View
                   entering={getWebSafeFadeInDown(205)}
@@ -3020,6 +3293,9 @@ export default function ProfileScreen() {
                       <Text className="text-white/60 text-xs uppercase tracking-wider">Personal Analytics</Text>
                       <Text className="text-af-silver text-xs">Open</Text>
                     </View>
+                    <Text className="text-af-silver text-xs mb-3">
+                      Open Personal Analytics to view workout-type progress and trends over time.
+                    </Text>
                     <View className="flex-row justify-between">
                       <View className="items-center flex-1">
                         <Activity size={20} color="#A855F7" />
@@ -3171,15 +3447,55 @@ export default function ProfileScreen() {
             </>
           ) : (
             <>
-              <Animated.View
-                entering={getWebSafeFadeInDown(205)}
-                className={'mx-6 mt-4'}
-              >
-                <Pressable
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    router.push('/personal-analytics');
-                  }}
+          <Animated.View
+            entering={getWebSafeFadeInDown(205)}
+            className={'mx-6 mt-4'}
+          >
+            <ThemeChrome theme={themePalette}>
+            <View className="p-4">
+            <View className="flex-row items-center justify-between mb-3">
+              <Text className="text-white/60 text-xs uppercase tracking-wider">Leaderboard</Text>
+              <Text className="text-af-silver text-xs">{currentLeaderboardStanding > 0 ? `#${currentLeaderboardStanding}` : 'Unranked'}</Text>
+            </View>
+            <View className="flex-row justify-between">
+              <View className="items-center flex-1">
+                <Trophy size={20} color="#FFD700" />
+                <Text className="text-white font-bold text-lg mt-1">{currentLeaderboardStanding > 0 ? `#${currentLeaderboardStanding}` : '--'}</Text>
+                <Text className="text-af-silver text-xs text-center">Standing</Text>
+              </View>
+              <View className="w-px bg-white/10" />
+              <View className="items-center flex-1">
+                <Dumbbell size={20} color="#A855F7" />
+                <Text className="text-white font-bold text-lg mt-1">{monthlyUserSummary.score}</Text>
+                <Text className="text-af-silver text-xs text-center">Month Points</Text>
+              </View>
+              <View className="w-px bg-white/10" />
+              <View className="items-center flex-1">
+                <Activity size={20} color="#4A90D9" />
+                <Text className="text-white font-bold text-lg mt-1">{latestScoreEntry?.points ?? 30}</Text>
+                <Text className="text-af-silver text-xs text-center">Latest Workout</Text>
+              </View>
+            </View>
+            <View className="mt-3 rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
+              <Text className="text-white font-semibold">{latestBaselinePreview.title}</Text>
+              {latestBaselinePreview.details ? (
+                <Text className="text-af-silver text-xs mt-2">{latestBaselinePreview.details}</Text>
+              ) : null}
+              <Text className="text-af-silver text-xs mt-2">{latestBaselinePreview.formula}</Text>
+            </View>
+            </View>
+            </ThemeChrome>
+          </Animated.View>
+
+          <Animated.View
+            entering={getWebSafeFadeInDown(205)}
+            className={'mx-6 mt-4'}
+          >
+            <Pressable
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                router.push('/personal-analytics');
+              }}
                 >
                   <ThemeChrome theme={themePalette}>
                   <View className="p-4">
@@ -3187,6 +3503,9 @@ export default function ProfileScreen() {
                     <Text className="text-white/60 text-xs uppercase tracking-wider">Personal Analytics</Text>
                     <Text className="text-af-silver text-xs">Open</Text>
                   </View>
+                  <Text className="text-af-silver text-xs mb-3">
+                    Open Personal Analytics to view workout-type progress and trends over time.
+                  </Text>
                   <View className="flex-row justify-between">
                     <View className="items-center flex-1">
                       <Activity size={20} color="#A855F7" />
@@ -3920,7 +4239,7 @@ export default function ProfileScreen() {
                     <View className="flex-row items-start justify-between">
                       <View className="flex-1 pr-3">
                         <Text style={[getThemeBodyStyle(themePalette, 14, themePalette.textPrimary), { fontWeight: '700' }]}>
-                          {isPFLAccountType(editingMember.accountType) ? 'PFL Access' : 'PFL Access Available'}
+                          PFL Access
                         </Text>
                         <Text style={getThemeBodyStyle(themePalette, 12, themePalette.textSecondary)} className="mt-1">
                           {isPFLAccountType(editingMember.accountType)
@@ -3969,6 +4288,45 @@ export default function ProfileScreen() {
                           ) : null}
                           <Text style={getThemeBodyStyle(themePalette, 13, pflActionState === 'error' ? '#EF4444' : pflActionState === 'saved' ? '#22C55E' : themePalette.textPrimary)} className={pflActionState !== 'idle' ? 'ml-2' : ''}>
                             {pflActionState === 'saving' ? 'Saving' : pflActionState === 'saved' ? 'Saved' : pflActionState === 'error' ? 'ERROR' : 'Assign PFL'}
+                          </Text>
+                        </View>
+                      </Pressable>
+                    )}
+                  </View>
+                </View>
+              ) : null}
+
+              {editingMember && canManage && editingMember.accountType !== 'fitflight_creator' ? (
+                <View className="mb-4">
+                  <Text style={getThemeBodyStyle(themePalette, 13, themePalette.textSecondary)} className="mb-2">PCS/Outpro</Text>
+                  <View style={getThemeControlStyle(themePalette)} className="rounded-2xl p-4">
+                    <View className="flex-row items-start justify-between">
+                      <View className="flex-1 pr-3">
+                        <Text style={[getThemeBodyStyle(themePalette, 14, themePalette.textPrimary), { fontWeight: '700' }]}>
+                          PCS/Outpro
+                        </Text>
+                        <Text style={getThemeBodyStyle(themePalette, 12, themePalette.textSecondary)} className="mt-1">
+                          If this member has fully out-processed for a PCS, this option will remove them from their flight and Squadron Analytics, and move them to a PCS/Outpro status.
+                        </Text>
+                      </View>
+                      <View className="w-10 h-10 rounded-full items-center justify-center" style={getThemeControlStyle(themePalette, isPCSOutproFlight(editingMember.flight))}>
+                        <LogOut size={18} color={isPCSOutproFlight(editingMember.flight) ? '#FFD700' : themePalette.textPrimary} />
+                      </View>
+                    </View>
+                    {isPCSOutproFlight(editingMember.flight) ? (
+                      <Text style={getThemeBodyStyle(themePalette, 13, '#FFD700')} className="mt-4">
+                        This member is already in PCS/Outpro status.
+                      </Text>
+                    ) : (
+                      <Pressable
+                        onPress={() => setShowPCSOutproConfirmModal(true)}
+                        className="self-start mt-4 px-4 py-3 rounded-xl"
+                        style={getThemeControlStyle(themePalette)}
+                      >
+                        <View className="flex-row items-center">
+                          <LogOut size={14} color="#FFD700" />
+                          <Text style={getThemeBodyStyle(themePalette, 13, '#FFD700')} className="ml-2">
+                            Member has PCS&apos;d
                           </Text>
                         </View>
                       </Pressable>
@@ -4126,12 +4484,14 @@ export default function ProfileScreen() {
                           >
                             <Pencil size={15} color="#C0C0C0" />
                           </Pressable>
-                          <Pressable
-                            onPress={() => confirmRemoveMember(member.id)}
-                            className="w-9 h-9 bg-af-danger/20 rounded-full items-center justify-center"
-                          >
-                            <Trash2 size={16} color="#EF4444" />
-                          </Pressable>
+                          {canDeleteMembers ? (
+                            <Pressable
+                              onPress={() => confirmRemoveMember(member.id)}
+                              className="w-9 h-9 bg-af-danger/20 rounded-full items-center justify-center"
+                            >
+                              <Trash2 size={16} color="#EF4444" />
+                            </Pressable>
+                          ) : null}
                         </View>
                       )}
                     </View>
@@ -4183,6 +4543,9 @@ export default function ProfileScreen() {
               <Text className="text-af-silver text-sm mt-2">
                 This will remove the member from the roster and FitFlight tracking.
               </Text>
+              <Text className="text-af-gold text-sm mt-3">
+                Has the member PCS&apos;d? If so, select the PCS/Outpro option instead of deleting them so they can keep their account!
+              </Text>
               <Text className="text-af-danger text-sm font-medium mt-3">
                 This action cannot be undone.
               </Text>
@@ -4206,6 +4569,46 @@ export default function ProfileScreen() {
                 className="flex-1 bg-af-danger py-3 rounded-xl ml-2"
               >
                 <Text className="text-white text-center font-semibold">Delete Member</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showPCSOutproConfirmModal} transparent animationType="fade">
+        <View className="flex-1 bg-black/80 items-center justify-center p-6">
+          <View className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20">
+            <View className="flex-row items-center justify-between mb-4">
+              <Text className="text-white text-xl font-bold">Move to PCS/Outpro</Text>
+              <Pressable
+                onPress={() => setShowPCSOutproConfirmModal(false)}
+                className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+              >
+                <X size={20} color="#C0C0C0" />
+              </Pressable>
+            </View>
+
+            <View className="bg-af-gold/10 border border-af-gold/30 rounded-2xl p-4 mb-4">
+              <Text className="text-white font-semibold">
+                Has the member fully out-processed from your unit?
+              </Text>
+              <Text className="text-af-silver text-sm mt-2">
+                This will remove them from their current flight, exclude them from squadron-wide analytics and leaderboard data, and keep their FitFlight account intact.
+              </Text>
+            </View>
+
+            <View className="flex-row">
+              <Pressable
+                onPress={() => setShowPCSOutproConfirmModal(false)}
+                className="flex-1 bg-white/10 py-3 rounded-xl mr-2"
+              >
+                <Text className="text-white text-center font-semibold">Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={handleConfirmPCSOutpro}
+                className="flex-1 bg-af-gold py-3 rounded-xl ml-2"
+              >
+                <Text className="text-af-navy text-center font-semibold">Confirm</Text>
               </Pressable>
             </View>
           </View>
@@ -4669,7 +5072,8 @@ export default function ProfileScreen() {
         <Animated.View entering={getWebSafeFadeIn(180)} className="flex-1 bg-black/80 justify-end">
           <Animated.View entering={getWebSafeSlideInDown(260)} style={{ height: supportInboxSheetHeight, overflow: 'hidden' }}>
           <ThemeChrome theme={themePalette} variant="feature" blurIntensity={modalBlurIntensity} fill style={{ borderTopLeftRadius: isSupportDesktop ? 24 : 0, borderTopRightRadius: isSupportDesktop ? 24 : 0, height: '100%', overflow: 'hidden' }}>
-          <View className="flex-1 p-6 pb-6" style={!isSupportDesktop ? { paddingTop: 20 } : undefined}>
+          <SafeAreaView edges={isSupportDesktop ? [] : ['top']} className="flex-1">
+          <View className="flex-1 p-6 pb-6">
             <View className="flex-row items-center justify-between mb-4">
               <View>
                 <Text style={getThemeHeadingStyle(themePalette, 22)}>Support Inbox</Text>
@@ -4826,6 +5230,7 @@ export default function ProfileScreen() {
               </View>
             </View>
           </View>
+          </SafeAreaView>
           </ThemeChrome>
           </Animated.View>
         </Animated.View>
@@ -5511,12 +5916,28 @@ export default function ProfileScreen() {
                   setShowSettingsModal(false);
                   setShowChangeRankModal(true);
                 }}
-                className="flex-row items-center rounded-xl border border-white/20 bg-white/10 p-4 mt-4"
+                className="flex-row items-center rounded-xl border border-af-success/40 bg-af-success/15 p-4 mt-4"
               >
-                <User size={20} color="#C0C0C0" />
+                <User size={20} color="#22C55E" />
                 <View className="ml-3 flex-1">
                   <Text className="text-white font-semibold">Change My Rank</Text>
                   <Text className="text-af-silver text-xs mt-1">Update how your rank appears on your Account and Profile.</Text>
+                </View>
+              </Pressable>
+
+              <Pressable
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setShowSelfPCSConfirmModal(true);
+                }}
+                className="mt-3 flex-row items-center rounded-xl border border-af-gold/30 bg-af-gold/10 p-4"
+              >
+                <LogOut size={20} color="#FFD700" />
+                <View className="ml-3 flex-1">
+                  <Text className="text-white font-semibold">Place Me In PCS Status</Text>
+                  <Text className="text-af-silver text-xs mt-1">
+                    Moves your account to PCS/Outpro status, removes you from your flight and squadron-wide analytics, and preserves your account history.
+                  </Text>
                 </View>
               </Pressable>
 
@@ -5527,9 +5948,9 @@ export default function ProfileScreen() {
                   setSelectedSquadron(user?.squadron ?? 'Hawks');
                   setShowChangeSquadronModal(true);
                 }}
-                className="mt-3 flex-row items-center rounded-xl border border-white/20 bg-white/10 p-4"
+                className="mt-3 flex-row items-center rounded-xl border border-af-warning/40 bg-af-warning/15 p-4"
               >
-                <Building2 size={20} color="#C0C0C0" />
+                <Building2 size={20} color="#F59E0B" />
                 <View className="ml-3 flex-1">
                   <Text className="text-white font-semibold">Change My Squadron</Text>
                   <Text className="text-af-silver text-xs mt-1">Update the squadron tied to this account.</Text>
@@ -5698,6 +6119,60 @@ export default function ProfileScreen() {
                   "text-center font-semibold",
                   selectedSquadron === user?.squadron ? "text-white/40" : "text-white"
                 )}>Confirm</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showSelfPCSConfirmModal} transparent animationType="fade">
+        <View className="flex-1 bg-black/80 items-center justify-center p-6">
+          <View className="bg-af-navy rounded-3xl p-6 w-full max-w-sm border border-white/20">
+            <View className="flex-row items-center justify-between mb-4">
+              <View className="flex-1 pr-4">
+                <Text className="text-white text-xl font-bold">Place Me In PCS Status</Text>
+                <Text className="text-af-silver text-sm mt-1">
+                  This moves only your account into PCS/Outpro status.
+                </Text>
+              </View>
+              <Pressable
+                onPress={() => setShowSelfPCSConfirmModal(false)}
+                className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+              >
+                <X size={20} color="#C0C0C0" />
+              </Pressable>
+            </View>
+
+            <View className="bg-af-gold/10 border border-af-gold/30 rounded-2xl p-4 mb-4">
+              <Text className="text-white font-semibold">
+                Have you fully out-processed from your unit?
+              </Text>
+              <Text className="text-af-silver text-sm mt-2">
+                This will remove you from your current flight and squadron-wide analytics. This action can only be undone by an admin.
+              </Text>
+            </View>
+
+            <View className="flex-row">
+              <Pressable
+                onPress={() => setShowSelfPCSConfirmModal(false)}
+                className="flex-1 bg-white/10 py-3 rounded-xl mr-2"
+              >
+                <Text className="text-white text-center font-semibold">Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => { void handlePlaceSelfInPCSStatus(); }}
+                disabled={isUpdatingProfileSettings || user?.flight === PCS_OUTPRO_FLIGHT}
+                className={cn(
+                  "flex-1 py-3 rounded-xl ml-2",
+                  isUpdatingProfileSettings || user?.flight === PCS_OUTPRO_FLIGHT ? "bg-white/10" : "bg-af-gold"
+                )}
+              >
+                <Text className={cn(
+                  "text-center font-semibold",
+                  isUpdatingProfileSettings || user?.flight === PCS_OUTPRO_FLIGHT ? "text-white/40" : "text-af-navy"
+                )}>
+                  {isUpdatingProfileSettings ? 'Saving...' : 'Confirm'}
+                </Text>
               </Pressable>
             </View>
           </View>
@@ -6003,7 +6478,7 @@ export default function ProfileScreen() {
                     </View>
                     <View className="mt-4">
                       <View className="flex-row justify-between mb-2">
-                        <Text className="text-af-silver text-sm">Cardio</Text>
+                        <Text className="text-af-silver text-sm">{formatPFRAComponentLabel(assessment.components.cardio.test, 'cardio')}</Text>
                         <Text className="text-white text-sm">
                           {assessment.components.cardio.exempt
                             ? `Exempt`
@@ -6013,7 +6488,7 @@ export default function ProfileScreen() {
                         </Text>
                       </View>
                       <View className="flex-row justify-between mb-2">
-                        <Text className="text-af-silver text-sm">{assessment.components.pushups.test ?? 'Strength'}</Text>
+                        <Text className="text-af-silver text-sm">{formatPFRAComponentLabel(assessment.components.pushups.test, 'strength')}</Text>
                         <Text className="text-white text-sm">
                           {assessment.components.pushups.exempt
                             ? 'Exempt'
@@ -6021,7 +6496,7 @@ export default function ProfileScreen() {
                         </Text>
                       </View>
                       <View className="flex-row justify-between mb-2">
-                        <Text className="text-af-silver text-sm">{assessment.components.situps.test ?? 'Core'}</Text>
+                        <Text className="text-af-silver text-sm">{formatPFRAComponentLabel(assessment.components.situps.test, 'core')}</Text>
                         <Text className="text-white text-sm">
                           {assessment.components.situps.exempt
                             ? 'Exempt'

@@ -2,15 +2,16 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Modal, Pressable, RefreshControl, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Trophy, Timer, ChevronDown, ChevronUp, Crown, Medal, Search, X, Activity, Award, BarChart3, Dumbbell, ArrowLeft, CircleHelp, Users } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeInRight, useAnimatedStyle, useSharedValue, withDelay, withSpring } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import { ALL_ACHIEVEMENTS, FLIGHTS, formatFlightDisplay, getClosedMonthPlacements, getEffectiveAchievementIds, getShortDisplayName, type Flight, useAuthStore, useMemberStore, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
+import { ALL_ACHIEVEMENTS, FLIGHTS, formatFlightDisplay, getClosedMonthPlacements, getEffectiveAchievementIds, getShortDisplayName, shouldIncludeFlightInSquadronRollups, type Flight, useAuthStore, useMemberStore, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
-import { ATTENDANCE_CHECK_IN_POINTS, getMemberMonthSummary, getMonthKey, WORKOUT_POINTS_PER_MILE, WORKOUT_POINTS_PER_MINUTE } from '@/lib/monthlyStats';
+import { getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
+import { ATTENDANCE_CHECK_IN_POINTS, WORKOUT_SCORE_ENGINE_NAME } from '@/lib/workoutScoreEngine';
 import { ThemeBackdrop } from '@/components/ThemeBackdrop';
 import { ThemeChrome } from '@/components/ThemeChrome';
 import { TopStatusBar } from '@/components/TopStatusBar';
@@ -21,13 +22,20 @@ import { getThemeBodyStyle, getThemeControlStyle, getThemeHeadingStyle, useAppTh
 const WORKOUT_TYPE_COLORS: Record<WorkoutType, string> = {
   Running: '#22C55E',
   Walking: '#84CC16',
+  Hiking: '#65A30D',
+  Rucking: '#B45309',
   Cycling: '#06B6D4',
+  Swimming: '#3B82F6',
+  Weightlifting: '#F59E0B',
   Strength: '#F59E0B',
   HIIT: '#EF4444',
-  Swimming: '#3B82F6',
   Sports: '#8B5CF6',
   Cardio: '#EC4899',
   Flexibility: '#14B8A6',
+  Climbing: '#F97316',
+  Surfing: '#0EA5E9',
+  Diving: '#2563EB',
+  Combatives: '#DC2626',
   Other: '#6B7280',
 };
 
@@ -286,7 +294,8 @@ export function LeaderboardContent({
   onBack?: () => void;
 }) {
   const theme = useAppTheme();
-  const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
   const router = useRouter();
   const [isExpanded, setIsExpanded] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -336,7 +345,7 @@ export function LeaderboardContent({
   }, [userSquadron]);
 
   const squadronMembers = useMemo(() => {
-    return members.filter(m => m.squadron === userSquadron);
+    return members.filter(m => m.squadron === userSquadron && shouldIncludeFlightInSquadronRollups(m.flight));
   }, [members, userSquadron]);
 
   const currentMonthSummaries = useMemo(() => {
@@ -1142,9 +1151,21 @@ export function LeaderboardContent({
           animationType="fade"
           onRequestClose={() => setShowScoringHelp(false)}
         >
-          <View className="flex-1 bg-black/75 justify-center px-6">
-            <ThemeChrome theme={theme} variant="feature">
-            <View className="p-6">
+          <View
+            className="flex-1 bg-black/75 px-6"
+            style={{
+              paddingTop: Math.max(insets.top, 16),
+              paddingBottom: Math.max(insets.bottom, 16),
+              justifyContent: 'center',
+            }}
+          >
+            <ThemeChrome
+              theme={theme}
+              variant="feature"
+              fill
+              style={{ maxHeight: height - Math.max(insets.top, 16) - Math.max(insets.bottom, 16) - 24, overflow: 'hidden' }}
+            >
+            <View className="p-6" style={{ flex: 1, minHeight: 0 }}>
               <View className="flex-row items-center justify-between">
                 <Text style={getThemeHeadingStyle(theme, 20)}>How Points Work</Text>
                 <Pressable
@@ -1159,48 +1180,75 @@ export function LeaderboardContent({
                 </Pressable>
               </View>
 
-              <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 16 }]}>
-                The leaderboard uses monthly points. Attendance is worth the fewest points, and workouts earn points based on whichever is stronger: time or distance.
-              </Text>
+              <ScrollView
+                className="mt-4"
+                style={{ flex: 1, minHeight: 0 }}
+                contentContainerStyle={{ paddingBottom: 8 }}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+              >
+                <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>
+                  Monthly leaderboard points now use the newly implemented Leaderboard Score Engine. Each workout type compares you to your own recent baseline instead of directly comparing raw workout stats across different activities.
+                </Text>
 
-              <View className="mt-5 space-y-3">
-                <ThemeChrome theme={theme}>
-                <View className="p-4">
-                  <Text style={[getThemeBodyStyle(theme, 15, theme.textPrimary), { fontWeight: '600' }]}>Attendance</Text>
-                  <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>
-                    Marked attendance on the Attendance tab earns {ATTENDANCE_CHECK_IN_POINTS} points per check-in.
-                  </Text>
-                </View>
-                </ThemeChrome>
+                <View className="mt-5 space-y-3">
+                  <ThemeChrome theme={theme}>
+                  <View className="p-4">
+                    <Text style={[getThemeBodyStyle(theme, 15, theme.textPrimary), { fontWeight: '600' }]}>Attendance</Text>
+                    <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>
+                      Marked attendance on the Attendance tab earns {ATTENDANCE_CHECK_IN_POINTS} points per check-in.
+                    </Text>
+                  </View>
+                  </ThemeChrome>
 
-                <ThemeChrome theme={theme}>
-                <View className="mt-3 p-4">
-                  <Text style={[getThemeBodyStyle(theme, 15, theme.textPrimary), { fontWeight: '600' }]}>Workout Points</Text>
-                  <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>
-                    Each workout earns the higher of:
-                  </Text>
-                  <Text style={[getThemeBodyStyle(theme, 14), { marginTop: 8 }]}>{WORKOUT_POINTS_PER_MINUTE} point per minute</Text>
-                  <Text style={[getThemeBodyStyle(theme, 14), { marginTop: 4 }]}>{WORKOUT_POINTS_PER_MILE} points per mile</Text>
-                </View>
-                </ThemeChrome>
+                  <ThemeChrome theme={theme}>
+                  <View className="mt-3 p-4">
+                    <Text style={[getThemeBodyStyle(theme, 15, theme.textPrimary), { fontWeight: '600' }]}>Leaderboard Score Engine</Text>
+                    <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>
+                      Your first logged workout of a type or subtype starts at 30 points. After that, FitFlight compares the workout to the rolling average of your previous 1 to 5 workouts of that same type or subtype.
+                    </Text>
+                    <Text style={[getThemeBodyStyle(theme, 14), { marginTop: 8 }]}>Type-specific metrics are weighted into an improvement score.</Text>
+                    <Text style={[getThemeBodyStyle(theme, 14), { marginTop: 4 }]}>Required metrics count toward points. Optional metrics are stored for analytics only.</Text>
+                    <View className="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
+                      <Text style={[getThemeBodyStyle(theme, 13, theme.textPrimary), { fontWeight: '600' }]}>Scoring Formula</Text>
+                      <Text style={[getThemeBodyStyle(theme, 13, theme.textSecondary), { marginTop: 6 }]}>
+                        First workout for a type/subtype: points = 30
+                      </Text>
+                      <Text style={[getThemeBodyStyle(theme, 13, theme.textSecondary), { marginTop: 6 }]}>
+                        metricScore = weighted average of each metric ratio
+                      </Text>
+                      <Text style={[getThemeBodyStyle(theme, 13, theme.textSecondary), { marginTop: 6 }]}>
+                        workoutPoints = clamp(30 × metricScore, 25, 100)
+                      </Text>
+                      <Text style={[getThemeBodyStyle(theme, 13, theme.textSecondary), { marginTop: 6 }]}>
+                        streakBonus = min(currentWeeklyStreak × 2, 10)
+                      </Text>
+                      <Text style={[getThemeBodyStyle(theme, 13, theme.textSecondary), { marginTop: 6 }]}>
+                        finalPoints = clamp(workoutPoints + 5 participation + streakBonus, 30, 115)
+                      </Text>
+                    </View>
+                  </View>
+                  </ThemeChrome>
 
-                <ThemeChrome theme={theme} variant="feature">
-                <View className="mt-3 p-4">
-                  <Text style={[getThemeBodyStyle(theme, 15, theme.textPrimary), { fontWeight: '600' }]}>Examples</Text>
-                  <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>30-minute strength workout = 30 points</Text>
-                  <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>2-mile run = 30 points</Text>
-                  <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>45-minute workout = 45 points</Text>
-                  <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>3-mile run = 45 points</Text>
+                  <ThemeChrome theme={theme} variant="feature">
+                  <View className="mt-3 p-4">
+                    <Text style={[getThemeBodyStyle(theme, 15, theme.textPrimary), { fontWeight: '600' }]}>Examples</Text>
+                    <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>Running compares distance and duration to your recent runs.</Text>
+                    <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>Weightlifting compares lift-specific weight, volume, and sets against your recent sessions for that lift.</Text>
+                    <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>After the improvement score is calculated, FitFlight adds a +5 participation bonus and a weekly consistency bonus of up to +10.</Text>
+                    <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>Final workout points are clamped so normal progress stays competitive without letting one outlier dominate the month.</Text>
+                    <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>Workouts logged before the new engine launched keep their original points, but they still seed your future baseline.</Text>
+                  </View>
+                  </ThemeChrome>
                 </View>
-                </ThemeChrome>
-              </View>
+              </ScrollView>
 
               <Pressable
                 onPress={() => {
                   Haptics.selectionAsync();
                   setShowScoringHelp(false);
                 }}
-                className="mt-6 self-end rounded-full border px-4 py-2"
+                className="mt-4 self-end rounded-full border px-4 py-2"
                 style={{ borderColor: `${theme.accent}66`, backgroundColor: theme.accentSoft }}
               >
                 <Text style={[getThemeBodyStyle(theme, 14, theme.textPrimary), { fontWeight: '600' }]}>Got it</Text>
