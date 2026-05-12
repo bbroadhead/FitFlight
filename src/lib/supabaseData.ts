@@ -448,6 +448,36 @@ function isMissingTrophyCelebrationShownColumnError(message: string) {
   );
 }
 
+function extractMissingSchemaCacheColumn(message: string) {
+  const lower = message.toLowerCase();
+  if (!lower.includes('schema cache')) {
+    return null;
+  }
+
+  const match = message.match(/'([A-Z_]+|[a-z_]+)' column/i);
+  return match?.[1] ?? null;
+}
+
+function isMissingScheduledSessionLocationColumnError(message: string) {
+  const normalized = message.toLowerCase();
+  const missingColumn = extractMissingSchemaCacheColumn(message)?.toLowerCase();
+  return missingColumn === 'location' || (
+    normalized.includes('scheduled_pt_sessions') &&
+    normalized.includes('location') &&
+    normalized.includes('schema cache')
+  );
+}
+
+const OPTIONAL_ROSTER_WRITE_COLUMNS = new Set([
+  'SHOW_WORKOUT_HISTORY_ON_PROFILE',
+  'SHOW_WORKOUT_UPLOADS_ON_PROFILE',
+  'SHOW_PFRA_RECORDS_ON_PROFILE',
+  'SHOW_UPDATE_NOTES',
+  'APP_THEME',
+  'MUST_CHANGE_PASSWORD',
+  'HAS_LOGGED_INTO_APP',
+]);
+
 function getSupportInboxErrorMessage(payload: unknown, fallbackMessage: string) {
   const rawMessage =
     typeof (payload as { message?: unknown }).message === 'string'
@@ -1644,12 +1674,29 @@ export async function fetchScheduledPTSessions(
     query.set('updated_at', `gt.${options.updatedAfter}`);
   }
 
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/scheduled_pt_sessions?${query.toString()}`, {
+  const headers = await getHeaders(accessToken);
+  let response = await fetch(`${SUPABASE_URL}/rest/v1/scheduled_pt_sessions?${query.toString()}`, {
     method: 'GET',
-    headers: await getHeaders(accessToken),
+    headers,
   });
 
-  const payload = await response.json().catch(() => []);
+  let payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to load scheduled PT sessions from Supabase.';
+
+    if (isMissingScheduledSessionLocationColumnError(message)) {
+      query.set('select', 'id,session_date,session_time,description,squadron,flights,created_by,session_scope,session_kind,created_at,updated_at');
+      response = await fetch(`${SUPABASE_URL}/rest/v1/scheduled_pt_sessions?${query.toString()}`, {
+        method: 'GET',
+        headers,
+      });
+      payload = await response.json().catch(() => []);
+    }
+  }
+
   if (!response.ok) {
     const message =
       typeof (payload as { message?: unknown }).message === 'string'
@@ -1662,28 +1709,48 @@ export async function fetchScheduledPTSessions(
 }
 
 export async function createScheduledPTSession(session: ScheduledPTSession, accessToken?: string) {
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/scheduled_pt_sessions`, {
+  const headers = {
+    ...(await getHeaders(accessToken)),
+    'Content-Type': 'application/json',
+    Prefer: 'return=representation',
+  };
+  let body: Record<string, unknown> = {
+    id: session.id,
+    session_date: session.date,
+    session_time: session.time,
+    description: session.description,
+    location: session.location?.trim() || null,
+    squadron: session.squadron,
+    flights: session.flights,
+    created_by: session.createdBy,
+    session_scope: session.scope,
+    session_kind: session.kind,
+  };
+
+  let response = await fetch(`${SUPABASE_URL}/rest/v1/scheduled_pt_sessions`, {
     method: 'POST',
-    headers: {
-      ...(await getHeaders(accessToken)),
-      'Content-Type': 'application/json',
-      Prefer: 'return=representation',
-    },
-      body: JSON.stringify({
-        id: session.id,
-        session_date: session.date,
-        session_time: session.time,
-        description: session.description,
-        location: session.location?.trim() || null,
-        squadron: session.squadron,
-        flights: session.flights,
-        created_by: session.createdBy,
-        session_scope: session.scope,
-        session_kind: session.kind,
-      }),
+    headers,
+    body: JSON.stringify(body),
   });
 
-  const payload = await response.json().catch(() => []);
+  let payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to create scheduled PT session.';
+
+    if (isMissingScheduledSessionLocationColumnError(message)) {
+      delete body.location;
+      response = await fetch(`${SUPABASE_URL}/rest/v1/scheduled_pt_sessions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      });
+      payload = await response.json().catch(() => []);
+    }
+  }
+
   if (!response.ok) {
     const message =
       typeof (payload as { message?: unknown }).message === 'string'
@@ -1696,29 +1763,51 @@ export async function createScheduledPTSession(session: ScheduledPTSession, acce
 }
 
 export async function updateScheduledPTSession(session: ScheduledPTSession, accessToken?: string) {
-  const response = await fetch(
+  const headers = {
+    ...(await getHeaders(accessToken)),
+    'Content-Type': 'application/json',
+    Prefer: 'return=representation',
+  };
+  let body: Record<string, unknown> = {
+    session_date: session.date,
+    session_time: session.time,
+    description: session.description,
+    location: session.location?.trim() || null,
+    squadron: session.squadron,
+    flights: session.flights,
+    session_scope: session.scope,
+    session_kind: session.kind,
+  };
+  let response = await fetch(
     `${SUPABASE_URL}/rest/v1/scheduled_pt_sessions?id=eq.${encodeURIComponent(session.id)}`,
     {
       method: 'PATCH',
-      headers: {
-        ...(await getHeaders(accessToken)),
-        'Content-Type': 'application/json',
-        Prefer: 'return=representation',
-      },
-        body: JSON.stringify({
-          session_date: session.date,
-          session_time: session.time,
-          description: session.description,
-          location: session.location?.trim() || null,
-          squadron: session.squadron,
-          flights: session.flights,
-          session_scope: session.scope,
-          session_kind: session.kind,
-        }),
+      headers,
+      body: JSON.stringify(body),
     }
   );
 
-  const payload = await response.json().catch(() => []);
+  let payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to update scheduled PT session.';
+
+    if (isMissingScheduledSessionLocationColumnError(message)) {
+      delete body.location;
+      response = await fetch(
+        `${SUPABASE_URL}/rest/v1/scheduled_pt_sessions?id=eq.${encodeURIComponent(session.id)}`,
+        {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify(body),
+        }
+      );
+      payload = await response.json().catch(() => []);
+    }
+  }
+
   if (!response.ok) {
     const message =
       typeof (payload as { message?: unknown }).message === 'string'
@@ -3059,17 +3148,39 @@ export async function setWeeklyAttendanceExcusal(params: {
 }
 
 export async function createRosterMember(member: Member, accessToken?: string) {
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/${getRosterTableName(member.squadron)}`, {
+  const headers = await getRosterHeaders(accessToken);
+  const requestUrl = `${SUPABASE_URL}/rest/v1/${getRosterTableName(member.squadron)}`;
+  let activePayload: Record<string, unknown> = { ...getRosterPayload(member) };
+  let response = await fetch(requestUrl, {
     method: 'POST',
-    headers: await getRosterHeaders(accessToken),
-    body: JSON.stringify(getRosterPayload(member)),
+    headers,
+    body: JSON.stringify(activePayload),
   });
 
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
+  let errorPayload = await response.json().catch(() => ({}));
+  while (!response.ok) {
     const message =
-      typeof (payload as { message?: unknown }).message === 'string'
-        ? (payload as { message: string }).message
+      typeof (errorPayload as { message?: unknown }).message === 'string'
+        ? (errorPayload as { message: string }).message
+        : 'Unable to add member to Supabase roster.';
+    const missingColumn = extractMissingSchemaCacheColumn(message)?.toUpperCase() ?? null;
+    if (!missingColumn || !(missingColumn in activePayload) || !OPTIONAL_ROSTER_WRITE_COLUMNS.has(missingColumn)) {
+      break;
+    }
+
+    delete activePayload[missingColumn];
+    response = await fetch(requestUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(activePayload),
+    });
+    errorPayload = await response.json().catch(() => ({}));
+  }
+
+  if (!response.ok) {
+    const message =
+      typeof (errorPayload as { message?: unknown }).message === 'string'
+        ? (errorPayload as { message: string }).message
         : 'Unable to add member to Supabase roster.';
     throw new Error(message);
   }
@@ -3085,14 +3196,36 @@ export async function updateRosterMember(previousMember: Member, nextMember: Mem
     return;
   }
 
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/${previousRosterTable}?${buildRosterFilter(previousMember)}`, {
+  const headers = await getRosterHeaders(accessToken);
+  const requestUrl = `${SUPABASE_URL}/rest/v1/${previousRosterTable}?${buildRosterFilter(previousMember)}`;
+  let activePayload: Record<string, unknown> = { ...getRosterPayload(nextMember) };
+  let response = await fetch(requestUrl, {
     method: 'PATCH',
-    headers: await getRosterHeaders(accessToken),
-    body: JSON.stringify(getRosterPayload(nextMember)),
+    headers,
+    body: JSON.stringify(activePayload),
   });
 
+  let payload = await response.json().catch(() => ({}));
+  while (!response.ok) {
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to update member in Supabase roster.';
+    const missingColumn = extractMissingSchemaCacheColumn(message)?.toUpperCase() ?? null;
+    if (!missingColumn || !(missingColumn in activePayload) || !OPTIONAL_ROSTER_WRITE_COLUMNS.has(missingColumn)) {
+      break;
+    }
+
+    delete activePayload[missingColumn];
+    response = await fetch(requestUrl, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify(activePayload),
+    });
+    payload = await response.json().catch(() => ({}));
+  }
+
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
     const message =
       typeof (payload as { message?: unknown }).message === 'string'
         ? (payload as { message: string }).message
@@ -3136,15 +3269,6 @@ export async function updateRosterProfileVisibility(
     body: JSON.stringify(body),
   });
 
-  const extractMissingRosterColumn = (message: string) => {
-    const lower = message.toLowerCase();
-    if (!lower.includes('schema cache')) {
-      return null;
-    }
-    const match = message.match(/'([A-Z_]+)' column/i);
-    return match?.[1]?.toUpperCase() ?? null;
-  };
-
   let activePayload: Record<string, unknown> = { ...payload };
   let response = await sendPatch(activePayload);
   let errorPayload = await response.json().catch(() => ({}));
@@ -3155,7 +3279,7 @@ export async function updateRosterProfileVisibility(
         ? (errorPayload as { message: string }).message
         : 'Unable to update profile visibility in Supabase roster.';
 
-    const missingColumn = extractMissingRosterColumn(message);
+    const missingColumn = extractMissingSchemaCacheColumn(message)?.toUpperCase() ?? null;
     if (
       !missingColumn ||
       !(missingColumn in activePayload) ||

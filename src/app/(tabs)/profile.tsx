@@ -255,6 +255,26 @@ function getWorkoutDisplayTitle(type: WorkoutType) {
   }
 }
 
+function areSupportThreadsEqual(left: SupportThreadSummary[], right: SupportThreadSummary[]) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((thread, index) => {
+    const other = right[index];
+    return (
+      thread.id === other.id &&
+      thread.updatedAt === other.updatedAt &&
+      thread.latestMessagePreview === other.latestMessagePreview &&
+      thread.unreadForOwner === other.unreadForOwner &&
+      thread.unreadForRequester === other.unreadForRequester &&
+      thread.messageCount === other.messageCount &&
+      thread.subject === other.subject &&
+      thread.requesterName === other.requesterName
+    );
+  });
+}
+
 export default function ProfileScreen() {
   const router = useRouter();
   const isFocused = useIsFocused();
@@ -296,6 +316,9 @@ export default function ProfileScreen() {
     ? Math.floor((desktopWideCardWidth - 24 - desktopQuickActionGap) / 2)
     : 0;
   const mobileActionCardWidth = !useDesktopCardGrid ? Math.floor((width - 48 - 12) / 2) : 0;
+  const isSupportDesktop = width >= 960;
+  const supportSheetHeight = isSupportDesktop ? '82%' : '100%';
+  const supportInboxSheetHeight = isSupportDesktop ? '84%' : '100%';
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [showManageModal, setShowManageModal] = useState(false);
@@ -750,7 +773,7 @@ export default function ProfileScreen() {
       return;
     }
 
-    setSupportLoading(true);
+    setSupportLoading((current) => current || supportThreads.length === 0);
     try {
       const nextThreads = await fetchSupportThreads({
         email: user.email,
@@ -758,7 +781,9 @@ export default function ProfileScreen() {
         accessToken,
       });
 
-      setSupportThreads(nextThreads);
+      setSupportThreads((currentThreads) => (
+        areSupportThreadsEqual(currentThreads, nextThreads) ? currentThreads : nextThreads
+      ));
 
       if (!canViewSupportInbox) {
           const ownThread =
@@ -1144,10 +1169,17 @@ export default function ProfileScreen() {
         requiredPTSessionsPerWeek: previousMember?.requiredPTSessionsPerWeek ?? 5,
         isVerified: previousMember?.isVerified ?? false,
         ptlPendingApproval: previousMember?.ptlPendingApproval ?? false,
+        showWorkoutHistoryOnProfile: previousMember?.showWorkoutHistoryOnProfile ?? true,
+        showWorkoutUploadsOnProfile: previousMember?.showWorkoutUploadsOnProfile ?? true,
+        showPFRARecordsOnProfile: previousMember?.showPFRARecordsOnProfile ?? true,
+        showUpdateNotes: previousMember?.showUpdateNotes ?? true,
+        appTheme: previousMember?.appTheme,
         monthlyPlacements: previousMember?.monthlyPlacements ?? [],
         leaderboardHistory: previousMember?.leaderboardHistory ?? [],
         trophyCount: previousMember?.trophyCount ?? 0,
         hasSeenTutorial: previousMember?.hasSeenTutorial ?? false,
+        mustChangePassword: previousMember?.mustChangePassword ?? false,
+        hasLoggedIntoApp: previousMember?.hasLoggedIntoApp ?? false,
         profilePicture: previousMember?.profilePicture,
       };
 
@@ -4508,9 +4540,9 @@ export default function ProfileScreen() {
 
       <Modal visible={showDeveloperMessageModal} transparent animationType="none">
         <Animated.View entering={getWebSafeFadeIn(180)} className="flex-1 bg-black/80 justify-end">
-          <Animated.View entering={getWebSafeSlideInDown(260)} style={{ height: '82%', overflow: 'hidden' }}>
-          <ThemeChrome theme={themePalette} variant="feature" blurIntensity={modalBlurIntensity} fill style={{ borderTopLeftRadius: 24, borderTopRightRadius: 24, height: '100%', overflow: 'hidden' }}>
-          <View className="flex-1 p-6 pb-6">
+          <Animated.View entering={getWebSafeSlideInDown(260)} style={{ height: supportSheetHeight, overflow: 'hidden' }}>
+          <ThemeChrome theme={themePalette} variant="feature" blurIntensity={modalBlurIntensity} fill style={{ borderTopLeftRadius: isSupportDesktop ? 24 : 0, borderTopRightRadius: isSupportDesktop ? 24 : 0, height: '100%', overflow: 'hidden' }}>
+          <View className="flex-1 p-6 pb-6" style={!isSupportDesktop ? { paddingTop: 20 } : undefined}>
             <View className="flex-row items-start justify-between mb-4">
               <View className="flex-1 pr-4">
                 <Text style={getThemeHeadingStyle(themePalette, 22)}>Message the FitFlight Team</Text>
@@ -4542,51 +4574,8 @@ export default function ProfileScreen() {
               </View>
             ) : null}
 
-            <View className="flex-1 min-h-0 flex-row">
-              <View className="w-[38%] pr-4 min-h-0">
-                <Text className="text-af-silver text-xs uppercase tracking-wider mb-2">Subject</Text>
-                <TextInput
-                  value={supportSubject}
-                  onChangeText={setSupportSubject}
-                  placeholder="e.g. Workout sync"
-                  placeholderTextColor="#94A3B8"
-                  className="text-white bg-white/5 border border-white/10 rounded-2xl px-4 py-4 mb-4"
-                />
-
-                <View className="flex-1 min-h-0">
-                  <Text className="text-af-silver text-xs uppercase tracking-wider mb-2">Message</Text>
-                  <TextInput
-                    value={supportBody}
-                    onChangeText={setSupportBody}
-                    placeholder="Type your message here"
-                    placeholderTextColor="#94A3B8"
-                    multiline
-                    textAlignVertical="top"
-                    className="flex-1 text-white bg-white/5 border border-white/10 rounded-2xl px-4 py-4"
-                    style={{ minHeight: 0 }}
-                  />
-                </View>
-
-                {supportError ? (
-                  <Text className="text-af-danger text-sm mt-3">{supportError}</Text>
-                ) : null}
-
-                <Pressable
-                  onPress={handleSendSupportMessage}
-                  disabled={supportSending}
-                  className={cn(
-                    "mt-4 rounded-xl py-4 items-center justify-center",
-                    supportSending ? "opacity-60" : ""
-                  )}
-                  style={supportSending ? getThemeControlStyle(themePalette) : { backgroundColor: themePalette.accent }}
-                >
-                  <Text className={cn("font-semibold", supportSending ? "text-white/50" : "text-white")}>
-                    {supportSending ? 'Sending...' : 'Send Message'}
-                  </Text>
-                </Pressable>
-              </View>
-
-              <View className="flex-1 min-h-0">
+            <View className={cn("flex-1 min-h-0", isSupportDesktop ? "flex-row" : "flex-col")}>
+              <View className="min-h-0" style={isSupportDesktop ? { width: '62%', paddingRight: 16 } : { width: '100%', flex: 1 }}>
                 <Text className="text-af-silver text-xs uppercase tracking-wider mb-2">Conversation</Text>
                 <View className="flex-1 min-h-0 bg-white/5 border border-white/10 rounded-2xl p-4">
                   <ScrollView style={{ flex: 1, minHeight: 0 }} contentContainerStyle={{ paddingBottom: 8 }} showsVerticalScrollIndicator={false}>
@@ -4625,6 +4614,50 @@ export default function ProfileScreen() {
                   </ScrollView>
                 </View>
               </View>
+
+              <View
+                className={cn("min-h-0", isSupportDesktop ? "" : "pt-4")}
+                style={isSupportDesktop ? { width: '38%' } : { width: '100%' }}
+              >
+                <Text className="text-af-silver text-xs uppercase tracking-wider mb-2">Subject</Text>
+                <TextInput
+                  value={supportSubject}
+                  onChangeText={setSupportSubject}
+                  placeholder="e.g. Workout sync"
+                  placeholderTextColor="#94A3B8"
+                  className="text-white bg-white/5 border border-white/10 rounded-2xl px-4 py-4 mb-4"
+                />
+
+                <Text className="text-af-silver text-xs uppercase tracking-wider mb-2">Message</Text>
+                <TextInput
+                  value={supportBody}
+                  onChangeText={setSupportBody}
+                  placeholder="Type your message here"
+                  placeholderTextColor="#94A3B8"
+                  multiline
+                  textAlignVertical="top"
+                  className="text-white bg-white/5 border border-white/10 rounded-2xl px-4 py-4"
+                  style={isSupportDesktop ? { flex: 1, minHeight: 0 } : { minHeight: 150, maxHeight: 190 }}
+                />
+
+                {supportError ? (
+                  <Text className="text-af-danger text-sm mt-3">{supportError}</Text>
+                ) : null}
+
+                <Pressable
+                  onPress={handleSendSupportMessage}
+                  disabled={supportSending}
+                  className={cn(
+                    "mt-4 rounded-xl py-4 items-center justify-center",
+                    supportSending ? "opacity-60" : ""
+                  )}
+                  style={supportSending ? getThemeControlStyle(themePalette) : { backgroundColor: themePalette.accent }}
+                >
+                  <Text className={cn("font-semibold", supportSending ? "text-white/50" : "text-white")}>
+                    {supportSending ? 'Sending...' : 'Send Message'}
+                  </Text>
+                </Pressable>
+              </View>
             </View>
           </View>
           </ThemeChrome>
@@ -4634,9 +4667,9 @@ export default function ProfileScreen() {
 
       <Modal visible={showSupportInboxModal} transparent animationType="none">
         <Animated.View entering={getWebSafeFadeIn(180)} className="flex-1 bg-black/80 justify-end">
-          <Animated.View entering={getWebSafeSlideInDown(260)} style={{ height: '84%', overflow: 'hidden' }}>
-          <ThemeChrome theme={themePalette} variant="feature" blurIntensity={modalBlurIntensity} fill style={{ borderTopLeftRadius: 24, borderTopRightRadius: 24, height: '100%', overflow: 'hidden' }}>
-          <View className="flex-1 p-6 pb-6">
+          <Animated.View entering={getWebSafeSlideInDown(260)} style={{ height: supportInboxSheetHeight, overflow: 'hidden' }}>
+          <ThemeChrome theme={themePalette} variant="feature" blurIntensity={modalBlurIntensity} fill style={{ borderTopLeftRadius: isSupportDesktop ? 24 : 0, borderTopRightRadius: isSupportDesktop ? 24 : 0, height: '100%', overflow: 'hidden' }}>
+          <View className="flex-1 p-6 pb-6" style={!isSupportDesktop ? { paddingTop: 20 } : undefined}>
             <View className="flex-row items-center justify-between mb-4">
               <View>
                 <Text style={getThemeHeadingStyle(themePalette, 22)}>Support Inbox</Text>
@@ -4651,10 +4684,10 @@ export default function ProfileScreen() {
               </Pressable>
             </View>
 
-            <View className="flex-1 min-h-0 flex-row">
-              <View className="w-[38%] pr-3 min-h-0">
+            <View className={cn("flex-1 min-h-0", isSupportDesktop ? "flex-row" : "flex-col")}>
+              <View className="min-h-0" style={isSupportDesktop ? { width: '38%', paddingRight: 12 } : { width: '100%', maxHeight: 180, marginBottom: 16 }}>
                 <ScrollView style={{ flex: 1, minHeight: 0 }} contentContainerStyle={{ paddingBottom: 8 }} showsVerticalScrollIndicator={false}>
-                  {supportLoading ? (
+                  {supportLoading && supportThreads.length === 0 ? (
                     <Text className="text-af-silver text-center py-8">Loading support inbox...</Text>
                   ) : supportThreads.length === 0 ? (
                     <Text className="text-af-silver text-center py-8">No support messages yet</Text>
@@ -4697,7 +4730,12 @@ export default function ProfileScreen() {
 
               <View className="flex-1 min-h-0">
                 {activeSupportThreadId ? (
-                  <>
+                  <ScrollView
+                    style={{ flex: 1, minHeight: 0 }}
+                    contentContainerStyle={{ paddingBottom: isSupportDesktop ? 8 : 20 }}
+                    showsVerticalScrollIndicator={false}
+                    keyboardShouldPersistTaps="handled"
+                  >
                     <View className="bg-white/5 border border-white/10 rounded-2xl p-4 mb-4">
                       {(() => {
                         const activeThread = supportThreads.find((thread) => thread.id === activeSupportThreadId);
@@ -4716,8 +4754,11 @@ export default function ProfileScreen() {
                       })()}
                     </View>
 
-                    <View className="flex-1 min-h-0 bg-white/5 border border-white/10 rounded-2xl p-4">
-                      <ScrollView style={{ flex: 1, minHeight: 0 }} contentContainerStyle={{ paddingBottom: 8 }} showsVerticalScrollIndicator={false}>
+                    <View
+                      className="bg-white/5 border border-white/10 rounded-2xl p-4"
+                      style={isSupportDesktop ? { minHeight: 0, flex: 1 } : { maxHeight: 240, marginBottom: 16 }}
+                    >
+                      <ScrollView style={{ flex: 1, minHeight: 0 }} contentContainerStyle={{ paddingBottom: 8 }} showsVerticalScrollIndicator={false} nestedScrollEnabled>
                         {supportMessagesLoading ? (
                           <Text className="text-af-silver text-center py-8">Loading conversation...</Text>
                         ) : (
@@ -4746,7 +4787,7 @@ export default function ProfileScreen() {
                       </ScrollView>
                     </View>
 
-                    <View className="mt-4">
+                    <View className={isSupportDesktop ? "mt-4" : ""}>
                       <Text className="text-af-silver text-xs uppercase tracking-wider mb-2">Reply</Text>
                       <TextInput
                         value={supportBody}
@@ -4756,7 +4797,7 @@ export default function ProfileScreen() {
                         multiline
                         textAlignVertical="top"
                         className="text-white bg-white/5 border border-white/10 rounded-2xl px-4 py-4"
-                        style={{ minHeight: 110, maxHeight: 150 }}
+                        style={isSupportDesktop ? { minHeight: 110, maxHeight: 150 } : { minHeight: 120, maxHeight: 150 }}
                       />
                     </View>
 
@@ -4776,7 +4817,7 @@ export default function ProfileScreen() {
                         {supportSending ? 'Sending...' : 'Send Reply'}
                       </Text>
                     </Pressable>
-                  </>
+                  </ScrollView>
                 ) : (
                   <View className="flex-1 bg-white/5 border border-white/10 rounded-2xl items-center justify-center p-6">
                     <Text className="text-af-silver text-center">Select a member message to open the conversation.</Text>
