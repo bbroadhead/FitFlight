@@ -11,7 +11,7 @@ import { ALL_ACHIEVEMENTS, FLIGHTS, formatFlightDisplay, getClosedMonthPlacement
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
-import { ATTENDANCE_CHECK_IN_POINTS, WORKOUT_SCORE_ENGINE_NAME } from '@/lib/workoutScoreEngine';
+import { ATTENDANCE_CHECK_IN_POINTS } from '@/lib/workoutScoreEngine';
 import { ThemeBackdrop } from '@/components/ThemeBackdrop';
 import { ThemeChrome } from '@/components/ThemeChrome';
 import { TopStatusBar } from '@/components/TopStatusBar';
@@ -1188,7 +1188,7 @@ export function LeaderboardContent({
                 keyboardShouldPersistTaps="handled"
               >
                 <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>
-                  Monthly leaderboard points now use the newly implemented Leaderboard Score Engine. Each workout type compares you to your own recent baseline instead of directly comparing raw workout stats across different activities.
+                  Monthly leaderboard points now use the newly implemented Leaderboard Score Engine. Workouts are scored by effort, workout intent, weekly consistency, and a smaller personal-improvement bonus so different training styles stay comparable.
                 </Text>
 
                 <View className="mt-5 space-y-3">
@@ -1205,26 +1205,32 @@ export function LeaderboardContent({
                   <View className="mt-3 p-4">
                     <Text style={[getThemeBodyStyle(theme, 15, theme.textPrimary), { fontWeight: '600' }]}>Leaderboard Score Engine</Text>
                     <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>
-                      Your first logged workout of a type or subtype starts at 30 points. After that, FitFlight compares the workout to the rolling average of your previous 1 to 5 workouts of that same type or subtype.
+                      Your first logged workout in a new type, subtype, and intent bucket starts at 30 points. After that, FitFlight scores the session using four pieces: effort, intensity match, weekly consistency, and a smaller personal improvement bonus.
                     </Text>
-                    <Text style={[getThemeBodyStyle(theme, 14), { marginTop: 8 }]}>Type-specific metrics are weighted into an improvement score.</Text>
-                    <Text style={[getThemeBodyStyle(theme, 14), { marginTop: 4 }]}>Required metrics count toward points. Optional metrics are stored for analytics only.</Text>
+                    <Text style={[getThemeBodyStyle(theme, 14), { marginTop: 8 }]}>Required metrics count toward points. Optional metrics are stored for analytics only.</Text>
+                    <Text style={[getThemeBodyStyle(theme, 14), { marginTop: 4 }]}>Intent buckets keep endurance, tempo, interval, recovery, strength, and skill days fair without requiring every workout to be a PR.</Text>
                     <View className="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
                       <Text style={[getThemeBodyStyle(theme, 13, theme.textPrimary), { fontWeight: '600' }]}>Scoring Formula</Text>
                       <Text style={[getThemeBodyStyle(theme, 13, theme.textSecondary), { marginTop: 6 }]}>
-                        First workout for a type/subtype: points = 30
+                        First workout for a new type / subtype / intent bucket: points = 30
                       </Text>
                       <Text style={[getThemeBodyStyle(theme, 13, theme.textSecondary), { marginTop: 6 }]}>
-                        metricScore = weighted average of each metric ratio
+                        effortRatio = weighted average of current workload vs intent-aware effort benchmarks
                       </Text>
                       <Text style={[getThemeBodyStyle(theme, 13, theme.textSecondary), { marginTop: 6 }]}>
-                        workoutPoints = clamp(30 × metricScore, 25, 100)
+                        effortScore = clamp(22 + ((effortRatio - 1) × 35), 12, 60)
                       </Text>
                       <Text style={[getThemeBodyStyle(theme, 13, theme.textSecondary), { marginTop: 6 }]}>
-                        streakBonus = min(currentWeeklyStreak × 2, 10)
+                        intentMatchScore = similarity bonus from your last up to 5 similar workouts
                       </Text>
                       <Text style={[getThemeBodyStyle(theme, 13, theme.textSecondary), { marginTop: 6 }]}>
-                        finalPoints = clamp(workoutPoints + 5 participation + streakBonus, 30, 115)
+                        consistencyBonus = min(currentWeeklySessionCount × 2, 10)
+                      </Text>
+                      <Text style={[getThemeBodyStyle(theme, 13, theme.textSecondary), { marginTop: 6 }]}>
+                        improvementBonus = clamp((improvementRatio - 1) × 40, 0, 15)
+                      </Text>
+                      <Text style={[getThemeBodyStyle(theme, 13, theme.textSecondary), { marginTop: 6 }]}>
+                        finalPoints = clamp(effortScore + intentMatchScore + consistencyBonus + improvementBonus, 30, 115)
                       </Text>
                     </View>
                   </View>
@@ -1233,9 +1239,9 @@ export function LeaderboardContent({
                   <ThemeChrome theme={theme} variant="feature">
                   <View className="mt-3 p-4">
                     <Text style={[getThemeBodyStyle(theme, 15, theme.textPrimary), { fontWeight: '600' }]}>Examples</Text>
-                    <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>Running compares distance and duration to your recent runs.</Text>
-                    <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>Weightlifting compares lift-specific weight, volume, and sets against your recent sessions for that lift.</Text>
-                    <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>After the improvement score is calculated, FitFlight adds a +5 participation bonus and a weekly consistency bonus of up to +10.</Text>
+                    <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>Running and cycling compare your workout against similar intent buckets, so endurance, recovery, and interval days are judged against the right kind of past work.</Text>
+                    <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>Weightlifting compares lift-specific weight, volume, and sets against your recent sessions for that lift and intent.</Text>
+                    <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>Consistency still matters, but effort and workout intent now carry more weight than raw recent-history improvement.</Text>
                     <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>Final workout points are clamped so normal progress stays competitive without letting one outlier dominate the month.</Text>
                     <Text style={[getThemeBodyStyle(theme, 14, theme.textSecondary), { marginTop: 4 }]}>Workouts logged before the new engine launched keep their original points, but they still seed your future baseline.</Text>
                   </View>
@@ -1387,5 +1393,7 @@ export function LeaderboardContent({
     </View>
   );
 }
+
+
 
 

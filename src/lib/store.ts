@@ -25,6 +25,18 @@ export type WorkoutType =
   | 'Diving'
   | 'Combatives'
   | 'Other';
+export type WorkoutIntent =
+  | 'Endurance'
+  | 'Tempo'
+  | 'Intervals'
+  | 'Recovery'
+  | 'Strength'
+  | 'Hypertrophy'
+  | 'Power'
+  | 'Conditioning'
+  | 'Skills'
+  | 'Competition'
+  | 'Other';
 export type IntegrationService = 'apple_health' | 'strava' | 'garmin';
 export type ScheduledPTScope = 'squadron' | 'flight' | 'personal';
 export type ScheduledPTKind = 'pt' | 'pfra_mock' | 'pfra_diagnostic' | 'pfra_official';
@@ -55,11 +67,35 @@ export const WORKOUT_TYPES: WorkoutType[] = [
   'Combatives',
   'Other',
 ];
+export const CARDIO_WORKOUT_INTENTS: WorkoutIntent[] = ['Endurance', 'Tempo', 'Intervals', 'Recovery', 'Other'];
+export const STRENGTH_WORKOUT_INTENTS: WorkoutIntent[] = ['Strength', 'Hypertrophy', 'Power', 'Recovery', 'Other'];
+export const SESSION_WORKOUT_INTENTS: WorkoutIntent[] = ['Conditioning', 'Skills', 'Competition', 'Recovery', 'Other'];
+export const GENERAL_WORKOUT_INTENTS: WorkoutIntent[] = ['Recovery', 'Other'];
+export const WORKOUT_INTENT_OPTIONS_BY_TYPE: Record<WorkoutType, WorkoutIntent[]> = {
+  Running: CARDIO_WORKOUT_INTENTS,
+  Walking: CARDIO_WORKOUT_INTENTS,
+  Hiking: CARDIO_WORKOUT_INTENTS,
+  Rucking: CARDIO_WORKOUT_INTENTS,
+  Cycling: CARDIO_WORKOUT_INTENTS,
+  Swimming: CARDIO_WORKOUT_INTENTS,
+  Weightlifting: STRENGTH_WORKOUT_INTENTS,
+  Strength: STRENGTH_WORKOUT_INTENTS,
+  HIIT: SESSION_WORKOUT_INTENTS,
+  Sports: SESSION_WORKOUT_INTENTS,
+  Cardio: CARDIO_WORKOUT_INTENTS,
+  Flexibility: GENERAL_WORKOUT_INTENTS,
+  Climbing: SESSION_WORKOUT_INTENTS,
+  Surfing: CARDIO_WORKOUT_INTENTS,
+  Diving: SESSION_WORKOUT_INTENTS,
+  Combatives: SESSION_WORKOUT_INTENTS,
+  Other: ['Other'],
+};
 
 export interface WorkoutSegment {
   id?: string;
   type: WorkoutType;
   subtype?: string;
+  intent?: WorkoutIntent;
   duration: number;
   durationSeconds?: number;
   distance?: number;

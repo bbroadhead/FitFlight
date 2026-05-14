@@ -1009,6 +1009,7 @@ function getManualWorkoutSegments(submission: ManualWorkoutSubmission): WorkoutS
       id: detail.id ?? `${submission.id}-segment-${index}`,
       type: detail.type,
       subtype: detail.subtype,
+      intent: detail.intent,
       duration: detail.duration,
       durationSeconds: detail.durationSeconds ?? 0,
       distance: detail.distance,
@@ -4429,6 +4430,7 @@ export async function fetchApprovedManualWorkouts(
         segments,
         metrics: {
           subtype: segment.subtype,
+          intent: segment.intent,
           weight: segment.weight,
           reps: segment.reps,
           sets: segment.sets,

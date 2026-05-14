@@ -2,19 +2,20 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, Pressable, ScrollView, TextInput, Modal, Image, Platform, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ChevronLeft, Camera, Upload, X, Check, Clock, AlertCircle, Dumbbell, Info, Plus, Pencil } from 'lucide-react-native';
+import { ChevronLeft, Camera, Upload, X, Check, Clock, AlertCircle, Dumbbell, Info, Plus, Pencil, Heart, Bike, Sparkles, TrendingUp } from 'lucide-react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { format } from 'date-fns';
-import { useMemberStore, useAuthStore, canManagePTPrograms, getDisplayName, type WorkoutSegment, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
+import { useMemberStore, useAuthStore, canManagePTPrograms, getDisplayName, type WorkoutIntent, type WorkoutSegment, type WorkoutType, WORKOUT_INTENT_OPTIONS_BY_TYPE, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { createManualWorkoutSubmission, fetchApprovedManualWorkouts, fetchAttendanceSessions, fetchManualWorkoutSubmissions, reviewManualWorkoutSubmission, setAttendanceStatus, updateManualWorkoutSubmission, uploadWorkoutProofImage } from '@/lib/supabaseData';
 import { PageContainer } from '@/components/PageContainer';
 import { ThemeBackdrop } from '@/components/ThemeBackdrop';
 import { ThemeChrome } from '@/components/ThemeChrome';
 import { getThemeBodyStyle, getThemeButtonStyle, getThemeButtonTextStyle, getThemeControlStyle, getThemeHeadingStyle, useAppTheme } from '@/lib/theme';
+import { estimateWorkoutSessionScore, WORKOUT_SCORE_ENGINE_NAME } from '@/lib/workoutScoreEngine';
 
 type ProofImage = {
   uri: string;
@@ -23,6 +24,7 @@ type ProofImage = {
 
 type WorkoutSegmentForm = WorkoutSegment & {
   key: string;
+  intent?: WorkoutIntent;
   durationInput: string;
   durationSecondsInput: string;
   distanceInput: string;
@@ -114,6 +116,36 @@ const WORKOUT_TYPE_OPTIONS: WorkoutType[] = WORKOUT_TYPES.map((type) => (type ==
   (type, index, array) => array.indexOf(type) === index
 ) as WorkoutType[];
 
+const getIntentOptionsForType = (type: WorkoutType) => WORKOUT_INTENT_OPTIONS_BY_TYPE[type] ?? ['Other'];
+
+const getIntentHelperText = (intent: WorkoutIntent) => {
+  switch (intent) {
+    case 'Endurance':
+      return 'Longer steady-state work is compared against your recent endurance sessions.';
+    case 'Tempo':
+      return 'Tempo work favors sustained moderate-hard output compared against similar tempo efforts.';
+    case 'Intervals':
+      return 'Intervals are compared to prior interval sessions so shorter, harder days stay fair.';
+    case 'Recovery':
+      return 'Recovery sessions are compared to other recovery sessions so easier days are not punished.';
+    case 'Strength':
+      return 'Strength sessions emphasize heavier work compared to similar strength-focused lifts.';
+    case 'Hypertrophy':
+      return 'Hypertrophy sessions compare volume and completed sets against similar lifting sessions.';
+    case 'Power':
+      return 'Power sessions compare explosive lifting days to similar power-focused work.';
+    case 'Conditioning':
+      return 'Conditioning sessions are compared to similar conditioning work instead of all sessions of that type.';
+    case 'Skills':
+      return 'Skill-focused sessions are compared to other skill sessions so practice days stay fair.';
+    case 'Competition':
+      return 'Competition efforts are compared to other high-demand competition-style sessions.';
+    case 'Other':
+    default:
+      return 'This intent groups workouts into a flexible comparison bucket when none of the other intents fit well.';
+  }
+};
+
 function createSegmentKey(type: WorkoutType) {
   return `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -123,6 +155,7 @@ function createDefaultSegment(type: WorkoutType): WorkoutSegmentForm {
     key: createSegmentKey(type),
     type,
     subtype: undefined,
+    intent: type === 'Other' ? 'Other' : undefined,
     duration: 0,
     durationSeconds: 0,
     distance: undefined,
@@ -154,6 +187,7 @@ function createSegmentFormFromSegment(segment: WorkoutSegment): WorkoutSegmentFo
     key: segment.id ?? createSegmentKey(segment.type),
     type: segment.type === 'Strength' ? 'Weightlifting' : segment.type,
     subtype: segment.subtype,
+    intent: segment.intent ?? (segment.type === 'Other' ? 'Other' : undefined),
     duration: segment.duration ?? 0,
     durationSeconds: segment.durationSeconds ?? 0,
     distance: segment.distance,
@@ -183,6 +217,10 @@ function createSegmentFormFromSegment(segment: WorkoutSegment): WorkoutSegmentFo
 function getRequiredFieldErrors(segment: WorkoutSegmentForm) {
   const errors: string[] = [];
   const durationValue = parseInt(segment.durationInput || '0', 10) || 0;
+
+  if (!segment.intent?.trim()) {
+    errors.push('Workout intent is required.');
+  }
 
   if (durationValue <= 0) {
     errors.push('Duration is required.');
@@ -228,6 +266,7 @@ function normalizeSegment(segment: WorkoutSegmentForm): WorkoutSegment {
     id: segment.key,
     type: segment.type,
     subtype: segment.subtype?.trim() || undefined,
+    intent: segment.intent?.trim() as WorkoutIntent | undefined,
     duration: parseInt(segment.durationInput || '0', 10) || 0,
     durationSeconds: Math.min(59, Math.max(0, parseInt(segment.durationSecondsInput || '0', 10) || 0)),
     distance: segment.distanceInput ? parseFloat(segment.distanceInput) || 0 : undefined,
@@ -320,6 +359,8 @@ export default function AddWorkoutScreen() {
   }>();
   const user = useAuthStore(s => s.user);
   const accessToken = useAuthStore(s => s.accessToken);
+  const members = useMemberStore(s => s.members);
+  const ptSessions = useMemberStore(s => s.ptSessions);
   const syncApprovedManualWorkouts = useMemberStore(s => s.syncApprovedManualWorkouts);
   const syncPTSessions = useMemberStore(s => s.syncPTSessions);
   const isEditing = params.mode === 'edit' && !!params.submissionId;
@@ -349,15 +390,61 @@ export default function AddWorkoutScreen() {
   );
   const [isPrivate, setIsPrivate] = useState(params.isPrivate === 'true');
   const [showWorkoutTypeModal, setShowWorkoutTypeModal] = useState(false);
+  const [showScorePreviewInfo, setShowScorePreviewInfo] = useState(false);
   const [draftWorkoutTypes, setDraftWorkoutTypes] = useState<WorkoutType[]>(selectedWorkoutTypes);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const existingProofUri = useMemo(() => params.screenshotUri ?? null, [params.screenshotUri]);
   const attendanceMarkedBySubmission = params.attendanceMarkedBySubmission === 'true';
   const isWeb = Platform.OS === 'web';
+  const currentMember = useMemo(
+    () => (user ? members.find((member) => member.id === user.id) ?? null : null),
+    [members, user]
+  );
+  const normalizedSegments = useMemo(() => workoutSegments.map(normalizeSegment), [workoutSegments]);
 
   const segmentValidationErrors = workoutSegments.flatMap((segment) => getRequiredFieldErrors(segment));
   const canSubmit = !!user && proofImages.length > 0 && workoutSegments.length > 0 && segmentValidationErrors.length === 0;
+  const scorePreview = useMemo(() => {
+    if (!currentMember || normalizedSegments.length === 0 || segmentValidationErrors.length > 0) {
+      return null;
+    }
+
+    const previewSessionId = `preview-${getLocalDateString(selectedDate)}-${selectedWorkoutTypes.join('-') || 'session'}`;
+    const previewWorkouts = normalizedSegments.map((segment, index) => ({
+      id: `${previewSessionId}-${index}`,
+      sessionId: previewSessionId,
+      date: getLocalDateString(selectedDate),
+      type: segment.type,
+      duration: segment.duration,
+      durationSeconds: segment.durationSeconds,
+      distance: segment.distance,
+      source: 'manual' as const,
+      isPrivate,
+      title: getWorkoutDisplayTitle(segment.type),
+      segments: normalizedSegments,
+      metrics: {
+        subtype: segment.subtype,
+        intent: segment.intent,
+        weight: segment.weight,
+        reps: segment.reps,
+        sets: segment.sets,
+        rounds: segment.rounds,
+        elevationGain: segment.elevationGain,
+        depth: segment.depth,
+        steps: segment.steps,
+        waveConditions: segment.waveConditions,
+        additionalInfo: segment.additionalInfo,
+        distance: segment.distance,
+      },
+    }));
+
+    return estimateWorkoutSessionScore({
+      member: currentMember,
+      ptSessions,
+      previewWorkouts,
+    });
+  }, [currentMember, normalizedSegments, ptSessions, segmentValidationErrors.length, selectedDate, selectedWorkoutTypes, isPrivate]);
 
   useEffect(() => {
     if (!isEditing || !params.submissionId || !user || !accessToken) {
@@ -920,6 +1007,35 @@ export default function AddWorkoutScreen() {
                     ) : null}
 
                     <View className="mt-4">
+                      <View className="flex-row items-center mb-2">
+                        <Text className="text-white/60 text-sm">Workout Intent *</Text>
+                        <Info size={14} color="#C0C0C0" style={{ marginLeft: 6 }} />
+                      </View>
+                      <View className="flex-row flex-wrap">
+                        {getIntentOptionsForType(segment.type).map((intent) => (
+                          <SelectPill
+                            key={`${segment.key}-${intent}`}
+                            label={intent}
+                            selected={segment.intent === intent}
+                            onPress={() => handleSegmentChange(segment.key, { intent })}
+                          />
+                        ))}
+                      </View>
+                    </View>
+
+                    <View className="mt-4 rounded-2xl border border-sky-400/25 bg-sky-400/10 p-4">
+                      <Text className="text-sky-300 font-semibold text-sm">Why this matters</Text>
+                      <Text className="text-af-silver text-sm mt-2">
+                        Your score is calculated based on the intent of your workout. Different intents are compared to similar past workouts.
+                      </Text>
+                      {segment.intent ? (
+                        <Text className="text-af-silver text-xs mt-2">
+                          {getIntentHelperText(segment.intent)}
+                        </Text>
+                      ) : null}
+                    </View>
+
+                    <View className="mt-4">
                       <Text className="text-white/60 text-sm mb-2">Additional Information</Text>
                       <TextInput
                         value={segment.additionalInfo ?? ''}
@@ -953,6 +1069,89 @@ export default function AddWorkoutScreen() {
                       {isPrivate ? <Check size={14} color="#fff" /> : null}
                     </View>
                   </Pressable>
+                </Animated.View>
+
+                <Animated.View entering={FadeInDown.delay(320).springify()} className="mt-4">
+                  <ThemeChrome theme={theme}>
+                    <View className="p-4">
+                      <View className="flex-row items-start justify-between">
+                        <View>
+                          <View className="flex-row items-center">
+                            <Text className="text-white text-xl font-semibold">Score Preview</Text>
+                            <View className="ml-2 rounded-full bg-emerald-500/20 px-2 py-1">
+                              <Text className="text-emerald-300 text-[11px] font-semibold">ESTIMATED</Text>
+                            </View>
+                          </View>
+                          <Text className="text-af-silver text-sm mt-2">
+                            {scorePreview ? 'Your workout will be rescored with the new Leaderboard Score Engine when saved.' : 'Complete the required workout fields to preview your estimated score.'}
+                          </Text>
+                        </View>
+                        <Pressable onPress={() => setShowScorePreviewInfo(true)} className="flex-row items-center">
+                          <Text className="text-af-accent font-medium mr-2">Learn more</Text>
+                          <Info size={16} color="#60A5FA" />
+                        </Pressable>
+                      </View>
+
+                      {scorePreview ? (
+                        <>
+                          <View className="mt-5 flex-row flex-wrap" style={{ gap: 16 }}>
+                            <View className="min-w-[160px] flex-1">
+                              <Text className="text-white/60 text-sm">Estimated Points</Text>
+                              <View className="flex-row items-end mt-2">
+                                <Text className="text-emerald-400 text-5xl font-bold">{scorePreview.totalPoints}</Text>
+                                <Text className="text-af-silver text-lg ml-2 mb-1">/ {scorePreview.maxPoints} max</Text>
+                              </View>
+                              <Text className="text-af-silver text-sm mt-2">Good workout! Keep it up.</Text>
+                            </View>
+
+                            <View className="min-w-[220px] flex-1">
+                              <Text className="text-white/60 text-sm mb-2">Breakdown</Text>
+                              <View className="space-y-2">
+                                <View className="flex-row items-center justify-between py-1">
+                                  <View className="flex-row items-center flex-1 pr-3">
+                                    <Heart size={16} color="#4ADE80" />
+                                    <Text className="text-white ml-2">Effort (Volume & Output)</Text>
+                                  </View>
+                                  <Text className="text-emerald-300 font-semibold">{scorePreview.breakdown.effortScore.toFixed(1)} pts</Text>
+                                </View>
+                                <View className="flex-row items-center justify-between py-1">
+                                  <View className="flex-row items-center flex-1 pr-3">
+                                    <Bike size={16} color="#60A5FA" />
+                                    <Text className="text-white ml-2">Intensity Match</Text>
+                                  </View>
+                                  <Text className="text-af-accent font-semibold">{scorePreview.breakdown.intentMatchScore.toFixed(1)} pts</Text>
+                                </View>
+                                <View className="flex-row items-center justify-between py-1">
+                                  <View className="flex-row items-center flex-1 pr-3">
+                                    <Sparkles size={16} color="#A78BFA" />
+                                    <Text className="text-white ml-2">Consistency Bonus</Text>
+                                  </View>
+                                  <Text className="text-purple-300 font-semibold">{scorePreview.breakdown.consistencyBonus.toFixed(1)} pts</Text>
+                                </View>
+                                <View className="flex-row items-center justify-between py-1">
+                                  <View className="flex-row items-center flex-1 pr-3">
+                                    <TrendingUp size={16} color="#FACC15" />
+                                    <Text className="text-white ml-2">Improvement Bonus</Text>
+                                  </View>
+                                  <Text className="text-yellow-300 font-semibold">{scorePreview.breakdown.improvementBonus.toFixed(1)} pts</Text>
+                                </View>
+                              </View>
+                            </View>
+
+                            <View className="min-w-[200px] flex-1">
+                              <Text className="text-white/60 text-sm mb-2">Compared To</Text>
+                              <Text className="text-white font-semibold">{scorePreview.comparedToLabel}</Text>
+                              <Text className="text-af-silver text-sm mt-2">{scorePreview.comparisonDetail}</Text>
+                            </View>
+                          </View>
+
+                          <View className="mt-5 border-t border-white/10 pt-4">
+                            <Text className="text-af-gold text-sm">{scorePreview.tip}</Text>
+                          </View>
+                        </>
+                      ) : null}
+                    </View>
+                  </ThemeChrome>
                 </Animated.View>
 
                 {submitError ? (
@@ -1050,6 +1249,48 @@ export default function AddWorkoutScreen() {
 
               <Pressable onPress={handleConfirmWorkoutTypes} className="mt-4 rounded-xl bg-af-accent px-4 py-4">
                 <Text className="text-white text-center font-semibold">Confirm</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal visible={showScorePreviewInfo} transparent animationType="fade">
+          <View className="flex-1 bg-black/80 items-center justify-center p-6">
+            <View className="w-full max-w-lg rounded-3xl border border-white/20 bg-af-navy p-6">
+              <View className="flex-row items-start justify-between mb-4">
+                <View className="flex-1 pr-4">
+                  <Text className="text-white text-xl font-bold">{WORKOUT_SCORE_ENGINE_NAME}</Text>
+                  <Text className="text-af-silver text-sm mt-1">
+                    Scores now prioritize effort and workout intent, with consistency and personal improvement as smaller modifiers.
+                  </Text>
+                </View>
+                <Pressable
+                  onPress={() => setShowScorePreviewInfo(false)}
+                  className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+                >
+                  <X size={20} color="#C0C0C0" />
+                </Pressable>
+              </View>
+
+              <View className="space-y-3">
+                <Text className="text-white/80 text-sm">1. Effort: volume and output are compared against intent-aware benchmarks for that workout type.</Text>
+                <Text className="text-white/80 text-sm">2. Intensity Match: your workout is compared to the last up to 5 similar workouts of the same type, subtype, and intent.</Text>
+                <Text className="text-white/80 text-sm">3. Consistency: workouts earlier in the same week add a small bonus, capped at 10 points per session.</Text>
+                <Text className="text-white/80 text-sm">4. Improvement: beating your recent similar baseline adds a smaller bonus without dominating the score.</Text>
+              </View>
+
+              <View className="mt-5 rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+                <Text className="text-white font-semibold">Scoring Formula</Text>
+                <Text className="text-af-silver text-sm mt-2">First workout in a new type / subtype / intent bucket = 30 points</Text>
+                <Text className="text-af-silver text-sm mt-2">effortScore = clamp(22 + ((effortRatio - 1) × 35), 12, 60)</Text>
+                <Text className="text-af-silver text-sm mt-2">intensityMatchScore = similarity bonus based on your last up to 5 similar workouts</Text>
+                <Text className="text-af-silver text-sm mt-2">consistencyBonus = min(currentWeeklySessionCount × 2, 10)</Text>
+                <Text className="text-af-silver text-sm mt-2">improvementBonus = clamp((improvementRatio - 1) × 40, 0, 15)</Text>
+                <Text className="text-af-silver text-sm mt-2">finalPoints = clamp(effortScore + intensityMatchScore + consistencyBonus + improvementBonus, 30, 115)</Text>
+              </View>
+
+              <Pressable onPress={() => setShowScorePreviewInfo(false)} className="mt-5 rounded-xl bg-af-accent px-4 py-4">
+                <Text className="text-white text-center font-semibold">Got it</Text>
               </Pressable>
             </View>
           </View>

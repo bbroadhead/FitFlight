@@ -305,6 +305,29 @@ function formatPFRAComponentLabel(value?: string | null, category?: 'cardio' | '
   }
 }
 
+function formatPFRACardioValue(component: {
+  exempt?: boolean;
+  score: number;
+  test?: string | null;
+  time?: string | null;
+  laps?: number | null;
+}) {
+  if (component.exempt) {
+    return 'Exempt';
+  }
+
+  const label = formatPFRAComponentLabel(component.test, 'cardio');
+  if (label === 'HAMR' && typeof component.laps === 'number') {
+    return `${component.score} pts (${component.laps} shuttles)`;
+  }
+
+  if ((label === '2 Mile Run' || label === 'Walk') && component.time) {
+    return `${component.score} pts (${component.time})`;
+  }
+
+  return `${component.score} pts`;
+}
+
 function areSupportThreadsEqual(left: SupportThreadSummary[], right: SupportThreadSummary[]) {
   if (left.length !== right.length) {
     return false;
@@ -401,6 +424,7 @@ export default function ProfileScreen() {
   const [showWorkoutReviewModal, setShowWorkoutReviewModal] = useState(false);
   const [showWorkoutHistoryModal, setShowWorkoutHistoryModal] = useState(false);
   const [showPFRAHistoryModal, setShowPFRAHistoryModal] = useState(false);
+  const [pfraSummaryMode, setPfraSummaryMode] = useState<'latest' | 'best'>('latest');
   const [showUpcomingPTSessionsModal, setShowUpcomingPTSessionsModal] = useState(false);
   const [expandedWorkoutImageUri, setExpandedWorkoutImageUri] = useState<string | null>(null);
   const [manualWorkoutProofMap, setManualWorkoutProofMap] = useState<Record<string, string>>({});
@@ -2624,30 +2648,15 @@ export default function ProfileScreen() {
       return {
         title: 'No workout score baseline yet',
         details: '',
-        formula: `${WORKOUT_SCORE_ENGINE_NAME} compares you against your own recent history, not other members.`,
+        formula: `${WORKOUT_SCORE_ENGINE_NAME} compares you against similar workouts of your own, not other members.`,
       };
     }
 
     const breakdown = latestScoreEntry.breakdown;
-    const latestWorkout = latestScoreEntry.workout;
-    const durationPoints = Math.max(0, Math.round(latestWorkout.duration));
-    const distancePoints = Math.max(0, Math.round((latestWorkout.distance ?? 0) * 15));
-    const metricPreview = breakdown.metrics.length > 0
-      ? breakdown.metrics
-          .map((metric) => `${metric.label} (${Math.round(metric.weight * 100)}% x ${metric.ratio.toFixed(2)}x from ${metric.currentDisplay} vs ${metric.baselineDisplay})`)
-          .join(' • ')
-      : 'Base workout score = 30 points.';
-
     return {
-      title: breakdown.typeLabel,
-      details: '',
-      formula: breakdown.engine === 'legacy'
-        ? latestWorkout.source === 'attendance'
-          ? `Latest session: ${latestScoreEntry.points} pts = attendance check-in`
-          : `Latest session: ${latestScoreEntry.points} pts = max(duration ${Math.round(latestWorkout.duration)} min → ${durationPoints} pts, distance ${(latestWorkout.distance ?? 0).toFixed(2)} mi × 15 = ${distancePoints} pts)`
-        : breakdown.baselineSampleSize > 0
-        ? `Latest session: ${latestScoreEntry.points} pts = ${breakdown.workoutPoints.toLocaleString('en-US', { maximumFractionDigits: 1 })} workout points from ${metricPreview} + ${breakdown.participationBonus.toLocaleString('en-US', { maximumFractionDigits: 1 })} participation + ${breakdown.streakBonus.toLocaleString('en-US', { maximumFractionDigits: 1 })} streak`
-        : `Latest session: ${latestScoreEntry.points} pts = base workout score (first logged ${breakdown.typeLabel} workout)`,
+      title: breakdown.comparedToLabel,
+      details: breakdown.baselineLabel,
+      formula: breakdown.explanation,
     };
   }, [latestScoreEntry]);
 
@@ -2699,6 +2708,10 @@ export default function ProfileScreen() {
     },
     [ptSessions, userStats]
   );
+  const scoredWorkoutHistoryById = useMemo(
+    () => new Map(scoredWorkoutHistory.map((entry) => [entry.workout.id, entry])),
+    [scoredWorkoutHistory]
+  );
   const workoutHistoryWithProof = useMemo(
     () =>
       workoutHistory.map((workout) => ({
@@ -2707,13 +2720,87 @@ export default function ProfileScreen() {
           workout.source === 'manual' && workout.externalId
             ? manualWorkoutProofMap[workout.externalId] ?? workout.screenshotUri
             : workout.screenshotUri,
+        scoreEntry: scoredWorkoutHistoryById.get(workout.id) ?? null,
       })),
-    [manualWorkoutProofMap, workoutHistory]
+    [manualWorkoutProofMap, scoredWorkoutHistoryById, workoutHistory]
   );
+  const workoutHistoryDisplayItems = useMemo(() => {
+    const attendanceByMonth = new Map<string, {
+      kind: 'attendance-summary';
+      id: string;
+      month: string;
+      latestDate: string;
+      totalCheckIns: number;
+      totalPoints: number;
+    }>();
+    const items: Array<
+      | (typeof workoutHistoryWithProof)[number] & { kind: 'workout' }
+      | {
+          kind: 'attendance-summary';
+          id: string;
+          month: string;
+          latestDate: string;
+          totalCheckIns: number;
+          totalPoints: number;
+        }
+    > = [];
+
+    workoutHistoryWithProof.forEach((workout) => {
+      if (workout.source !== 'attendance') {
+        items.push({ ...workout, kind: 'workout' });
+        return;
+      }
+
+      const month = workout.date.slice(0, 7);
+      const existing = attendanceByMonth.get(month);
+      const workoutPoints = workout.scoreEntry?.points ?? 10;
+      if (existing) {
+        existing.totalCheckIns += 1;
+        existing.totalPoints += workoutPoints;
+        if (workout.date > existing.latestDate) {
+          existing.latestDate = workout.date;
+        }
+        return;
+      }
+
+      attendanceByMonth.set(month, {
+        kind: 'attendance-summary',
+        id: `attendance-summary-${month}`,
+        month,
+        latestDate: workout.date,
+        totalCheckIns: 1,
+        totalPoints: workoutPoints,
+      });
+    });
+
+    items.push(...attendanceByMonth.values());
+    return items.sort((left, right) => {
+      const leftDate = left.kind === 'workout' ? left.date : left.latestDate;
+      const rightDate = right.kind === 'workout' ? right.date : right.latestDate;
+      return rightDate.localeCompare(leftDate);
+    });
+  }, [workoutHistoryWithProof]);
   const pfraHistory = useMemo(
     () => (userStats && 'fitnessAssessments' in userStats ? [...(userStats as Member).fitnessAssessments].sort((a, b) => b.date.localeCompare(a.date)) : []),
     [userStats]
   );
+  const latestAssessment = pfraHistory[0] ?? null;
+  const bestAssessment = useMemo(() => {
+    if (pfraHistory.length === 0) {
+      return null;
+    }
+
+    return pfraHistory.reduce((best, assessment) => {
+      if (assessment.overallScore > best.overallScore) {
+        return assessment;
+      }
+      if (assessment.overallScore === best.overallScore && assessment.date > best.date) {
+        return assessment;
+      }
+      return best;
+    }, pfraHistory[0]);
+  }, [pfraHistory]);
+  const selectedAssessment = pfraSummaryMode === 'best' ? bestAssessment : latestAssessment;
   const leaderboardHistory = useMemo(
     () => (userStats && 'leaderboardHistory' in userStats ? [...(userStats as Member).leaderboardHistory].sort((a, b) => b.month.localeCompare(a.month)) : []),
     [userStats]
@@ -3265,11 +3352,7 @@ export default function ProfileScreen() {
                       </View>
                     </View>
                     <View className="mt-3 rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
-                      <Text className="text-white font-semibold">{latestBaselinePreview.title}</Text>
-                      {latestBaselinePreview.details ? (
-                        <Text className="text-af-silver text-xs mt-2">{latestBaselinePreview.details}</Text>
-                      ) : null}
-                      <Text className="text-af-silver text-xs mt-2">{latestBaselinePreview.formula}</Text>
+                      <Text className="text-af-silver text-xs">{latestBaselinePreview.formula}</Text>
                     </View>
                   </View>
                 </ThemeChrome>
@@ -3477,11 +3560,7 @@ export default function ProfileScreen() {
               </View>
             </View>
             <View className="mt-3 rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
-              <Text className="text-white font-semibold">{latestBaselinePreview.title}</Text>
-              {latestBaselinePreview.details ? (
-                <Text className="text-af-silver text-xs mt-2">{latestBaselinePreview.details}</Text>
-              ) : null}
-              <Text className="text-af-silver text-xs mt-2">{latestBaselinePreview.formula}</Text>
+              <Text className="text-af-silver text-xs">{latestBaselinePreview.formula}</Text>
             </View>
             </View>
             </ThemeChrome>
@@ -6199,12 +6278,56 @@ export default function ProfileScreen() {
               </Pressable>
             </View>
 
-            {activeWorkoutSubmission?.proofImageData ? (
-              <Image
-                source={{ uri: activeWorkoutSubmission.proofImageData }}
-                className="w-full h-48 rounded-2xl mb-4"
-                resizeMode="cover"
-              />
+            {activeWorkoutSubmission ? (
+              (() => {
+                const proofImageUris = activeWorkoutSubmission.proofImageDataList && activeWorkoutSubmission.proofImageDataList.length > 0
+                  ? activeWorkoutSubmission.proofImageDataList
+                  : activeWorkoutSubmission.proofImageData
+                    ? [activeWorkoutSubmission.proofImageData]
+                    : [];
+
+                if (proofImageUris.length === 0) {
+                  return null;
+                }
+
+                if (proofImageUris.length === 1) {
+                  return (
+                    <Pressable
+                      onPress={() => setExpandedWorkoutImageUri(proofImageUris[0])}
+                      className="mb-4"
+                    >
+                      <Image
+                        source={{ uri: proofImageUris[0] }}
+                        className="w-full h-48 rounded-2xl"
+                        resizeMode="cover"
+                      />
+                    </Pressable>
+                  );
+                }
+
+                return (
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    className="mb-4"
+                    contentContainerStyle={{ paddingRight: 4 }}
+                  >
+                    {proofImageUris.map((uri, index) => (
+                      <Pressable
+                        key={`${activeWorkoutSubmission.id}-proof-${index}`}
+                        onPress={() => setExpandedWorkoutImageUri(uri)}
+                        className={index === 0 ? '' : 'ml-3'}
+                      >
+                        <Image
+                          source={{ uri }}
+                          className="w-44 h-44 rounded-2xl"
+                          resizeMode="cover"
+                        />
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                );
+              })()
             ) : null}
 
             {activeWorkoutSubmission ? (
@@ -6363,27 +6486,59 @@ export default function ProfileScreen() {
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false}>
-              {workoutHistoryWithProof.length === 0 ? (
+              {workoutHistoryDisplayItems.length === 0 ? (
                 <Text className="text-white/40 text-center py-8">No workouts recorded yet.</Text>
               ) : (
-                workoutHistoryWithProof.map((workout) => (
-                  <View key={workout.id} className="rounded-2xl border border-white/10 bg-white/5 p-4 mb-4">
+                workoutHistoryDisplayItems.map((item) => item.kind === 'attendance-summary' ? (
+                  <View key={item.id} className="rounded-2xl border border-white/10 bg-white/5 p-4 mb-4">
                     <View className="flex-row items-start justify-between">
                       <View className="flex-1">
-                        <Text className="text-white font-semibold">{workout.source === 'attendance' ? 'Attendance' : getWorkoutDisplayTitle(workout.type)}</Text>
-                        <Text className="text-af-silver text-xs mt-1">{workout.date}</Text>
+                        <Text className="text-white font-semibold">Attendance</Text>
+                        <Text className="text-af-silver text-xs mt-1">{formatMonthLabel(item.month)}</Text>
+                      </View>
+                      <View className="items-end">
+                        <View className="rounded-full bg-white/10 px-3 py-1">
+                          <Text className="text-af-silver text-xs">Attendance</Text>
+                        </View>
+                        <View className="mt-2 rounded-full bg-af-accent/15 px-3 py-1 border border-af-accent/25">
+                          <Text className="text-af-accent text-xs font-semibold">{item.totalPoints} pts</Text>
+                        </View>
+                      </View>
+                    </View>
+                    <View className="mt-3 rounded-xl border border-white/10 bg-black/10 px-4 py-3">
+                      <View className="flex-row justify-between">
+                        <Text className="text-af-silver text-sm">Logged attendance</Text>
+                        <Text className="text-white font-semibold">{item.totalCheckIns}</Text>
+                      </View>
+                      <View className="mt-2 flex-row justify-between">
+                        <Text className="text-af-silver text-sm">Attendance points</Text>
+                        <Text className="text-white font-semibold">{item.totalPoints}</Text>
+                      </View>
+                    </View>
+                  </View>
+                ) : (
+                  <View key={item.id} className="rounded-2xl border border-white/10 bg-white/5 p-4 mb-4">
+                    <View className="flex-row items-start justify-between">
+                      <View className="flex-1">
+                        <Text className="text-white font-semibold">{item.source === 'attendance' ? 'Attendance' : getWorkoutDisplayTitle(item.type)}</Text>
+                        <Text className="text-af-silver text-xs mt-1">{item.date}</Text>
                       </View>
                       <View className="items-end">
                         <View className="rounded-full bg-white/10 px-3 py-1">
                           <Text className="text-af-silver text-xs">
-                            {workout.source === 'manual'
+                            {item.source === 'manual'
                               ? 'Manual'
-                              : workout.source === 'attendance'
+                              : item.source === 'attendance'
                                 ? 'Attendance'
-                                : workout.source}
+                                : item.source}
                           </Text>
                         </View>
-                        {workout.source === 'manual' && workout.externalId ? (
+                        {item.scoreEntry ? (
+                          <View className="mt-2 rounded-full bg-af-accent/15 px-3 py-1 border border-af-accent/25">
+                            <Text className="text-af-accent text-xs font-semibold">{item.scoreEntry.points} pts</Text>
+                          </View>
+                        ) : null}
+                        {item.source === 'manual' && item.externalId ? (
                           <Pressable
                             onPress={() => {
                               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -6392,15 +6547,15 @@ export default function ProfileScreen() {
                                 pathname: '/add-workout',
                                 params: {
                                   mode: 'edit',
-                                  submissionId: workout.externalId,
-                                  workoutType: workout.type,
-                                  duration: String(workout.duration),
-                                  durationSeconds: String(workout.durationSeconds ?? 0),
-                                  distance: typeof workout.distance === 'number' ? String(workout.distance) : '',
-                                  isPrivate: String(workout.isPrivate),
-                                  screenshotUri: workout.screenshotUri ?? '',
-                                  workoutDate: workout.date,
-                                  attendanceMarkedBySubmission: String(workout.attendanceMarkedBySubmission ?? false),
+                                  submissionId: item.externalId,
+                                  workoutType: item.type,
+                                  duration: String(item.duration),
+                                  durationSeconds: String(item.durationSeconds ?? 0),
+                                  distance: typeof item.distance === 'number' ? String(item.distance) : '',
+                                  isPrivate: String(item.isPrivate),
+                                  screenshotUri: item.screenshotUri ?? '',
+                                  workoutDate: item.date,
+                                  attendanceMarkedBySubmission: String(item.attendanceMarkedBySubmission ?? false),
                                 },
                               });
                             }}
@@ -6411,35 +6566,46 @@ export default function ProfileScreen() {
                         ) : null}
                       </View>
                     </View>
-                    {workout.source === 'attendance' ? (
+                    {item.source === 'attendance' ? (
                       <View className="mt-3 rounded-xl border border-white/10 bg-black/10 px-4 py-3">
                         <Text className="text-white font-medium">Logged by PFL/UFPM</Text>
                       </View>
                     ) : (
                       <>
-                        {workout.source === 'strava' ? (
+                        {item.source === 'strava' ? (
                           <View className="mt-3 rounded-xl border border-orange-400/20 bg-orange-400/10 px-4 py-3">
                             <Text className="text-orange-200 font-medium">Imported from Strava</Text>
                           </View>
                         ) : null}
                         <View className="mt-3 flex-row justify-between">
                           <Text className="text-af-silver text-sm">Duration</Text>
-                          <Text className="text-white font-semibold">{workout.duration} min</Text>
+                          <Text className="text-white font-semibold">{item.duration} min</Text>
                         </View>
                         <View className="mt-2 flex-row justify-between">
                           <Text className="text-af-silver text-sm">Distance</Text>
-                          <Text className="text-white font-semibold">{typeof workout.distance === 'number' ? `${workout.distance.toFixed(2)} mi` : 'N/A'}</Text>
+                          <Text className="text-white font-semibold">{typeof item.distance === 'number' ? `${item.distance.toFixed(2)} mi` : 'N/A'}</Text>
                         </View>
                         <View className="mt-2 flex-row justify-between">
                           <Text className="text-af-silver text-sm">Visibility</Text>
-                          <Text className="text-white font-semibold">{workout.isPrivate ? 'Private' : 'Public'}</Text>
+                          <Text className="text-white font-semibold">{item.isPrivate ? 'Private' : 'Public'}</Text>
                         </View>
                       </>
                     )}
-                    {workout.screenshotUri ? (
-                      <Pressable onPress={() => setExpandedWorkoutImageUri(workout.screenshotUri!)} className="mt-4">
+                    {item.scoreEntry ? (
+                      <View className="mt-3 rounded-xl border border-white/10 bg-black/10 px-4 py-3">
+                        <View className="flex-row items-center justify-between">
+                          <Text className="text-white font-medium">Score Breakdown</Text>
+                          <Text className="text-af-accent font-semibold">{item.scoreEntry.points} pts</Text>
+                        </View>
+                        <Text className="text-af-silver text-xs mt-2 leading-5">
+                          {item.scoreEntry.breakdown.explanation}
+                        </Text>
+                      </View>
+                    ) : null}
+                    {item.screenshotUri ? (
+                      <Pressable onPress={() => setExpandedWorkoutImageUri(item.screenshotUri!)} className="mt-4">
                         <Image
-                          source={{ uri: workout.screenshotUri }}
+                          source={{ uri: item.screenshotUri }}
                           className="w-full h-40 rounded-xl"
                           resizeMode="cover"
                         />
@@ -6454,71 +6620,164 @@ export default function ProfileScreen() {
       </Modal>
 
       <Modal visible={showPFRAHistoryModal} transparent animationType="none">
-        <Animated.View entering={getWebSafeFadeIn(180)} className="flex-1 bg-black/80 justify-end">
-          <Animated.View entering={getWebSafeSlideInDown(260)} className="bg-af-navy rounded-t-3xl p-6 pb-12 max-h-[85%]">
-            <View className="flex-row items-center justify-between mb-6">
-              <Text className="text-white text-xl font-bold">PFRA History</Text>
-              <Pressable
-                onPress={() => setShowPFRAHistoryModal(false)}
-                className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
-              >
-                <X size={20} color="#C0C0C0" />
-              </Pressable>
-            </View>
+        <Animated.View entering={getWebSafeFadeIn(180)} className="flex-1 bg-black/80">
+          <SafeAreaView edges={['top', 'bottom']} className="flex-1 bg-af-navy">
+            <Animated.View entering={getWebSafeSlideInDown(260)} className="flex-1 px-6 pt-6 pb-6">
+              <View className="flex-row items-center justify-between mb-6">
+                <Text className="text-white text-xl font-bold">PFRA History</Text>
+                <Pressable
+                  onPress={() => setShowPFRAHistoryModal(false)}
+                  className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+                >
+                  <X size={20} color="#C0C0C0" />
+                </Pressable>
+              </View>
 
-            <ScrollView showsVerticalScrollIndicator={false}>
-              {pfraHistory.length === 0 ? (
-                <Text className="text-white/40 text-center py-8">No PFRA records uploaded.</Text>
-              ) : (
-                pfraHistory.map((assessment) => (
-                  <View key={assessment.id} className="rounded-2xl border border-white/10 bg-white/5 p-4 mb-4">
-                    <View className="flex-row items-center justify-between">
-                      <Text className="text-white font-semibold">{assessment.date}</Text>
-                      <Text className="text-af-gold font-bold">{assessment.overallScore.toFixed(1)}</Text>
-                    </View>
-                    <View className="mt-4">
-                      <View className="flex-row justify-between mb-2">
-                        <Text className="text-af-silver text-sm">{formatPFRAComponentLabel(assessment.components.cardio.test, 'cardio')}</Text>
-                        <Text className="text-white text-sm">
-                          {assessment.components.cardio.exempt
-                            ? `Exempt`
-                            : assessment.components.cardio.time
-                            ? `${assessment.components.cardio.time} · ${assessment.components.cardio.score.toFixed(1)}`
-                            : `${assessment.components.cardio.laps ?? 0} shuttles · ${assessment.components.cardio.score.toFixed(1)}`}
-                        </Text>
-                      </View>
-                      <View className="flex-row justify-between mb-2">
-                        <Text className="text-af-silver text-sm">{formatPFRAComponentLabel(assessment.components.pushups.test, 'strength')}</Text>
-                        <Text className="text-white text-sm">
-                          {assessment.components.pushups.exempt
-                            ? 'Exempt'
-                            : `${assessment.components.pushups.reps} reps · ${assessment.components.pushups.score.toFixed(1)}`}
-                        </Text>
-                      </View>
-                      <View className="flex-row justify-between mb-2">
-                        <Text className="text-af-silver text-sm">{formatPFRAComponentLabel(assessment.components.situps.test, 'core')}</Text>
-                        <Text className="text-white text-sm">
-                          {assessment.components.situps.exempt
-                            ? 'Exempt'
-                            : `${assessment.components.situps.time ?? `${assessment.components.situps.reps} reps`} · ${assessment.components.situps.score.toFixed(1)}`}
-                        </Text>
-                      </View>
-                      {assessment.components.waist ? (
-                        <View className="flex-row justify-between">
-                          <Text className="text-af-silver text-sm">WHtR</Text>
-                          <Text className="text-white text-sm">
-                            {assessment.components.waist.exempt
-                              ? 'Exempt'
-                              : `${assessment.components.waist.inches.toFixed(1)} in · ${assessment.components.waist.score.toFixed(1)}`}
+              <ScrollView showsVerticalScrollIndicator={false}>
+                {pfraHistory.length === 0 ? (
+                  <Text className="text-white/40 text-center py-8">No PFRA records uploaded.</Text>
+                ) : (
+                  <>
+                    {selectedAssessment ? (
+                      <View className="rounded-2xl border border-white/10 bg-white/5 p-4 mb-4">
+                        <View className="flex-row items-center justify-between mb-3">
+                          <Text className="text-af-silver text-sm">
+                            {pfraSummaryMode === 'best' ? 'Best Assessment' : 'Latest Assessment'}
                           </Text>
+                          <Text className="text-af-silver text-sm">{selectedAssessment.date}</Text>
                         </View>
-                      ) : null}
-                    </View>
-                  </View>
-                ))
-              )}
-            </ScrollView>
-          </Animated.View>
+                        <View className="flex-row mb-4" style={{ gap: 8 }}>
+                          <Pressable
+                            onPress={() => {
+                              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                              setPfraSummaryMode('latest');
+                            }}
+                            className={cn(
+                              'rounded-full border px-3 py-1.5',
+                              pfraSummaryMode === 'latest' ? 'border-af-accent bg-af-accent/20' : 'border-white/10 bg-black/10'
+                            )}
+                          >
+                            <Text className={cn('text-xs font-semibold', pfraSummaryMode === 'latest' ? 'text-af-accent' : 'text-af-silver')}>
+                              Latest Assessment
+                            </Text>
+                          </Pressable>
+                          <Pressable
+                            onPress={() => {
+                              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                              setPfraSummaryMode('best');
+                            }}
+                            className={cn(
+                              'rounded-full border px-3 py-1.5',
+                              pfraSummaryMode === 'best' ? 'border-af-accent bg-af-accent/20' : 'border-white/10 bg-black/10'
+                            )}
+                          >
+                            <Text className={cn('text-xs font-semibold', pfraSummaryMode === 'best' ? 'text-af-accent' : 'text-af-silver')}>
+                              Best Assessment
+                            </Text>
+                          </Pressable>
+                        </View>
+                        <View className="items-center mb-4">
+                          <View className={cn(
+                            'w-24 h-24 rounded-full items-center justify-center border-4',
+                            selectedAssessment.overallScore >= 90 ? 'border-af-success bg-af-success/20' :
+                            selectedAssessment.overallScore >= 75 ? 'border-af-accent bg-af-accent/20' :
+                            'border-af-warning bg-af-warning/20'
+                          )}>
+                            <Text className={cn(
+                              'text-3xl font-bold',
+                              selectedAssessment.overallScore >= 90 ? 'text-af-success' :
+                              selectedAssessment.overallScore >= 75 ? 'text-af-accent' :
+                              'text-af-warning'
+                            )}>
+                              {selectedAssessment.overallScore}
+                            </Text>
+                          </View>
+                          <Text className="text-white font-semibold mt-2">Overall Score</Text>
+                        </View>
+                        <View className="space-y-3">
+                          <View className="flex-row items-center justify-between">
+                            <Text className="text-af-silver">{formatPFRAComponentLabel(selectedAssessment.components.cardio.test, 'cardio')}</Text>
+                            <Text className="text-white font-semibold">
+                              {formatPFRACardioValue(selectedAssessment.components.cardio)}
+                            </Text>
+                          </View>
+                          <View className="flex-row items-center justify-between">
+                            <Text className="text-af-silver">{formatPFRAComponentLabel(selectedAssessment.components.pushups.test, 'strength')}</Text>
+                            <Text className="text-white font-semibold">
+                              {selectedAssessment.components.pushups.exempt
+                                ? 'Exempt'
+                                : `${selectedAssessment.components.pushups.score} pts (${selectedAssessment.components.pushups.reps} reps)`}
+                            </Text>
+                          </View>
+                          <View className="flex-row items-center justify-between">
+                            <Text className="text-af-silver">{formatPFRAComponentLabel(selectedAssessment.components.situps.test, 'core')}</Text>
+                            <Text className="text-white font-semibold">
+                              {selectedAssessment.components.situps.exempt
+                                ? 'Exempt'
+                                : `${selectedAssessment.components.situps.score} pts (${selectedAssessment.components.situps.time ?? `${selectedAssessment.components.situps.reps} reps`})`}
+                            </Text>
+                          </View>
+                          {selectedAssessment.components.waist ? (
+                            <View className="flex-row items-center justify-between">
+                              <Text className="text-af-silver">WHtR</Text>
+                              <Text className="text-white font-semibold">
+                                {selectedAssessment.components.waist.exempt
+                                  ? 'Exempt'
+                                  : `${selectedAssessment.components.waist.score} pts (${selectedAssessment.components.waist.inches}")`}
+                              </Text>
+                            </View>
+                          ) : null}
+                        </View>
+                      </View>
+                    ) : null}
+
+                    {pfraHistory.map((assessment) => (
+                      <View key={assessment.id} className="rounded-2xl border border-white/10 bg-white/5 p-4 mb-4">
+                        <View className="flex-row items-center justify-between">
+                          <Text className="text-white font-semibold">{assessment.date}</Text>
+                          <Text className="text-af-gold font-bold">{assessment.overallScore.toFixed(1)}</Text>
+                        </View>
+                        <View className="mt-4">
+                          <View className="flex-row justify-between mb-2">
+                            <Text className="text-af-silver text-sm">{formatPFRAComponentLabel(assessment.components.cardio.test, 'cardio')}</Text>
+                            <Text className="text-white text-sm">
+                              {formatPFRACardioValue(assessment.components.cardio)}
+                            </Text>
+                          </View>
+                          <View className="flex-row justify-between mb-2">
+                            <Text className="text-af-silver text-sm">{formatPFRAComponentLabel(assessment.components.pushups.test, 'strength')}</Text>
+                            <Text className="text-white text-sm">
+                              {assessment.components.pushups.exempt
+                                ? 'Exempt'
+                                : `${assessment.components.pushups.reps} reps · ${assessment.components.pushups.score.toFixed(1)}`}
+                            </Text>
+                          </View>
+                          <View className="flex-row justify-between mb-2">
+                            <Text className="text-af-silver text-sm">{formatPFRAComponentLabel(assessment.components.situps.test, 'core')}</Text>
+                            <Text className="text-white text-sm">
+                              {assessment.components.situps.exempt
+                                ? 'Exempt'
+                                : `${assessment.components.situps.time ?? `${assessment.components.situps.reps} reps`} · ${assessment.components.situps.score.toFixed(1)}`}
+                            </Text>
+                          </View>
+                          {assessment.components.waist ? (
+                            <View className="flex-row justify-between">
+                              <Text className="text-af-silver text-sm">WHtR</Text>
+                              <Text className="text-white text-sm">
+                                {assessment.components.waist.exempt
+                                  ? 'Exempt'
+                                  : `${assessment.components.waist.inches.toFixed(1)} in · ${assessment.components.waist.score.toFixed(1)}`}
+                              </Text>
+                            </View>
+                          ) : null}
+                        </View>
+                      </View>
+                    ))}
+                  </>
+                )}
+              </ScrollView>
+            </Animated.View>
+          </SafeAreaView>
         </Animated.View>
       </Modal>
 
@@ -6705,5 +6964,6 @@ export default function ProfileScreen() {
     </View>
   );
 }
+
 
 

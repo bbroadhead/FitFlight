@@ -766,8 +766,9 @@ export default function PersonalAnalyticsScreen() {
     (isAllTimeView ? scoredWorkoutHistory : summary?.scoredWorkouts.filter((entry) => entry.workout.source !== 'attendance') ?? [])
       .forEach((entry) => {
         const type = normalizeWorkoutType(entry.workout.type);
-        const title = entry.breakdown.typeLabel;
-        const current = grouped.get(entry.scoreKey) ?? {
+        const title = entry.breakdown.analyticsLabel;
+        const groupKey = entry.breakdown.analyticsKey;
+        const current = grouped.get(groupKey) ?? {
           type,
           title,
           workouts: [],
@@ -778,7 +779,7 @@ export default function PersonalAnalyticsScreen() {
           type,
         });
         current.scoreEntries.push(entry);
-        grouped.set(entry.scoreKey, current);
+        grouped.set(groupKey, current);
       });
 
     workouts.forEach((workout) => {
