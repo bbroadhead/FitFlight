@@ -4,9 +4,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { buildLeaderboardHistory, getMonthKey } from '@/lib/monthlyStats';
 
 // Types
-export type Flight = 'Apex' | 'Bomber' | 'Cryptid' | 'Doom' | 'Ewok' | 'Foxhound' | 'DO' | 'ADF' | 'DET' | 'PCS/Outpro';
-export type AccountType = 'fitflight_creator' | 'ufpm' | 'demo' | 'squadron_leadership' | 'pfl' | 'ptl' | 'standard';
-export type Squadron = 'Hawks' | 'Tigers';
+export type Flight = 'Apex' | 'Bomber' | 'Cryptid' | 'Doom' | 'Ewok' | 'Foxhound' | 'DO' | 'ADF' | 'DET' | 'Group' | 'PCS/Outpro';
+export type AccountType = 'fitflight_creator' | 'ufpm' | 'demo' | 'squadron_leadership' | 'group_personnel' | 'pfl' | 'ptl' | 'standard';
+export type Squadron = 'Knights' | 'Hawks' | 'Tigers' | 'Krakens' | 'Warriors';
 export type WorkoutType =
   | 'Running'
   | 'Walking'
@@ -45,10 +45,48 @@ export type PFRAAccountabilityStatus = 'completed' | 'pending' | 'absent' | 'exc
 export type AttendanceSource = 'manual' | 'workout' | 'strava' | 'pfra' | 'excused';
 export type AppTheme = 'default' | 'dark' | 'pixel' | 'cyber' | 'space' | 'flowery';
 
-export const SQUADRONS: Squadron[] = ['Hawks', 'Tigers'];
+export const GROUP_SQUADRON: Squadron = 'Knights';
+export const CHILD_SQUADRONS: Squadron[] = ['Hawks', 'Tigers', 'Krakens', 'Warriors'];
+export const SQUADRONS: Squadron[] = [GROUP_SQUADRON, ...CHILD_SQUADRONS];
+export const DEFAULT_SQUADRON: Squadron = 'Hawks';
+export const GROUP_PERSONNEL_FLIGHT: Flight = 'Group';
 export const PCS_OUTPRO_FLIGHT: Flight = 'PCS/Outpro';
 export const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'DO', 'ADF', 'DET', PCS_OUTPRO_FLIGHT];
 export const ACTIVE_SQUADRON_FLIGHTS: Flight[] = FLIGHTS.filter((flight) => flight !== PCS_OUTPRO_FLIGHT) as Flight[];
+
+export function isGroupSquadron(value: Squadron | string | null | undefined): value is Squadron {
+  return value === GROUP_SQUADRON;
+}
+
+export function isSquadron(value: string): value is Squadron {
+  return SQUADRONS.includes(value as Squadron);
+}
+
+export function normalizeSquadron(value?: string | null, fallback: Squadron = DEFAULT_SQUADRON): Squadron {
+  return value && isSquadron(value) ? value : fallback;
+}
+
+export function getScopedSquadronLabel(squadron?: Squadron | string | null) {
+  return isGroupSquadron(squadron) ? 'Group' : 'Squadron';
+}
+
+export function getSquadronDisplayName(squadron?: Squadron | string | null) {
+  const normalized = normalizeSquadron(squadron, DEFAULT_SQUADRON);
+  return isGroupSquadron(normalized) ? 'Knights Group' : normalized;
+}
+
+export function getGroupChildSquadrons(squadron?: Squadron | string | null): Squadron[] {
+  return isGroupSquadron(squadron) ? [...CHILD_SQUADRONS] : [];
+}
+
+export function getAccessibleSquadrons(squadron?: Squadron | string | null): Squadron[] {
+  const normalized = normalizeSquadron(squadron, DEFAULT_SQUADRON);
+  return isGroupSquadron(normalized) ? [normalized, ...CHILD_SQUADRONS] : [normalized];
+}
+
+export function squadronUsesFlights(squadron?: Squadron | string | null) {
+  return !isGroupSquadron(squadron);
+}
 export const WORKOUT_TYPES: WorkoutType[] = [
   'Running',
   'Walking',
@@ -106,7 +144,14 @@ export interface WorkoutSegment {
   elevationGain?: number;
   depth?: number;
   steps?: number;
+  averageHeartRate?: number;
+  caloriesBurned?: number;
   waveConditions?: string;
+  pfraScore?: number;
+  pfraRecordType?: PFRARecordType;
+  cardioTest?: string;
+  cardioTime?: string;
+  cardioLaps?: number;
   additionalInfo?: string;
 }
 export const ENLISTED_RANKS = ['AB', 'Amn', 'A1C', 'SrA', 'SSgt', 'TSgt', 'MSgt', 'SMSgt', 'CMSgt'] as const;
@@ -215,7 +260,7 @@ export interface Workout {
   metrics?: Omit<WorkoutSegment, 'id' | 'type' | 'duration' | 'durationSeconds' | 'distance'> & {
     distance?: number;
   };
-  source: 'manual' | 'screenshot' | 'apple_health' | 'strava' | 'garmin' | 'attendance';
+  source: 'manual' | 'screenshot' | 'apple_health' | 'strava' | 'garmin' | 'attendance' | 'pfra';
   screenshotUri?: string;
   title?: string;
   isPrivate: boolean;
@@ -351,11 +396,19 @@ export const formatRankDisplay = (rank: string) => {
   return DISPLAY_RANK_MAP[normalized] ?? rank.trim();
 };
 
-export const formatFlightDisplay = (flight: string) =>
-  flight.trim().replace(/\s+flight$/i, '');
+export const formatFlightDisplay = (flight: string) => {
+  const normalized = flight.trim();
+  if (normalized === GROUP_PERSONNEL_FLIGHT) {
+    return '';
+  }
+  return normalized.replace(/\s+flight$/i, '');
+};
 
 export const isPCSOutproFlight = (flight: Flight | string | null | undefined) =>
   flight?.trim().toLowerCase() === PCS_OUTPRO_FLIGHT.toLowerCase();
+
+export const isGroupPersonnelFlight = (flight: Flight | string | null | undefined) =>
+  flight?.trim().toLowerCase() === GROUP_PERSONNEL_FLIGHT.toLowerCase();
 
 export const shouldIncludeFlightInSquadronRollups = (flight: Flight | string | null | undefined) =>
   !isPCSOutproFlight(flight);
@@ -369,6 +422,7 @@ export const normalizeAccountType = (accountType: AccountType | string | null | 
     accountType === 'ufpm' ||
     accountType === 'demo' ||
     accountType === 'squadron_leadership' ||
+    accountType === 'group_personnel' ||
     accountType === 'pfl' ||
     accountType === 'standard'
   ) {
@@ -628,7 +682,7 @@ interface MemberState {
 
   // Member actions
   addMember: (member: Member) => void;
-  syncMembersFromRoster: (rosterMembers: Member[]) => void;
+  syncMembersFromRoster: (rosterMembers: Member[], options?: { squadron?: Squadron }) => void;
   removeMember: (id: string) => void;
   updateMember: (id: string, updates: Partial<Member>) => void;
   getMemberById: (id: string) => Member | undefined;
@@ -1081,17 +1135,21 @@ export const useMemberStore = create<MemberState>()(
         )
       })),
 
-      syncMembersFromRoster: (rosterMembers) => set((state) => {
+      syncMembersFromRoster: (rosterMembers, options) => set((state) => {
+        const syncedSquadrons = options?.squadron
+          ? new Set<Squadron>([options.squadron])
+          : new Set(rosterMembers.map((member) => member.squadron));
+        const untouchedMembers = state.members.filter((member) => !syncedSquadrons.has(member.squadron));
         const mergedRosterMembers = rosterMembers.map((rosterMember) => {
-          const existing = state.members.find((member) => isSameMember(member, rosterMember));
+          const existing = state.members.find((member) => member.squadron === rosterMember.squadron && isSameMember(member, rosterMember));
           return normalizeSpecialAccountMember(mergeMember(rosterMember, existing));
         });
-        const nextMembers = mergedRosterMembers;
+        const nextMembers = [...untouchedMembers, ...mergedRosterMembers];
         const validMemberIds = new Set(nextMembers.map((member) => member.id));
         const memberIdMap = new Map<string, string>();
 
         state.members.forEach((existingMember) => {
-          const matchingMember = nextMembers.find((member) => isSameMember(existingMember, member));
+          const matchingMember = mergedRosterMembers.find((member) => member.squadron === existingMember.squadron && isSameMember(existingMember, member));
           if (matchingMember) {
             memberIdMap.set(existingMember.id, matchingMember.id);
           }
@@ -1102,9 +1160,9 @@ export const useMemberStore = create<MemberState>()(
           nextMembers.find((member) => member.accountType === 'fitflight_creator')?.id ??
           nextMembers[0]?.id ??
           null;
-          const nextPtSessions = state.ptSessions.map((session) => ({
+        const nextPtSessions = state.ptSessions.map((session) => ({
             ...session,
-            squadron: session.squadron ?? 'Hawks',
+            squadron: session.squadron ?? DEFAULT_SQUADRON,
             attendees: [...new Set(session.attendees.map(mapMemberId).filter((memberId) => validMemberIds.has(memberId)))],
             attendeeSources: Object.fromEntries(
               Object.entries(session.attendeeSources ?? {})
@@ -1118,7 +1176,7 @@ export const useMemberStore = create<MemberState>()(
         }));
         const nextScheduledSessions = state.scheduledSessions.map((session) => normalizeScheduledSession({
           ...session,
-          squadron: session.squadron ?? 'Hawks',
+          squadron: session.squadron ?? DEFAULT_SQUADRON,
           createdBy:
             validMemberIds.has(mapMemberId(session.createdBy))
               ? mapMemberId(session.createdBy)
@@ -1176,15 +1234,18 @@ export const useMemberStore = create<MemberState>()(
           const nextMembers = hydrateDerivedMemberState(state.members, [...state.ptSessions, session], state.sharedWorkouts);
           return findNewlyEarnedAchievementId(state.members, nextMembers) ?? state.recentAchievementId;
         })(),
-      })),
+      })), 
 
         syncPTSessions: (sessions) => set((state) => {
-          const nextSessions = sessions.map((session) => ({
+          const normalizedSessions = sessions.map((session) => ({
             ...session,
-            squadron: session.squadron ?? 'Hawks',
+            squadron: session.squadron ?? DEFAULT_SQUADRON,
             attendees: [...new Set(session.attendees)],
             attendeeSources: session.attendeeSources ?? {},
           }));
+          const syncedSquadrons = new Set(normalizedSessions.map((session) => session.squadron));
+          const preservedSessions = state.ptSessions.filter((session) => !syncedSquadrons.has(session.squadron ?? DEFAULT_SQUADRON));
+          const nextSessions = [...preservedSessions, ...normalizedSessions];
           const nextMembers = hydrateDerivedMemberState(state.members, nextSessions, state.sharedWorkouts);
 
         return {
@@ -1231,9 +1292,14 @@ export const useMemberStore = create<MemberState>()(
       }),
 
       // Scheduled Session actions
-      syncScheduledSessions: (sessions) => set(() => ({
-        scheduledSessions: sessions.map(normalizeScheduledSession),
-      })),
+      syncScheduledSessions: (sessions) => set((state) => {
+        const normalizedSessions = sessions.map(normalizeScheduledSession);
+        const syncedSquadrons = new Set(normalizedSessions.map((session) => session.squadron ?? DEFAULT_SQUADRON));
+        const preservedSessions = state.scheduledSessions.filter((session) => !syncedSquadrons.has(session.squadron ?? DEFAULT_SQUADRON));
+        return {
+          scheduledSessions: [...preservedSessions, ...normalizedSessions],
+        };
+      }),
 
       addScheduledSession: (session) => set((state) => ({
         scheduledSessions: [...state.scheduledSessions, normalizeScheduledSession(session)]
@@ -1509,9 +1575,12 @@ export const useMemberStore = create<MemberState>()(
 
       // Shared Workout actions
       syncSharedWorkouts: (workouts) => set((state) => {
-        const nextMembers = hydrateDerivedMemberState(state.members, state.ptSessions, workouts);
+        const syncedSquadrons = new Set(workouts.map((workout) => workout.squadron));
+        const preservedWorkouts = state.sharedWorkouts.filter((workout) => !syncedSquadrons.has(workout.squadron));
+        const nextSharedWorkouts = [...preservedWorkouts, ...workouts];
+        const nextMembers = hydrateDerivedMemberState(state.members, state.ptSessions, nextSharedWorkouts);
         return {
-          sharedWorkouts: workouts,
+          sharedWorkouts: nextSharedWorkouts,
           members: nextMembers,
           recentAchievementId: state.recentAchievementId,
         };
@@ -1583,12 +1652,12 @@ export const useMemberStore = create<MemberState>()(
 
 // Helper to check if user can manage PTL status
 export const canManagePTL = (accountType: AccountType): boolean => {
-  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'demo' || accountType === 'squadron_leadership';
+  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'demo' || accountType === 'squadron_leadership' || accountType === 'group_personnel';
 };
 
 // Helper to check if user can edit PT attendance
 export const canEditAttendance = (accountType: AccountType): boolean => {
-  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'squadron_leadership' || isPFLAccountType(accountType);
+  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'squadron_leadership' || accountType === 'group_personnel' || isPFLAccountType(accountType);
 };
 
 // Helper for UFPM-like or PT-program features that Demo can still access
@@ -1597,10 +1666,10 @@ export const canManagePTPrograms = (accountType: AccountType): boolean => {
 };
 
 export const canManagePFRARecords = (accountType: AccountType): boolean => {
-  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'squadron_leadership' || isPFLAccountType(accountType);
+  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'squadron_leadership' || accountType === 'group_personnel' || isPFLAccountType(accountType);
 };
 
 // Helper to check if user has admin access
 export const isAdmin = (accountType: AccountType): boolean => {
-  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'demo' || accountType === 'squadron_leadership';
+  return accountType === 'fitflight_creator' || accountType === 'ufpm' || accountType === 'demo' || accountType === 'squadron_leadership' || accountType === 'group_personnel';
 };

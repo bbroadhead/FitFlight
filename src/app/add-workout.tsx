@@ -35,6 +35,8 @@ type WorkoutSegmentForm = WorkoutSegment & {
   elevationGainInput: string;
   depthInput: string;
   stepsInput: string;
+  averageHeartRateInput: string;
+  caloriesBurnedInput: string;
   waveConditionsInput: string;
 };
 
@@ -108,7 +110,7 @@ const getWorkoutTypeDescription = (type: WorkoutType) => {
     case 'Combatives':
       return 'Track time, rounds, and training notes.';
     default:
-      return 'Track time and any additional workout details.';
+      return 'Track time plus any combination of distance, steps, heart rate, calories, elevation gain, and workout notes.';
   }
 };
 
@@ -166,6 +168,8 @@ function createDefaultSegment(type: WorkoutType): WorkoutSegmentForm {
     elevationGain: undefined,
     depth: undefined,
     steps: undefined,
+    averageHeartRate: undefined,
+    caloriesBurned: undefined,
     waveConditions: '',
     additionalInfo: '',
     durationInput: '',
@@ -178,6 +182,8 @@ function createDefaultSegment(type: WorkoutType): WorkoutSegmentForm {
     elevationGainInput: '',
     depthInput: '',
     stepsInput: '',
+    averageHeartRateInput: '',
+    caloriesBurnedInput: '',
     waveConditionsInput: '',
   };
 }
@@ -198,6 +204,8 @@ function createSegmentFormFromSegment(segment: WorkoutSegment): WorkoutSegmentFo
     elevationGain: segment.elevationGain,
     depth: segment.depth,
     steps: segment.steps,
+    averageHeartRate: segment.averageHeartRate,
+    caloriesBurned: segment.caloriesBurned,
     waveConditions: segment.waveConditions ?? '',
     additionalInfo: segment.additionalInfo ?? '',
     durationInput: segment.duration ? String(segment.duration) : '',
@@ -210,6 +218,8 @@ function createSegmentFormFromSegment(segment: WorkoutSegment): WorkoutSegmentFo
     elevationGainInput: typeof segment.elevationGain === 'number' ? String(segment.elevationGain) : '',
     depthInput: typeof segment.depth === 'number' ? String(segment.depth) : '',
     stepsInput: typeof segment.steps === 'number' ? String(segment.steps) : '',
+    averageHeartRateInput: typeof segment.averageHeartRate === 'number' ? String(segment.averageHeartRate) : '',
+    caloriesBurnedInput: typeof segment.caloriesBurned === 'number' ? String(segment.caloriesBurned) : '',
     waveConditionsInput: segment.waveConditions ?? '',
   };
 }
@@ -277,6 +287,8 @@ function normalizeSegment(segment: WorkoutSegmentForm): WorkoutSegment {
     elevationGain: segment.elevationGainInput ? parseFloat(segment.elevationGainInput) || 0 : undefined,
     depth: segment.depthInput ? parseFloat(segment.depthInput) || 0 : undefined,
     steps: segment.stepsInput ? parseInt(segment.stepsInput, 10) || 0 : undefined,
+    averageHeartRate: segment.averageHeartRateInput ? parseFloat(segment.averageHeartRateInput) || 0 : undefined,
+    caloriesBurned: segment.caloriesBurnedInput ? parseFloat(segment.caloriesBurnedInput) || 0 : undefined,
     waveConditions: segment.waveConditionsInput.trim() || undefined,
     additionalInfo: segment.additionalInfo?.trim() || undefined,
   };
@@ -295,12 +307,14 @@ function NumericField({
   onChangeText,
   placeholder,
   widthClassName = 'flex-1',
+  decimal = false,
 }: {
   label: string;
   value: string;
   onChangeText: (value: string) => void;
   placeholder: string;
   widthClassName?: string;
+  decimal?: boolean;
 }) {
   return (
     <View className={cn(widthClassName)}>
@@ -310,7 +324,7 @@ function NumericField({
         onChangeText={onChangeText}
         placeholder={placeholder}
         placeholderTextColor="#ffffff40"
-        keyboardType="numeric"
+        keyboardType={decimal ? (Platform.OS === 'ios' ? 'decimal-pad' : 'numeric') : 'numeric'}
         className="rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-white"
       />
     </View>
@@ -433,6 +447,8 @@ export default function AddWorkoutScreen() {
         elevationGain: segment.elevationGain,
         depth: segment.depth,
         steps: segment.steps,
+        averageHeartRate: segment.averageHeartRate,
+        caloriesBurned: segment.caloriesBurned,
         waveConditions: segment.waveConditions,
         additionalInfo: segment.additionalInfo,
         distance: segment.distance,
@@ -883,6 +899,7 @@ export default function AddWorkoutScreen() {
                           onChangeText={(value) => handleSegmentChange(segment.key, { distanceInput: value })}
                           placeholder="Miles"
                           widthClassName="w-full"
+                          decimal
                         />
                       </View>
                     ) : null}
@@ -894,6 +911,7 @@ export default function AddWorkoutScreen() {
                           value={segment.elevationGainInput}
                           onChangeText={(value) => handleSegmentChange(segment.key, { elevationGainInput: value })}
                           placeholder="Feet"
+                          decimal
                         />
                         <NumericField
                           label="Steps"
@@ -912,6 +930,7 @@ export default function AddWorkoutScreen() {
                           onChangeText={(value) => handleSegmentChange(segment.key, { weightInput: value })}
                           placeholder="35"
                           widthClassName="w-full"
+                          decimal
                         />
                       </View>
                     ) : null}
@@ -937,6 +956,7 @@ export default function AddWorkoutScreen() {
                             value={segment.weightInput}
                             onChangeText={(value) => handleSegmentChange(segment.key, { weightInput: value })}
                             placeholder="185"
+                            decimal
                           />
                           <NumericField
                             label="Reps *"
@@ -977,6 +997,7 @@ export default function AddWorkoutScreen() {
                           onChangeText={(value) => handleSegmentChange(segment.key, { elevationGainInput: value })}
                           placeholder="Feet"
                           widthClassName="w-full"
+                          decimal
                         />
                       </View>
                     ) : null}
@@ -989,8 +1010,55 @@ export default function AddWorkoutScreen() {
                           onChangeText={(value) => handleSegmentChange(segment.key, { depthInput: value })}
                           placeholder="Feet"
                           widthClassName="w-full"
+                          decimal
                         />
                       </View>
+                    ) : null}
+
+                    {segment.type === 'Other' ? (
+                      <>
+                        <View className="flex-row mt-4" style={{ gap: 12 }}>
+                          <NumericField
+                            label="Distance"
+                            value={segment.distanceInput}
+                            onChangeText={(value) => handleSegmentChange(segment.key, { distanceInput: value })}
+                            placeholder="Miles"
+                            decimal
+                          />
+                          <NumericField
+                            label="Steps"
+                            value={segment.stepsInput}
+                            onChangeText={(value) => handleSegmentChange(segment.key, { stepsInput: value })}
+                            placeholder="6000"
+                          />
+                        </View>
+                        <View className="flex-row mt-4" style={{ gap: 12 }}>
+                          <NumericField
+                            label="Avg Heart Rate"
+                            value={segment.averageHeartRateInput}
+                            onChangeText={(value) => handleSegmentChange(segment.key, { averageHeartRateInput: value })}
+                            placeholder="145"
+                            decimal
+                          />
+                          <NumericField
+                            label="Calories Burned"
+                            value={segment.caloriesBurnedInput}
+                            onChangeText={(value) => handleSegmentChange(segment.key, { caloriesBurnedInput: value })}
+                            placeholder="420"
+                            decimal
+                          />
+                        </View>
+                        <View className="mt-4">
+                          <NumericField
+                            label="Elevation Gain"
+                            value={segment.elevationGainInput}
+                            onChangeText={(value) => handleSegmentChange(segment.key, { elevationGainInput: value })}
+                            placeholder="Feet"
+                            widthClassName="w-full"
+                            decimal
+                          />
+                        </View>
+                      </>
                     ) : null}
 
                     {segment.type === 'Surfing' ? (

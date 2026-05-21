@@ -8,9 +8,9 @@ import Animated, { FadeInDown } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
-import { ALL_RANKS, PCS_OUTPRO_FLIGHT, useMemberStore, useAuthStore, type Flight, type Member, type Squadron } from '@/lib/store';
+import { ALL_RANKS, DEFAULT_SQUADRON, GROUP_PERSONNEL_FLIGHT, GROUP_SQUADRON, PCS_OUTPRO_FLIGHT, SQUADRONS, normalizeSquadron, useMemberStore, useAuthStore, type Flight, type Member, type Squadron } from '@/lib/store';
 import { cn } from '@/lib/cn';
-import { createRosterMember } from '@/lib/supabaseData';
+import { createRosterMember, ensureRosterImportSchema } from '@/lib/supabaseData';
 import { PageContainer } from '@/components/PageContainer';
 
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'DO', 'ADF', 'DET', PCS_OUTPRO_FLIGHT];
@@ -90,9 +90,11 @@ export default function ImportRosterScreen() {
   const [showMappingModal, setShowMappingModal] = useState(false);
   const [selectedColumn, setSelectedColumn] = useState<keyof ColumnMapping | null>(null);
   const [fileName, setFileName] = useState<string>('');
+  const [targetSquadron, setTargetSquadron] = useState<Squadron>(normalizeSquadron(user?.squadron, DEFAULT_SQUADRON));
   const contentMaxWidth = width >= 1440 ? 1240 : width >= 1180 ? 1100 : 980;
 
-  const userSquadron: Squadron = user?.squadron ?? 'Hawks';
+  const userSquadron: Squadron = normalizeSquadron(user?.squadron, DEFAULT_SQUADRON);
+  const canSelectImportSquadron = user?.accountType === 'fitflight_creator';
 
   const parseRosterName = (input: string) => {
     const trimmed = input.trim();
@@ -177,6 +179,9 @@ export default function ImportRosterScreen() {
   // Validate and normalize flight
   const normalizeFlight = (input: string): Flight | null => {
     const normalized = input.trim().toLowerCase();
+    if (!normalized) {
+      return targetSquadron === GROUP_SQUADRON ? GROUP_PERSONNEL_FLIGHT : null;
+    }
     const flightMap: Record<string, Flight> = {
       'apex': 'Apex',
       'bomber': 'Bomber',
@@ -192,6 +197,7 @@ export default function ImportRosterScreen() {
       'pcs-outpro': PCS_OUTPRO_FLIGHT,
       'pcs': PCS_OUTPRO_FLIGHT,
       'outpro': PCS_OUTPRO_FLIGHT,
+      'group': GROUP_PERSONNEL_FLIGHT,
       // Common variations
       'a': 'Apex',
       'b': 'Bomber',
@@ -222,7 +228,7 @@ export default function ImportRosterScreen() {
       if (!parsedName) errors.push(`Invalid name format: "${rawFullName}"`);
       if (!normalizedRank) errors.push(`Invalid rank: "${rawRank}"`);
       if (!rawEmail) errors.push('Missing email');
-      if (!normalizedFlight) errors.push(`Invalid flight: "${rawFlight}"`);
+      if (!normalizedFlight) errors.push(targetSquadron === GROUP_SQUADRON ? 'Missing group assignment' : `Invalid flight: "${rawFlight}"`);
 
       // Check for duplicates
       const existingMember = members.find(
@@ -230,7 +236,7 @@ export default function ImportRosterScreen() {
              parsedName &&
              m.firstName.toLowerCase() === parsedName.firstName.toLowerCase() &&
              m.lastName.toLowerCase() === parsedName.lastName.toLowerCase())) &&
-             m.squadron === userSquadron
+             m.squadron === targetSquadron
       );
       if (existingMember) {
         errors.push('Already exists in roster');
@@ -329,6 +335,8 @@ export default function ImportRosterScreen() {
         return;
       }
 
+    await ensureRosterImportSchema(targetSquadron, accessToken);
+
     const validRows = parsedRows.filter(row => row.isValid);
 
     for (const row of validRows) {
@@ -338,8 +346,8 @@ export default function ImportRosterScreen() {
         firstName: row.firstName,
         lastName: row.lastName,
         flight: row.flight as Flight,
-        squadron: userSquadron,
-        accountType: 'standard',
+        squadron: targetSquadron,
+        accountType: targetSquadron === GROUP_SQUADRON ? 'group_personnel' : 'standard',
         email: row.email,
         exerciseMinutes: 0,
         distanceRun: 0,
@@ -469,10 +477,40 @@ export default function ImportRosterScreen() {
 
                 <View className="mt-4 p-3 bg-af-accent/10 rounded-xl border border-af-accent/20">
                   <Text className="text-af-silver text-sm">
-                    Imported members are added to the existing roster for your squadron. They do not replace the members already in the app.
+                    Imported members are added to the existing roster for {targetSquadron}. They do not replace the members already in the app.
                   </Text>
                 </View>
               </View>
+
+              {canSelectImportSquadron && (
+                <View className="mt-6 p-4 bg-white/5 rounded-2xl border border-white/10">
+                  <Text className="text-white font-semibold mb-3">Import Into Squadron</Text>
+                  <Text className="text-af-silver text-sm mb-3">
+                    Choose which squadron should receive this roster upload.
+                  </Text>
+                  <View className="flex-row flex-wrap -mx-1">
+                    {SQUADRONS.map((squadron) => (
+                      <Pressable
+                        key={squadron}
+                        onPress={() => {
+                          setTargetSquadron(squadron);
+                          Haptics.selectionAsync();
+                        }}
+                        className={cn(
+                          "mx-1 mb-2 px-4 py-2 rounded-xl border",
+                          targetSquadron === squadron
+                            ? "bg-af-accent/20 border-af-accent"
+                            : "bg-white/5 border-white/10"
+                        )}
+                      >
+                        <Text className={targetSquadron === squadron ? "text-white font-semibold" : "text-af-silver"}>
+                          {squadron}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
+              )}
 
               {/* Supported formats */}
               <View className="mt-4 flex-row">

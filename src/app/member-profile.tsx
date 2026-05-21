@@ -6,7 +6,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ChevronLeft, Timer, MapPin, Trophy, Lock, Unlock, TrendingUp, Shield, Camera, Dumbbell, Activity, Image as ImageIcon, BarChart3, User, X, FileText } from 'lucide-react-native';
 import Animated, { FadeInDown, FadeInUp, useAnimatedStyle, useSharedValue, withSpring, withDelay } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import { useMemberStore, useAuthStore, formatFlightDisplay, getClosedMonthPlacements, getDisplayName, ALL_ACHIEVEMENTS, canManagePTPrograms, shouldIncludeFlightInSquadronRollups, type AccountType, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
+import { useMemberStore, useAuthStore, formatFlightDisplay, getClosedMonthPlacements, getDisplayName, ALL_ACHIEVEMENTS, canManagePTPrograms, shouldIncludeFlightInSquadronRollups, type AccountType, type Workout, type WorkoutType, WORKOUT_TYPES } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { TrophyCase, CompactTrophyBadges } from '@/components/TrophyCase';
 import { ThemeBackdrop } from '@/components/ThemeBackdrop';
@@ -33,6 +33,21 @@ function getWorkoutDisplayTitle(type: WorkoutType) {
     default:
       return type;
   }
+}
+
+function formatDisplayNumber(value: number) {
+  return value.toLocaleString('en-US', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
+}
+
+function formatDistanceValue(value?: number) {
+  return typeof value === 'number' && Number.isFinite(value) ? `${formatDisplayNumber(value)} mi` : 'N/A';
+}
+
+function isPFRAWorkoutItem(workout: Pick<Workout, 'source' | 'metrics'>) {
+  return workout.source === 'pfra' || typeof workout.metrics?.pfraScore === 'number';
 }
 
 function formatPFRAComponentLabel(value?: string | null, category?: 'cardio' | 'strength' | 'core') {
@@ -150,7 +165,7 @@ function WorkoutTypeBar({
     <View className="mb-3">
       <View className="flex-row items-center justify-between mb-1">
         <Text className="text-white text-sm">{type}</Text>
-        <Text className="text-af-silver text-xs">{count} ({percentage.toFixed(0)}%)</Text>
+          <Text className="text-af-silver text-xs">{count} ({formatDisplayNumber(percentage)}%)</Text>
       </View>
       <View className="h-3 bg-white/10 rounded-full overflow-hidden">
         <Animated.View
@@ -216,7 +231,8 @@ export default function MemberProfileScreen() {
     currentUser?.accountType === 'fitflight_creator' ||
     currentUser?.accountType === 'ufpm' ||
     currentUser?.accountType === 'demo' ||
-    currentUser?.accountType === 'squadron_leadership';
+    currentUser?.accountType === 'squadron_leadership' ||
+    currentUser?.accountType === 'group_personnel';
   const canViewAllWorkouts = isOwnProfile || canManagePTPrograms(currentUser?.accountType ?? 'standard');
   const canViewWorkoutHistorySection = isOwnProfile || hasProfilePrivacyOverride || (member?.showWorkoutHistoryOnProfile ?? true);
   const canViewWorkoutUploadsSection = isOwnProfile || hasProfilePrivacyOverride || (member?.showWorkoutUploadsOnProfile ?? true);
@@ -342,11 +358,25 @@ export default function MemberProfileScreen() {
       );
     }
 
+    const isPFRAWorkout = isPFRAWorkoutItem(item);
+    const pfraScore = typeof item.metrics?.pfraScore === 'number' ? formatDisplayNumber(item.metrics.pfraScore) : null;
+    const pfraRecordType = item.metrics?.pfraRecordType
+      ? item.metrics.pfraRecordType.charAt(0).toUpperCase() + item.metrics.pfraRecordType.slice(1)
+      : null;
+    const pfraCardioDetail = item.metrics?.cardioTest
+      ? formatPFRAComponentLabel(item.metrics.cardioTest, 'cardio')
+      : null;
+    const pfraCardioContext = pfraCardioDetail === 'HAMR' && typeof item.metrics?.cardioLaps === 'number'
+      ? `${item.metrics.cardioLaps} shuttles`
+      : item.metrics?.cardioTime ?? null;
+
     return (
       <View key={item.id} className="rounded-2xl border border-white/10 bg-white/5 p-4 mb-4">
         <View className="flex-row items-start justify-between">
           <View className="flex-1">
-            <Text className="text-white font-semibold">{item.source === 'attendance' ? 'Attendance' : getWorkoutDisplayTitle(item.type)}</Text>
+            <Text className="text-white font-semibold">
+              {item.source === 'attendance' ? 'Attendance' : isPFRAWorkout ? 'PFRA' : item.title ?? getWorkoutDisplayTitle(item.type)}
+            </Text>
             <Text className="text-af-silver text-xs mt-1">{item.date}</Text>
           </View>
           <View className="items-end">
@@ -356,6 +386,8 @@ export default function MemberProfileScreen() {
                   ? 'Manual'
                   : item.source === 'attendance'
                     ? 'Attendance'
+                    : item.source === 'pfra'
+                      ? 'PFRA'
                     : item.source === 'strava'
                       ? 'Strava'
                       : 'Screenshot'}
@@ -368,11 +400,38 @@ export default function MemberProfileScreen() {
             ) : null}
           </View>
         </View>
-        <View className="mt-3 pt-3 border-t border-white/10">
-          <Text className="text-af-silver text-sm">Duration: {item.duration} min</Text>
-          <Text className="text-af-silver text-sm mt-1">Distance: {item.distance ? `${item.distance.toFixed(2)} mi` : 'N/A'}</Text>
-          <Text className="text-af-silver text-sm mt-1">Visibility: {item.isPrivate ? 'Private' : 'Visible to squadron'}</Text>
-        </View>
+        {isPFRAWorkout ? (
+          <View className="mt-3 rounded-xl border border-white/10 bg-black/10 px-4 py-3">
+            <View className="flex-row justify-between">
+              <Text className="text-af-silver text-sm">Assessment score</Text>
+              <Text className="text-white font-semibold">{pfraScore ?? 'N/A'}</Text>
+            </View>
+            {pfraRecordType ? (
+              <View className="mt-2 flex-row justify-between">
+                <Text className="text-af-silver text-sm">Recorded as</Text>
+                <Text className="text-white font-semibold">{pfraRecordType}</Text>
+              </View>
+            ) : null}
+            {pfraCardioDetail ? (
+              <View className="mt-2 flex-row justify-between">
+                <Text className="text-af-silver text-sm">Cardio component</Text>
+                <Text className="text-white font-semibold">
+                  {pfraCardioContext ? `${pfraCardioDetail} (${pfraCardioContext})` : pfraCardioDetail}
+                </Text>
+              </View>
+            ) : null}
+            <View className="mt-2 flex-row justify-between">
+              <Text className="text-af-silver text-sm">Visibility</Text>
+              <Text className="text-white font-semibold">{item.isPrivate ? 'Private' : 'Visible to squadron'}</Text>
+            </View>
+          </View>
+        ) : (
+          <View className="mt-3 pt-3 border-t border-white/10">
+            <Text className="text-af-silver text-sm">Duration: {formatDisplayNumber(item.duration)} min</Text>
+            <Text className="text-af-silver text-sm mt-1">Distance: {formatDistanceValue(item.distance)}</Text>
+            <Text className="text-af-silver text-sm mt-1">Visibility: {item.isPrivate ? 'Private' : 'Visible to squadron'}</Text>
+          </View>
+        )}
         {item.scoreEntry ? (
           <View className="mt-3 rounded-xl border border-white/10 bg-black/10 px-4 py-3">
             <View className="flex-row items-center justify-between">
@@ -483,14 +542,14 @@ export default function MemberProfileScreen() {
     const counts = new Map<string, number>();
     WORKOUT_TYPES.forEach((type) => counts.set(type, 0));
     monthVisibleWorkouts.forEach((workout) => {
-      if (workout.source === 'attendance') {
+      if (workout.source === 'attendance' || workout.source === 'pfra') {
         return;
       }
       const label = workout.type;
       counts.set(label, (counts.get(label) ?? 0) + 1);
     });
 
-    const total = monthVisibleWorkouts.filter((workout) => workout.source !== 'attendance').length;
+    const total = monthVisibleWorkouts.filter((workout) => !['attendance', 'pfra'].includes(workout.source)).length;
     return Array.from(counts.entries())
       .map(([type, count]) => ({
         type,
@@ -542,6 +601,7 @@ export default function MemberProfileScreen() {
       case 'ufpm': return 'UFPM';
       case 'demo': return 'Demo Role';
       case 'squadron_leadership': return 'Squadron Leadership';
+      case 'group_personnel': return 'Group Personnel';
       case 'pfl':
       case 'ptl': return 'PFL';
       default: return 'Member';
@@ -554,6 +614,7 @@ export default function MemberProfileScreen() {
       case 'ufpm': return { bg: 'bg-af-gold/20', text: 'text-af-gold' };
       case 'demo': return { bg: 'bg-emerald-500/20', text: 'text-emerald-300' };
       case 'squadron_leadership': return { bg: 'bg-sky-500/20', text: 'text-sky-300' };
+      case 'group_personnel': return { bg: 'bg-indigo-500/20', text: 'text-indigo-300' };
       case 'pfl':
       case 'ptl': return { bg: 'bg-af-accent/20', text: 'text-af-accent' };
       default: return { bg: 'bg-white/10', text: 'text-af-silver' };
@@ -585,6 +646,7 @@ export default function MemberProfileScreen() {
   const getSourceLabel = (source: string) => {
     switch (source) {
       case 'attendance': return 'Attendance';
+      case 'pfra': return 'PFRA';
       case 'screenshot': return 'Screenshot';
       // Future integration placeholder kept intentionally disabled.
       // case 'apple_health': return 'Apple Health';
@@ -1037,7 +1099,7 @@ export default function MemberProfileScreen() {
                         {workout.distance !== undefined && workout.distance > 0 && (
                           <View className="flex-row items-center mr-4">
                             <MapPin size={14} color="#22C55E" />
-                            <Text className="text-af-silver text-sm ml-1">{workout.distance.toFixed(2)} mi</Text>
+                          <Text className="text-af-silver text-sm ml-1">{formatDistanceValue(workout.distance)}</Text>
                           </View>
                         )}
                         {workout.screenshotUri && (

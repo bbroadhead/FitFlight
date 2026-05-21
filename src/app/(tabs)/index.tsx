@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NavigationProp, ParamListBase, useNavigation } from '@react-navigation/native';
-import Animated, { FadeInDown, LinearTransition } from 'react-native-reanimated';
+import Animated, { FadeInDown, FadeOutUp, LinearTransition } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { Activity, ArrowDown, ArrowRight, ArrowUp, Calendar, ChevronDown, ChevronUp, Crown, Lock, LockOpen, Medal, Pencil, Shield, Trophy, Users, X } from 'lucide-react-native';
 import { LeaderboardContent } from '@/components/LeaderboardContent';
@@ -274,6 +274,7 @@ export default function HomeScreen() {
   const [dashboardLayout, setDashboardLayout] = useState<DashboardCardId[]>(DEFAULT_DASHBOARD_LAYOUT);
   const [dashboardLayoutUpdatedAt, setDashboardLayoutUpdatedAt] = useState<string | null>(null);
   const [lockedExpandedCardIds, setLockedExpandedCardIds] = useState<DashboardCardId[]>([]);
+  const [showWelcomeBackText, setShowWelcomeBackText] = useState(true);
 
   const user = useAuthStore((s) => s.user);
   const accessToken = useAuthStore((s) => s.accessToken);
@@ -321,6 +322,14 @@ export default function HomeScreen() {
   }, [rankedMembers]);
   const leaderGroup = leaderboardPlacements[0];
   const runnerUpGroup = leaderboardPlacements[1];
+  useEffect(() => {
+    setShowWelcomeBackText(true);
+    const timeout = setTimeout(() => {
+      setShowWelcomeBackText(false);
+    }, 2600);
+    return () => clearTimeout(timeout);
+  }, [user?.id]);
+
   const averageScore = rankedMembers.length
     ? Math.round(rankedMembers.reduce((sum, m) => sum + m.totalScore, 0) / rankedMembers.length)
     : 0;
@@ -422,6 +431,7 @@ export default function HomeScreen() {
     pfl: 'PFL Dashboard',
     ptl: 'PFL Dashboard',
       squadron_leadership: 'Squadron Leadership Dashboard',
+      group_personnel: 'Group Personnel Dashboard',
       demo: 'Demo Dashboard',
     };
     return labels[userAccountType] ?? 'Dashboard';
@@ -1311,7 +1321,11 @@ export default function HomeScreen() {
             <Animated.View entering={FadeInDown.delay(100).springify()} className="px-6 pt-4 pb-2">
               <View className="flex-row items-start justify-between">
                 <View className="flex-1 pr-4">
-                  <Text style={getThemeBodyStyle(theme, 14, theme.textSecondary)}>Welcome back,</Text>
+                  {showWelcomeBackText ? (
+                    <Animated.View exiting={FadeOutUp.duration(420)}>
+                      <Text style={getThemeBodyStyle(theme, 14, theme.textSecondary)}>Welcome back,</Text>
+                    </Animated.View>
+                  ) : null}
                   <Text style={getThemeHeadingStyle(theme, 30)} className="mt-1">
                     {userName}
                   </Text>

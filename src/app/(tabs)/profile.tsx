@@ -10,7 +10,7 @@ import Animated, { FadeIn, FadeInDown, FadeInUp, SlideInDown } from 'react-nativ
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import SmartSlider from '@/components/SmartSlider';
-import { useAuthStore, useMemberStore, formatFlightDisplay, type Flight, type Member, type AccountType, type Squadron, type IntegrationService, type WorkoutType, type AppTheme, RANK_GROUPS, getDisplayName, canEditAttendance, canManagePTL, canManagePTPrograms, isAdmin, SQUADRONS, ALL_ACHIEVEMENTS, isPFLAccountType, normalizeAccountType, PCS_OUTPRO_FLIGHT, isPCSOutproFlight, shouldIncludeFlightInSquadronRollups } from '@/lib/store';
+import { useAuthStore, useMemberStore, formatFlightDisplay, type Flight, type Member, type AccountType, type Squadron, type IntegrationService, type Workout, type WorkoutType, type AppTheme, DEFAULT_SQUADRON, RANK_GROUPS, getDisplayName, canEditAttendance, canManagePTL, canManagePTPrograms, isAdmin, SQUADRONS, ALL_ACHIEVEMENTS, isPFLAccountType, normalizeAccountType, normalizeSquadron, PCS_OUTPRO_FLIGHT, isPCSOutproFlight, shouldIncludeFlightInSquadronRollups } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { AchievementCelebration } from '@/components/AchievementCelebration';
@@ -147,8 +147,15 @@ const slugify = (value: string) =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
-const buildLegacyRosterId = (member: { rank: string; firstName: string; lastName: string; flight: Flight }) =>
-  `roster-${slugify(`${member.rank}-${member.lastName}-${member.firstName}-${member.flight}`)}`;
+const buildLegacyRosterId = (
+  member: { rank: string; firstName: string; lastName: string; flight: Flight; squadron?: string },
+  includeSquadron = false
+) =>
+  `roster-${slugify(
+    includeSquadron && member.squadron
+      ? `${member.squadron}-${member.rank}-${member.lastName}-${member.firstName}-${member.flight}`
+      : `${member.rank}-${member.lastName}-${member.firstName}-${member.flight}`
+  )}`;
 type SupportNotificationItem = {
   id: string;
   title: string;
@@ -262,6 +269,21 @@ function getWorkoutDisplayTitle(type: WorkoutType) {
     default:
       return type;
   }
+}
+
+function formatDisplayNumber(value: number) {
+  return value.toLocaleString('en-US', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
+}
+
+function formatDistanceValue(value?: number) {
+  return typeof value === 'number' && Number.isFinite(value) ? `${formatDisplayNumber(value)} mi` : 'N/A';
+}
+
+function isPFRAWorkoutItem(workout: Pick<Workout, 'source' | 'metrics'>) {
+  return workout.source === 'pfra' || typeof workout.metrics?.pfraScore === 'number';
 }
 
 function formatPFRAComponentLabel(value?: string | null, category?: 'cardio' | 'strength' | 'core') {
@@ -612,13 +634,15 @@ export default function ProfileScreen() {
     userAccountType === 'fitflight_creator' ||
     userAccountType === 'ufpm' ||
     userAccountType === 'demo' ||
-    userAccountType === 'squadron_leadership';
+    userAccountType === 'squadron_leadership' ||
+    userAccountType === 'group_personnel';
   const canManageMembers = canManagePTPrograms(userAccountType);
   const canDeleteMembers =
     userAccountType === 'fitflight_creator' ||
     userAccountType === 'ufpm' ||
     userAccountType === 'demo' ||
-    userAccountType === 'squadron_leadership';
+    userAccountType === 'squadron_leadership' ||
+    userAccountType === 'group_personnel';
   const canReviewManualWorkouts = canManagePTPrograms(userAccountType);
   const canResetUserPasswords = userAccountType === 'fitflight_creator' || userAccountType === 'ufpm' || userAccountType === 'demo';
   const isOwnerUser = userAccountType === 'fitflight_creator' || user?.email?.toLowerCase() === OWNER_EMAIL;
@@ -656,7 +680,7 @@ export default function ProfileScreen() {
   const normalizedMemberSearch = memberSearchQuery.trim().toLowerCase();
   const normalizedUFPMSearch = ufpmSearchQuery.trim().toLowerCase();
   const normalizedResetPasswordSearch = resetPasswordSearchQuery.trim().toLowerCase();
-  const memberSquadron = user?.squadron ?? 'Hawks';
+  const memberSquadron = normalizeSquadron(user?.squadron, DEFAULT_SQUADRON);
   const logAdminAction = async (params: {
     actionType: string;
     targetMember?: Member | null;
@@ -686,7 +710,7 @@ export default function ProfileScreen() {
       return new Set([memberId]);
     }
 
-    return new Set<string>([member.id, buildLegacyRosterId(member)]);
+    return new Set<string>([member.id, buildLegacyRosterId(member), buildLegacyRosterId(member, true)]);
   };
 
   useEffect(() => {
@@ -1221,16 +1245,20 @@ export default function ProfileScreen() {
         return;
       }
 
+      const targetSquadron = normalizeSquadron(previousMember?.squadron ?? user?.squadron, DEFAULT_SQUADRON);
+
       const newMember: Member = {
         id: editingMemberId ?? Date.now().toString(),
         rank: newMemberRank,
         firstName: newMemberFirstName.trim(),
         lastName: newMemberLastName.trim(),
-        flight: newMemberFlight,
-        squadron: previousMember?.squadron ?? 'Hawks',
+        flight: targetSquadron === 'Knights' ? 'Group' : newMemberFlight,
+        squadron: targetSquadron,
         accountType:
           previousMember?.accountType === 'fitflight_creator'
             ? 'fitflight_creator'
+            : targetSquadron === 'Knights'
+              ? 'group_personnel'
             : isPCSOutproFlight(newMemberFlight)
               ? 'standard'
               : previousMember?.accountType === 'ufpm'
@@ -1337,7 +1365,7 @@ export default function ProfileScreen() {
         lastName: newMemberLastName.trim(),
         email: (newMemberEmail || previousMember.email).trim().toLowerCase(),
         flight: PCS_OUTPRO_FLIGHT,
-        squadron: previousMember.squadron ?? 'Hawks',
+        squadron: normalizeSquadron(previousMember.squadron, DEFAULT_SQUADRON),
         accountType: previousMember.accountType === 'fitflight_creator' ? 'fitflight_creator' : 'standard',
       };
 
@@ -2043,7 +2071,7 @@ export default function ProfileScreen() {
             )
         );
 
-        const nextSessions = await fetchAttendanceSessions(accessToken ?? undefined).catch(() => []);
+        const nextSessions = await fetchAttendanceSessions(accessToken ?? undefined, memberSquadron).catch(() => []);
         syncPTSessions(nextSessions);
       }
 
@@ -2376,7 +2404,7 @@ export default function ProfileScreen() {
               });
 
               const [nextSessions, approvedManualWorkouts] = await Promise.all([
-              fetchAttendanceSessions(accessToken).catch(() => []),
+              fetchAttendanceSessions(accessToken, activeWorkoutSubmission.squadron).catch(() => []),
             fetchApprovedManualWorkouts(accessToken, updatedSubmission.squadron).catch(() => []),
           ]);
           syncPTSessions(nextSessions);
@@ -2625,7 +2653,7 @@ export default function ProfileScreen() {
     const dayKeys = new Set<string>();
 
     monthlyUserSummary.workouts.forEach((workout) => {
-      if (workout.source === 'attendance') {
+      if (workout.source === 'attendance' || workout.source === 'pfra') {
         return;
       }
       const label = workout.type;
@@ -2833,6 +2861,7 @@ export default function ProfileScreen() {
       case 'ufpm': return 'UFPM';
       case 'demo': return 'Demo Role';
       case 'squadron_leadership': return 'Squadron Leadership';
+      case 'group_personnel': return 'Group Personnel';
       case 'pfl':
       case 'ptl': return 'PFL';
       default: return 'Member';
@@ -2879,6 +2908,7 @@ export default function ProfileScreen() {
       case 'ufpm': return { bg: 'bg-af-gold/20', text: 'text-af-gold', border: 'border-af-gold/50' };
       case 'demo': return { bg: 'bg-emerald-500/20', text: 'text-emerald-300', border: 'border-emerald-400/40' };
       case 'squadron_leadership': return { bg: 'bg-sky-500/20', text: 'text-sky-300', border: 'border-sky-400/40' };
+      case 'group_personnel': return { bg: 'bg-indigo-500/20', text: 'text-indigo-300', border: 'border-indigo-400/40' };
       case 'pfl':
       case 'ptl': return { bg: 'bg-af-accent/20', text: 'text-af-accent', border: 'border-af-accent/50' };
       default: return { bg: 'bg-white/10', text: 'text-af-silver', border: 'border-white/20' };
@@ -3009,7 +3039,7 @@ export default function ProfileScreen() {
       <ThemeBackdrop />
 
       <SafeAreaView edges={['top']} className="flex-1">
-        <TopStatusBar title="Account" subtitle={`${user?.squadron ?? 'Hawks'} Squadron`} />
+        <TopStatusBar title="Account" subtitle={`${normalizeSquadron(user?.squadron, DEFAULT_SQUADRON)} Squadron`} />
         <ScrollView
           ref={scrollViewRef}
           className="flex-1"
@@ -3394,7 +3424,7 @@ export default function ProfileScreen() {
                       <View className="w-px bg-white/10" />
                       <View className="items-center flex-1">
                         <Dumbbell size={20} color="#22C55E" />
-                        <Text className="text-white font-bold text-lg mt-1">{personalAnalyticsSummary.averageMinutes.toFixed(1)}</Text>
+                        <Text className="text-white font-bold text-lg mt-1">{formatDisplayNumber(personalAnalyticsSummary.averageMinutes)}</Text>
                         <Text className="text-af-silver text-xs">Avg Min</Text>
                       </View>
                     </View>
@@ -3600,7 +3630,7 @@ export default function ProfileScreen() {
                     <View className="w-px bg-white/10" />
                     <View className="items-center flex-1">
                       <Dumbbell size={20} color="#22C55E" />
-                      <Text className="text-white font-bold text-lg mt-1">{personalAnalyticsSummary.averageMinutes.toFixed(1)}</Text>
+                      <Text className="text-white font-bold text-lg mt-1">{formatDisplayNumber(personalAnalyticsSummary.averageMinutes)}</Text>
                       <Text className="text-af-silver text-xs">Avg Min</Text>
                     </View>
                   </View>
@@ -3870,7 +3900,7 @@ export default function ProfileScreen() {
                     >
                       <Settings size={24} color="#A855F7" />
                       <View className="ml-3 flex-1">
-                        <Text className="text-white font-semibold">Squadron Analytics</Text>
+                        <Text className="text-white font-semibold">{memberSquadron === 'Knights' ? 'Group Analytics' : 'Squadron Analytics'}</Text>
                         <Text className="text-af-silver text-xs">View detailed reports & export data</Text>
                       </View>
                     </Pressable>
@@ -4236,28 +4266,40 @@ export default function ProfileScreen() {
               </View>
 
               {/* Flight */}
-              <View className="mb-4">
-                <Text style={getThemeBodyStyle(themePalette, 13, themePalette.textSecondary)} className="mb-2">Flight</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }}>
-                  <View className="flex-row">
-                    {FLIGHTS.map((flight) => (
-                      <Pressable
-                        key={flight}
-                        onPress={() => setNewMemberFlight(flight)}
-                        className="px-4 py-2 rounded-lg mr-2 border"
-                        style={newMemberFlight === flight ? getThemeControlStyle(themePalette, true) : getThemeControlStyle(themePalette)}
-                      >
-                        <Text style={getThemeBodyStyle(themePalette, 13, newMemberFlight === flight ? themePalette.textPrimary : themePalette.textSecondary)}>{flight}</Text>
-                      </Pressable>
-                    ))}
+              {normalizeSquadron(editingMember?.squadron ?? user?.squadron, DEFAULT_SQUADRON) === 'Knights' ? (
+                <View className="mb-4">
+                  <Text style={getThemeBodyStyle(themePalette, 13, themePalette.textSecondary)} className="mb-2">Organization Level</Text>
+                  <View className="rounded-xl border px-4 py-4 bg-white/5 border-white/10">
+                    <Text className="text-white font-semibold">Group Personnel</Text>
+                    <Text className="text-af-silver text-xs mt-1">
+                      Knights personnel do not use flight assignments. Their account stays at the Group level.
+                    </Text>
                   </View>
-                </ScrollView>
-                {newMemberFlight === 'DO' ? (
-                  <Text style={getThemeBodyStyle(themePalette, 12, themePalette.textSecondary)} className="mt-2">
-                    Members assigned to DO are automatically given Squadron Leadership access.
-                  </Text>
-                ) : null}
-              </View>
+                </View>
+              ) : (
+                <View className="mb-4">
+                  <Text style={getThemeBodyStyle(themePalette, 13, themePalette.textSecondary)} className="mb-2">Flight</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }}>
+                    <View className="flex-row">
+                      {FLIGHTS.map((flight) => (
+                        <Pressable
+                          key={flight}
+                          onPress={() => setNewMemberFlight(flight)}
+                          className="px-4 py-2 rounded-lg mr-2 border"
+                          style={newMemberFlight === flight ? getThemeControlStyle(themePalette, true) : getThemeControlStyle(themePalette)}
+                        >
+                          <Text style={getThemeBodyStyle(themePalette, 13, newMemberFlight === flight ? themePalette.textPrimary : themePalette.textSecondary)}>{flight}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </ScrollView>
+                  {newMemberFlight === 'DO' ? (
+                    <Text style={getThemeBodyStyle(themePalette, 12, themePalette.textSecondary)} className="mt-2">
+                      Members assigned to DO are automatically given Squadron Leadership access.
+                    </Text>
+                  ) : null}
+                </View>
+              )}
 
               {/* Email */}
               <View className="mb-4">
@@ -4275,7 +4317,22 @@ export default function ProfileScreen() {
                 </View>
               </View>
 
-              {isOwnerReviewer && editingMemberId ? (
+              {isOwnerReviewer && editingMemberId && editingMember && normalizeSquadron(editingMember.squadron, DEFAULT_SQUADRON) === 'Knights' ? (
+                <View className="mb-4">
+                  <Text className="text-white/60 text-sm mb-2">Special Roles</Text>
+                  <View className="flex-row items-center justify-between rounded-xl border px-4 py-4 bg-indigo-500/15 border-indigo-400/30">
+                    <View className="flex-1 pr-3">
+                      <Text className="text-indigo-300 font-semibold">Group Personnel</Text>
+                      <Text className="text-af-silver text-xs mt-1">
+                        Group Personnel mirrors Squadron Leadership-style access for Group-level administration and visibility.
+                      </Text>
+                    </View>
+                    <View className="w-6 h-6 rounded-full bg-indigo-400 border-2 border-indigo-300 items-center justify-center">
+                      <Check size={14} color="#081223" />
+                    </View>
+                  </View>
+                </View>
+              ) : isOwnerReviewer && editingMemberId ? (
                 <View className="mb-4">
                   <Text className="text-white/60 text-sm mb-2">Special Roles</Text>
                   <Pressable
@@ -6024,7 +6081,7 @@ export default function ProfileScreen() {
                 onPress={() => {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   setShowSettingsModal(false);
-                  setSelectedSquadron(user?.squadron ?? 'Hawks');
+                  setSelectedSquadron(normalizeSquadron(user?.squadron, DEFAULT_SQUADRON));
                   setShowChangeSquadronModal(true);
                 }}
                 className="mt-3 flex-row items-center rounded-xl border border-af-warning/40 bg-af-warning/15 p-4"
@@ -6518,9 +6575,26 @@ export default function ProfileScreen() {
                   </View>
                 ) : (
                   <View key={item.id} className="rounded-2xl border border-white/10 bg-white/5 p-4 mb-4">
+                    {(() => {
+                      const isPFRAWorkout = isPFRAWorkoutItem(item);
+                      const pfraScore = typeof item.metrics?.pfraScore === 'number' ? formatDisplayNumber(item.metrics.pfraScore) : null;
+                      const pfraRecordType = item.metrics?.pfraRecordType
+                        ? item.metrics.pfraRecordType.charAt(0).toUpperCase() + item.metrics.pfraRecordType.slice(1)
+                        : null;
+                      const pfraCardioDetail = item.metrics?.cardioTest
+                        ? formatPFRAComponentLabel(item.metrics.cardioTest, 'cardio')
+                        : null;
+                      const pfraCardioContext = pfraCardioDetail === 'HAMR' && typeof item.metrics?.cardioLaps === 'number'
+                        ? `${item.metrics.cardioLaps} shuttles`
+                        : item.metrics?.cardioTime ?? null;
+
+                      return (
+                        <>
                     <View className="flex-row items-start justify-between">
                       <View className="flex-1">
-                        <Text className="text-white font-semibold">{item.source === 'attendance' ? 'Attendance' : getWorkoutDisplayTitle(item.type)}</Text>
+                        <Text className="text-white font-semibold">
+                          {item.source === 'attendance' ? 'Attendance' : isPFRAWorkout ? 'PFRA' : item.title ?? getWorkoutDisplayTitle(item.type)}
+                        </Text>
                         <Text className="text-af-silver text-xs mt-1">{item.date}</Text>
                       </View>
                       <View className="items-end">
@@ -6530,6 +6604,8 @@ export default function ProfileScreen() {
                               ? 'Manual'
                               : item.source === 'attendance'
                                 ? 'Attendance'
+                                : item.source === 'pfra'
+                                  ? 'PFRA'
                                 : item.source}
                           </Text>
                         </View>
@@ -6570,6 +6646,31 @@ export default function ProfileScreen() {
                       <View className="mt-3 rounded-xl border border-white/10 bg-black/10 px-4 py-3">
                         <Text className="text-white font-medium">Logged by PFL/UFPM</Text>
                       </View>
+                    ) : isPFRAWorkout ? (
+                      <View className="mt-3 rounded-xl border border-white/10 bg-black/10 px-4 py-3">
+                        <View className="flex-row justify-between">
+                          <Text className="text-af-silver text-sm">Assessment score</Text>
+                          <Text className="text-white font-semibold">{pfraScore ?? 'N/A'}</Text>
+                        </View>
+                        {pfraRecordType ? (
+                          <View className="mt-2 flex-row justify-between">
+                            <Text className="text-af-silver text-sm">Recorded as</Text>
+                            <Text className="text-white font-semibold">{pfraRecordType}</Text>
+                          </View>
+                        ) : null}
+                        {pfraCardioDetail ? (
+                          <View className="mt-2 flex-row justify-between">
+                            <Text className="text-af-silver text-sm">Cardio component</Text>
+                            <Text className="text-white font-semibold">
+                              {pfraCardioContext ? `${pfraCardioDetail} (${pfraCardioContext})` : pfraCardioDetail}
+                            </Text>
+                          </View>
+                        ) : null}
+                        <View className="mt-2 flex-row justify-between">
+                          <Text className="text-af-silver text-sm">Visibility</Text>
+                          <Text className="text-white font-semibold">{item.isPrivate ? 'Private' : 'Public'}</Text>
+                        </View>
+                      </View>
                     ) : (
                       <>
                         {item.source === 'strava' ? (
@@ -6579,11 +6680,11 @@ export default function ProfileScreen() {
                         ) : null}
                         <View className="mt-3 flex-row justify-between">
                           <Text className="text-af-silver text-sm">Duration</Text>
-                          <Text className="text-white font-semibold">{item.duration} min</Text>
+                          <Text className="text-white font-semibold">{formatDisplayNumber(item.duration)} min</Text>
                         </View>
                         <View className="mt-2 flex-row justify-between">
                           <Text className="text-af-silver text-sm">Distance</Text>
-                          <Text className="text-white font-semibold">{typeof item.distance === 'number' ? `${item.distance.toFixed(2)} mi` : 'N/A'}</Text>
+                          <Text className="text-white font-semibold">{formatDistanceValue(item.distance)}</Text>
                         </View>
                         <View className="mt-2 flex-row justify-between">
                           <Text className="text-af-silver text-sm">Visibility</Text>
@@ -6611,6 +6712,9 @@ export default function ProfileScreen() {
                         />
                       </Pressable>
                     ) : null}
+                        </>
+                      );
+                    })()}
                   </View>
                 ))
               )}

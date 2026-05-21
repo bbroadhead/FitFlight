@@ -1,27 +1,11 @@
-import type { AttendanceSource, Member, MonthlyLeaderboardEntry, PTSession, Workout } from '@/lib/store';
+import type { Member, MonthlyLeaderboardEntry, PTSession } from '@/lib/store';
+import {
+  getMemberAttendanceRecords as getEffectiveMemberAttendanceRecords,
+  getMemberEffectiveWorkouts as getEffectiveWorkouts,
+  type MemberAttendanceRecord,
+} from '@/lib/effectiveWorkouts';
 import { getWorkoutScoreHistory } from '@/lib/workoutScoreEngine';
-
-const slugify = (value: string) =>
-  value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-
-const buildLegacyRosterId = (member: Pick<Member, 'rank' | 'firstName' | 'lastName' | 'flight'>) =>
-  `roster-${slugify(`${member.rank}-${member.lastName}-${member.firstName}-${member.flight}`)}`;
-
-const getAttendanceAliases = (member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight'>) => {
-  const aliases = new Set<string>([member.id]);
-  aliases.add(buildLegacyRosterId(member));
-  return aliases;
-};
-
-export interface MemberAttendanceRecord {
-  id: string;
-  date: string;
-  flight: string;
-  source: AttendanceSource;
-}
+export type { MemberAttendanceRecord } from '@/lib/effectiveWorkouts';
 
 export function getCompetitionPosition(scores: number[], index: number): number {
   if (index <= 0) {
@@ -64,52 +48,18 @@ export function getMemberAttendanceRecords(
   member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight'>,
   ptSessions: Pick<PTSession, 'id' | 'date' | 'flight' | 'attendees' | 'attendeeSources'>[] = []
 ): MemberAttendanceRecord[] {
-  const attendanceAliases = getAttendanceAliases(member);
-
-  return ptSessions.flatMap((session) => {
-    const matchedAttendeeId = session.attendees.find((attendeeId) => attendanceAliases.has(attendeeId));
-    if (!matchedAttendeeId) {
-      return [];
-    }
-
-    return [{
-      id: session.id,
-      date: session.date,
-      flight: session.flight,
-      source: session.attendeeSources?.[matchedAttendeeId] ?? 'manual',
-    }];
-  });
+  return getEffectiveMemberAttendanceRecords(member, ptSessions);
 }
 
 export function getMemberEffectiveWorkouts(
-  member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight' | 'workouts'>,
+  member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight' | 'workouts' | 'fitnessAssessments'>,
   ptSessions: Pick<PTSession, 'id' | 'date' | 'flight' | 'attendees' | 'attendeeSources'>[] = []
 ) {
-  const datesWithRealWorkouts = new Set(
-    member.workouts
-      .filter((workout) => workout.source !== 'attendance')
-      .map((workout) => workout.date)
-  );
-
-  const attendanceWorkouts: Workout[] = getMemberAttendanceRecords(member, ptSessions)
-    .filter((record) => record.source !== 'excused' && !datesWithRealWorkouts.has(record.date))
-    .map((record) => ({
-      id: `attendance-${record.id}-${member.id}`,
-      externalId: record.id,
-      date: record.date,
-      type: 'Other',
-      duration: 0,
-      distance: 0,
-      source: 'attendance',
-      title: `Attendance - ${record.flight}`,
-      isPrivate: false,
-    }));
-
-  return [...member.workouts, ...attendanceWorkouts];
+  return getEffectiveWorkouts(member, ptSessions);
 }
 
 export function getMemberMonthWorkouts(
-  member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight' | 'workouts'>,
+  member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight' | 'workouts' | 'fitnessAssessments'>,
   monthKey: string,
   ptSessions: Pick<PTSession, 'id' | 'date' | 'flight' | 'attendees'>[] = []
 ) {
@@ -117,7 +67,7 @@ export function getMemberMonthWorkouts(
 }
 
 export function getMemberMonthSummary(
-  member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight' | 'workouts'>,
+  member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight' | 'workouts' | 'fitnessAssessments'>,
   monthKey: string,
   ptSessions: Pick<PTSession, 'id' | 'date' | 'flight' | 'attendees'>[] = []
 ) {

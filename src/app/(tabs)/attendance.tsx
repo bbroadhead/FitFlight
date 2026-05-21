@@ -11,7 +11,7 @@ import * as FileSystem from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { format, startOfWeek, addDays, subWeeks, addWeeks, isSameDay } from 'date-fns';
-import { useMemberStore, useAuthStore, formatFlightDisplay, type AttendanceSource, type Flight, type ScheduledPTSession, canEditAttendance, canManagePTPrograms, formatRankDisplay, isPFLAccountType, shouldIncludeFlightInSquadronRollups } from '@/lib/store';
+import { useMemberStore, useAuthStore, formatFlightDisplay, type AttendanceSource, type Flight, type ScheduledPTSession, canEditAttendance, canManagePTPrograms, DEFAULT_SQUADRON, formatRankDisplay, isPFLAccountType, normalizeSquadron, shouldIncludeFlightInSquadronRollups } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { useTabSwipe } from '@/contexts/TabSwipeContext';
@@ -40,8 +40,15 @@ const slugify = (value: string) =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
-const buildLegacyRosterId = (member: { rank: string; firstName: string; lastName: string; flight: Flight }) =>
-  `roster-${slugify(`${member.rank}-${member.lastName}-${member.firstName}-${member.flight}`)}`;
+const buildLegacyRosterId = (
+  member: { rank: string; firstName: string; lastName: string; flight: Flight; squadron?: string },
+  includeSquadron = false
+) =>
+  `roster-${slugify(
+    includeSquadron && member.squadron
+      ? `${member.squadron}-${member.rank}-${member.lastName}-${member.firstName}-${member.flight}`
+      : `${member.rank}-${member.lastName}-${member.firstName}-${member.flight}`
+  )}`;
 const isVisibleScheduledSession = (date: string, time: string) => {
   const startTime = new Date(`${date}T${time}:00`).getTime();
   const clearTime = startTime + 60 * 60 * 1000;
@@ -60,7 +67,7 @@ const ATTENDANCE_SOURCE_STYLE: Record<AttendanceSource, { border: string; backgr
     background: 'bg-af-success/20',
     icon: '#22C55E',
     label: 'Green Checkmark',
-    description: 'Attendance was marked manually by a PFL, UFPM, or Squadron Leadership.',
+    description: 'Attendance was marked manually by a PFL, UFPM, Squadron Leadership, or Group Personnel.',
   },
   workout: {
     border: 'border-af-accent',
@@ -190,12 +197,12 @@ export default function AttendanceScreen() {
   const canEdit = user ? canEditAttendance(user.accountType) : false;
   const canManagePrograms = user ? canManagePTPrograms(user.accountType) : false;
   const canManageDailyExcusals = user
-    ? (isPFLAccountType(user.accountType) || ['ufpm', 'fitflight_creator', 'squadron_leadership'].includes(user.accountType))
+    ? (isPFLAccountType(user.accountType) || ['ufpm', 'fitflight_creator', 'squadron_leadership', 'group_personnel'].includes(user.accountType))
     : false;
   const canManageWeeklyExcusals = user
-    ? ['fitflight_creator', 'ufpm', 'squadron_leadership'].includes(user.accountType)
+    ? ['fitflight_creator', 'ufpm', 'squadron_leadership', 'group_personnel'].includes(user.accountType)
     : false;
-  const userSquadron = user?.squadron ?? 'Hawks';
+  const userSquadron = normalizeSquadron(user?.squadron, DEFAULT_SQUADRON);
   const currentWeekStartKey = format(currentWeekStart, 'yyyy-MM-dd');
 
   const weekDays = useMemo(
@@ -268,7 +275,7 @@ export default function AttendanceScreen() {
       return new Set([memberId]);
     }
 
-    return new Set<string>([member.id, buildLegacyRosterId(member)]);
+    return new Set<string>([member.id, buildLegacyRosterId(member), buildLegacyRosterId(member, true)]);
   }, [members]);
 
   const isAttending = useCallback((date: Date, memberId: string, flight: Flight, squadron: typeof userSquadron = userSquadron) => {
@@ -456,7 +463,7 @@ export default function AttendanceScreen() {
       return;
     }
 
-    const sessions = await fetchAttendanceSessions(accessToken);
+    const sessions = await fetchAttendanceSessions(accessToken, userSquadron);
     syncPTSessions(sessions);
   }, [accessToken, syncPTSessions]);
 

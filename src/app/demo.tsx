@@ -5,7 +5,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { ShieldAlert, QrCode, LogIn } from 'lucide-react-native';
-import { useAuthStore, useMemberStore, type AccountType, type Flight, type Member, type Squadron, type User as UserType } from '@/lib/store';
+import { useAuthStore, useMemberStore, type AccountType, type Flight, type Member, type Squadron, type User as UserType, DEFAULT_SQUADRON, normalizeSquadron } from '@/lib/store';
 import { ensureMemberRole, fetchRoleForEmail, fetchRosterMembers } from '@/lib/supabaseData';
 import { getUserForAccessToken } from '@/lib/supabaseAuth';
 import { ThemeBackdrop } from '@/components/ThemeBackdrop';
@@ -188,7 +188,7 @@ export default function DemoLoginScreen() {
         );
       const metadata = authUser.user_metadata ?? {};
       const normalizedEmail = (authUser.email ?? DEMO_ACCOUNT_EMAIL).toLowerCase();
-      const resolvedSquadron = (typeof metadata.squadron === 'string' ? metadata.squadron : 'Hawks') as Squadron;
+      const resolvedSquadron = normalizeSquadron(typeof metadata.squadron === 'string' ? metadata.squadron : null, DEFAULT_SQUADRON);
       const roleRecord = await withTimeout(fetchRoleForEmail(normalizedEmail, accessToken), 3000, null).catch(() => null);
       const rosterMembers = await withTimeout(fetchRosterMembers(accessToken, resolvedSquadron), 4000, [] as Member[]).catch(() => []);
       const currentMembers = useMemberStore.getState().members;
@@ -260,7 +260,7 @@ export default function DemoLoginScreen() {
         return matchesCurrentUser ? { ...rosterMember, id: authUser.id, email: normalizedEmail } : rosterMember;
       });
 
-      syncMembersFromRoster(normalizedRosterMembers);
+      syncMembersFromRoster(normalizedRosterMembers, { squadron: resolvedSquadron });
 
       const isPresentationDemoUser = normalizedEmail === DEMO_ACCOUNT_EMAIL;
 

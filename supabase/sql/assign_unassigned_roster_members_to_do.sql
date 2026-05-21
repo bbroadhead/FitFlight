@@ -17,6 +17,20 @@ begin
       where nullif(trim(coalesce("FLT-DET", '')), '') is null
     $sql$;
   end if;
+  if to_regclass('public.krakens_roster') is not null then
+    execute $sql$
+      update public.krakens_roster
+      set "FLT-DET" = 'DO'
+      where nullif(trim(coalesce("FLT-DET", '')), '') is null
+    $sql$;
+  end if;
+  if to_regclass('public.warriors_roster') is not null then
+    execute $sql$
+      update public.warriors_roster
+      set "FLT-DET" = 'DO'
+      where nullif(trim(coalesce("FLT-DET", '')), '') is null
+    $sql$;
+  end if;
 end $$;
 
 commit;

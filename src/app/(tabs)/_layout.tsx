@@ -4,7 +4,7 @@ import { createMaterialTopTabNavigator } from "@react-navigation/material-top-ta
 import { Ionicons } from "@expo/vector-icons";
 import { ActivityIndicator, AppState, Image, Platform, View } from "react-native";
 import { TabSwipeProvider, useTabSwipe } from "@/contexts/TabSwipeContext";
-import { ALL_ACHIEVEMENTS, getAutomaticAchievementIds, useAuthStore, useMemberStore } from "@/lib/store";
+import { ALL_ACHIEVEMENTS, DEFAULT_SQUADRON, getAccessibleSquadrons, getAutomaticAchievementIds, normalizeSquadron, useAuthStore, useMemberStore } from "@/lib/store";
 import { getThemeCardStyle, useAppTheme } from "@/lib/theme";
 import {
   flushOfflineQueue,
@@ -35,8 +35,15 @@ const slugify = (value: string) =>
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 
-const buildLegacyRosterId = (member: { rank: string; firstName: string; lastName: string; flight: string }) =>
-  `roster-${slugify(`${member.rank}-${member.lastName}-${member.firstName}-${member.flight}`)}`;
+const buildLegacyRosterId = (
+  member: { rank: string; firstName: string; lastName: string; flight: string; squadron?: string },
+  includeSquadron = false
+) =>
+  `roster-${slugify(
+    includeSquadron && member.squadron
+      ? `${member.squadron}-${member.rank}-${member.lastName}-${member.firstName}-${member.flight}`
+      : `${member.rank}-${member.lastName}-${member.firstName}-${member.flight}`
+  )}`;
 
 const LIVE_SYNC_INTERVAL_MS = 2 * 60_000;
 const FULL_SYNC_INTERVAL_MS = 10 * 60_000;
@@ -84,7 +91,7 @@ function TabsInner() {
   const previousRecentAchievementIdRef = useRef<string | null>(null);
   const userId = user?.id ?? null;
   const userEmail = user?.email?.trim().toLowerCase() ?? null;
-  const userSquadron = user?.squadron ?? 'Hawks';
+  const userSquadron = normalizeSquadron(user?.squadron, DEFAULT_SQUADRON);
   const userFirstName = user?.firstName?.trim().toLowerCase() ?? '';
   const userLastName = user?.lastName?.trim().toLowerCase() ?? '';
   const hasUser = Boolean(user);
@@ -121,8 +128,12 @@ function TabsInner() {
 
     rosterMembers.forEach((member) => {
       const legacyRosterId = buildLegacyRosterId(member);
+      const scopedLegacyRosterId = buildLegacyRosterId(member, true);
       if (legacyRosterId !== member.id) {
         idMap.set(legacyRosterId, member.id);
+      }
+      if (scopedLegacyRosterId !== member.id) {
+        idMap.set(scopedLegacyRosterId, member.id);
       }
     });
 
@@ -263,41 +274,45 @@ function TabsInner() {
       try {
         pruneOldWorkoutMedia(getMonthKey());
         const squadron = userSquadron;
-        const [
-          rosterMembers,
-          approvedManualWorkouts,
-          pfraRecords,
-          attendanceSessions,
-          sharedWorkouts,
-          scheduledSessions,
-          trophyRows,
-        ] = await Promise.all([
-          includeStaticData
-            ? fetchRosterMembers(accessToken ?? undefined, squadron)
-            : Promise.resolve(useMemberStore.getState().members),
-          includeStaticData
-            ? fetchApprovedManualWorkouts(accessToken ?? undefined, squadron, { includeProofImage: false }).catch(() => [])
-            : Promise.resolve(
-                useMemberStore.getState().members.map((member) => ({
-                  memberId: member.id,
-                  memberEmail: member.email,
-                  workouts: member.workouts.filter((workout) => workout.source === 'manual' && Boolean(workout.externalId)),
-                }))
-              ),
-          includeStaticData
-            ? fetchPFRARecords(accessToken ?? undefined, squadron).catch(() => [])
-            : Promise.resolve(
-                useMemberStore.getState().members.map((member) => ({
-                  memberId: member.id,
-                  memberEmail: member.email,
-                  assessments: member.fitnessAssessments,
-                }))
-              ),
-          fetchAttendanceSessions(accessToken ?? undefined).catch(() => []),
-          fetchSharedWorkouts(accessToken ?? undefined, squadron).catch(() => []),
-          fetchScheduledPTSessions(accessToken ?? undefined, squadron).catch(() => []),
-          fetchMemberTrophies(accessToken ?? undefined, squadron, true).catch(() => []),
-        ]);
+        const syncSquadrons = getAccessibleSquadrons(squadron);
+        const localStore = useMemberStore.getState();
+        const squadronPayloads = await Promise.all(
+          syncSquadrons.map(async (syncSquadron) => ({
+            squadron: syncSquadron,
+            rosterMembers: includeStaticData
+              ? await fetchRosterMembers(accessToken ?? undefined, syncSquadron).catch(() => [])
+              : localStore.members.filter((member) => member.squadron === syncSquadron),
+            approvedManualWorkouts: includeStaticData
+              ? await fetchApprovedManualWorkouts(accessToken ?? undefined, syncSquadron, { includeProofImage: false }).catch(() => [])
+              : localStore.members
+                  .filter((member) => member.squadron === syncSquadron)
+                  .map((member) => ({
+                    memberId: member.id,
+                    memberEmail: member.email,
+                    workouts: member.workouts.filter((workout) => workout.source === 'manual' && Boolean(workout.externalId)),
+                  })),
+            pfraRecords: includeStaticData
+              ? await fetchPFRARecords(accessToken ?? undefined, syncSquadron).catch(() => [])
+              : localStore.members
+                  .filter((member) => member.squadron === syncSquadron)
+                  .map((member) => ({
+                    memberId: member.id,
+                    memberEmail: member.email,
+                    assessments: member.fitnessAssessments,
+                  })),
+            attendanceSessions: await fetchAttendanceSessions(accessToken ?? undefined, syncSquadron).catch(() => []),
+            sharedWorkouts: await fetchSharedWorkouts(accessToken ?? undefined, syncSquadron).catch(() => []),
+            scheduledSessions: await fetchScheduledPTSessions(accessToken ?? undefined, syncSquadron).catch(() => []),
+            trophyRows: await fetchMemberTrophies(accessToken ?? undefined, syncSquadron, true).catch(() => []),
+          }))
+        );
+        const rosterMembers = squadronPayloads.flatMap((payload) => payload.rosterMembers);
+        const approvedManualWorkouts = squadronPayloads.flatMap((payload) => payload.approvedManualWorkouts);
+        const pfraRecords = squadronPayloads.flatMap((payload) => payload.pfraRecords);
+        const attendanceSessions = squadronPayloads.flatMap((payload) => payload.attendanceSessions);
+        const sharedWorkouts = squadronPayloads.flatMap((payload) => payload.sharedWorkouts);
+        const scheduledSessions = squadronPayloads.flatMap((payload) => payload.scheduledSessions);
+        const trophyRows = squadronPayloads.flatMap((payload) => payload.trophyRows);
         if (isCancelled) {
           return;
         }
@@ -421,7 +436,12 @@ function TabsInner() {
         let didSyncMemberData = false;
 
         if (lastRosterSyncKeyRef.current !== rosterSyncKey) {
-          syncMembersFromRoster(normalizedRosterMembers);
+          syncSquadrons.forEach((syncSquadron) => {
+            syncMembersFromRoster(
+              normalizedRosterMembers.filter((member) => member.squadron === syncSquadron),
+              { squadron: syncSquadron }
+            );
+          });
           lastRosterSyncKeyRef.current = rosterSyncKey;
           didSyncMemberData = true;
         }

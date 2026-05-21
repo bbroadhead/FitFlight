@@ -12,7 +12,7 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import Svg, { Circle } from 'react-native-svg';
 import { format, startOfMonth, startOfWeek, addDays, endOfWeek } from 'date-fns';
-import { useMemberStore, useAuthStore, formatFlightDisplay, getDisplayName, type Flight, type PFRARecordType, type WorkoutType, WORKOUT_TYPES, PCS_OUTPRO_FLIGHT, shouldIncludeFlightInSquadronRollups } from '@/lib/store';
+import { useMemberStore, useAuthStore, CHILD_SQUADRONS, DEFAULT_SQUADRON, GROUP_SQUADRON, formatFlightDisplay, getDisplayName, getScopedSquadronLabel, normalizeSquadron, type Flight, type PFRARecordType, type WorkoutType, WORKOUT_TYPES, PCS_OUTPRO_FLIGHT, shouldIncludeFlightInSquadronRollups, type Squadron } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { fetchPFRABatchMembers, fetchPFRABatches, fetchWeeklyAttendanceExcusals, type PFRABatchMemberEntry, type PFRABatchSummary } from '@/lib/supabaseData';
@@ -113,6 +113,8 @@ function getAccountTypeLabel(accountType: string) {
     ? 'PFL'
     : accountType === 'squadron_leadership'
       ? 'Squadron Leadership'
+      : accountType === 'group_personnel'
+        ? 'Group Personnel'
       : accountType === 'demo'
         ? 'Demo Role'
         : accountType === 'ufpm'
@@ -249,18 +251,22 @@ export default function AnalyticsScreen() {
   const analyticsWideCardWidth = useDesktopAnalyticsGrid
     ? analyticsCardWidth * 2 + analyticsGridGap
     : 0;
-  const userSquadron = user?.squadron ?? 'Hawks';
+  const userSquadron = normalizeSquadron(user?.squadron, DEFAULT_SQUADRON);
+  const isGroupAnalytics = userSquadron === GROUP_SQUADRON;
+  const analyticsSquadrons: Squadron[] = isGroupAnalytics ? [...CHILD_SQUADRONS] : [userSquadron];
+  const analyticsScopeLabel = isGroupAnalytics ? 'Group' : getScopedSquadronLabel(userSquadron);
+  const analyticsHeaderTitle = isGroupAnalytics ? 'Group Analytics' : 'Squadron Analytics';
   const members = useMemo(
-    () => allMembers.filter((member) => member.squadron === userSquadron),
-    [allMembers, userSquadron]
+    () => allMembers.filter((member) => analyticsSquadrons.includes(member.squadron)),
+    [allMembers, analyticsSquadrons]
   );
   const activeMembers = useMemo(
     () => members.filter((member) => shouldIncludeFlightInSquadronRollups(member.flight)),
     [members]
   );
   const ptSessions = useMemo(
-    () => allPtSessions.filter((session) => (session.squadron ?? 'Hawks') === userSquadron),
-    [allPtSessions, userSquadron]
+    () => allPtSessions.filter((session) => analyticsSquadrons.includes(session.squadron ?? DEFAULT_SQUADRON)),
+    [allPtSessions, analyticsSquadrons]
   );
   const availableMonthKeys = useMemo(
     () => getAvailableMonthKeys(activeMembers, ptSessions),
@@ -288,7 +294,7 @@ export default function AnalyticsScreen() {
     setSelectedMonthKey(nextMonthKey);
   };
 
-  const toggleFlightBreakdown = (flight: Flight) => {
+  const toggleFlightBreakdown = (flight: Flight | Squadron | string) => {
     Haptics.selectionAsync();
     setExpandedFlights((current) =>
       current.includes(flight)
@@ -329,20 +335,24 @@ export default function AnalyticsScreen() {
 
     const weekStart = format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd');
     let isCancelled = false;
-    void fetchWeeklyAttendanceExcusals({
-      weekStart,
-      squadron: userSquadron,
-      accessToken,
-    }).then((entries) => {
+    void Promise.all(
+      analyticsSquadrons.map((squadron) =>
+        fetchWeeklyAttendanceExcusals({
+          weekStart,
+          squadron,
+          accessToken,
+        }).catch(() => [])
+      )
+    ).then((entryGroups) => {
       if (!isCancelled) {
-        setWeeklyExcusedMemberIds(entries.map((entry) => entry.memberId));
+        setWeeklyExcusedMemberIds(entryGroups.flat().map((entry) => entry.memberId));
       }
     }).catch(() => undefined);
 
     return () => {
       isCancelled = true;
     };
-  }, [accessToken, userSquadron]);
+  }, [accessToken, analyticsSquadrons]);
 
   const navigateWeek = (direction: 'prev' | 'next') => {
     const nextWeekStart = addDays(selectedWeekStart, direction === 'next' ? 7 : -7);
@@ -521,6 +531,7 @@ export default function AnalyticsScreen() {
       const rawFlightMembers = members.filter((member) => member.flight === flight);
       const activeFlightMembers = activeMembers.filter((member) => member.flight === flight);
       const flightSessions = periodSessions.filter((session) => session.flight === flight);
+      const attendedThisWeek = activeFlightMembers.reduce((sum, member) => sum + getMemberWeeklyAttendance(member.id), 0);
       const excusedMemberCount = activeFlightMembers.filter((member) => weeklyExcusedMemberIds.includes(member.id)).length;
       const eligibleMembers = Math.max(activeFlightMembers.length - excusedMemberCount, 0);
       const compliantMembers = activeFlightMembers.filter((member) => (
@@ -564,11 +575,52 @@ export default function AnalyticsScreen() {
         totalMiles: Number(flightMembers.reduce((sum, member) => sum + member.periodMiles, 0).toFixed(2)),
         avgAttendance: Math.round(avgAttendance * 10) / 10,
         sessions: flightSessions.length,
+        attendedThisWeek,
+        excusedThisWeek: excusedMemberCount,
         weeklyCompliancePercent: eligibleMembers > 0 ? Math.round((compliantMembers / eligibleMembers) * 100) : 0,
         monthCompliancePercent: monthEligibleWeeks > 0 ? Math.round((monthCompliantWeeks / monthEligibleWeeks) * 100) : 0,
         compliantMembers,
         eligibleMembers,
         members: trackedFlightMembers,
+      };
+    });
+
+    const squadronStats = analyticsSquadrons.map((squadron) => {
+      const squadronMembers = memberPeriodSummaries.filter((member) => {
+        const sourceMember = members.find((entry) => entry.id === member.id);
+        return sourceMember?.squadron === squadron;
+      });
+      const rawSquadronMembers = members.filter((member) => member.squadron === squadron);
+      const activeSquadronMembers = activeMembers.filter((member) => member.squadron === squadron);
+      const squadronSessions = periodSessions.filter((session) => (session.squadron ?? DEFAULT_SQUADRON) === squadron);
+      const attendedThisWeek = activeSquadronMembers.reduce((sum, member) => sum + getMemberWeeklyAttendance(member.id), 0);
+      const excusedMemberCount = activeSquadronMembers.filter((member) => weeklyExcusedMemberIds.includes(member.id)).length;
+      const eligibleMembers = Math.max(activeSquadronMembers.length - excusedMemberCount, 0);
+      const compliantMembers = activeSquadronMembers.filter((member) => (
+        !weeklyExcusedMemberIds.includes(member.id) &&
+        getMemberWeeklyAttendance(member.id) >= getMemberWeeklyRequiredSessions(member.id)
+      )).length;
+      const avgAttendance = squadronSessions.length > 0
+        ? squadronSessions.reduce((sum, session) => sum + Object.values(session.attendeeSources ?? {}).filter((source) => source && source !== 'excused').length, 0) / squadronSessions.length
+        : 0;
+      const monthComplianceEntries = activeSquadronMembers.map((member) => getMemberMonthlyCompliance(member.id));
+      const monthEligibleWeeks = monthComplianceEntries.reduce((sum, entry) => sum + entry.eligibleWeeks, 0);
+      const monthCompliantWeeks = monthComplianceEntries.reduce((sum, entry) => sum + entry.compliantWeeks, 0);
+
+      return {
+        squadron,
+        memberCount: rawSquadronMembers.length,
+        totalMinutes: squadronMembers.reduce((sum, member) => sum + member.periodMinutes, 0),
+        totalMiles: Number(squadronMembers.reduce((sum, member) => sum + member.periodMiles, 0).toFixed(2)),
+        sessions: squadronSessions.length,
+        attendedThisWeek,
+        excusedThisWeek: excusedMemberCount,
+        avgAttendance: Math.round(avgAttendance * 10) / 10,
+        weeklyCompliancePercent: eligibleMembers > 0 ? Math.round((compliantMembers / eligibleMembers) * 100) : 0,
+        monthCompliancePercent: monthEligibleWeeks > 0 ? Math.round((monthCompliantWeeks / monthEligibleWeeks) * 100) : 0,
+        compliantMembers,
+        eligibleMembers,
+        members: squadronMembers,
       };
     });
 
@@ -751,6 +803,7 @@ export default function AnalyticsScreen() {
       recentPFRABatches: pfraBatchesForFilter.slice(0, 5),
       latestSelectedBatch,
       flightStats,
+      squadronStats,
       avgPFRAScore: Math.round(avgPFRAScore * 10) / 10,
       membersWithFA: membersWithFA.size,
       workoutTypeBreakdown,
@@ -762,16 +815,22 @@ export default function AnalyticsScreen() {
     };
   }, [activeMonthKey, analyticsView, availableMonthKeys, members, pfraBatches, ptSessions, selectedPFRARecordType, selectedWeekStart, weeklyExcusedMemberIds]);
 
+  const breakdownLabel = isGroupAnalytics ? 'Squadron Breakdown' : 'Flight Breakdown';
+  const breakdownStats = isGroupAnalytics ? analytics.squadronStats : analytics.flightStats;
+  const analyticsEntityName = isGroupAnalytics ? 'Knights' : userSquadron;
+
   const buildPdfHtml = () => {
     const generatedAt = new Date().toLocaleString();
-    const flightRows = analytics.flightStats.map((flight) => `
+    const breakdownRows = breakdownStats.map((unit) => `
       <tr>
-        <td>${flight.flight}</td>
-        <td>${flight.memberCount}</td>
-        <td>${flight.sessions}</td>
-        <td>${flight.avgAttendance}</td>
-        <td>${flight.totalMinutes}</td>
-        <td>${flight.totalMiles.toFixed(2)}</td>
+        <td>${isGroupAnalytics ? (unit as typeof analytics.squadronStats[number]).squadron : formatFlightDisplay((unit as typeof analytics.flightStats[number]).flight)}</td>
+        <td>${unit.memberCount}</td>
+        <td>${unit.sessions}</td>
+        <td>${unit.attendedThisWeek}</td>
+        <td>${unit.excusedThisWeek}</td>
+        <td>${unit.avgAttendance}</td>
+        <td>${unit.totalMinutes}</td>
+        <td>${unit.totalMiles.toFixed(2)}</td>
       </tr>
     `).join('');
 
@@ -804,7 +863,7 @@ export default function AnalyticsScreen() {
         </head>
         <body>
           <div class="shell">
-            <h1>${userSquadron} Squadron Analytics</h1>
+            <h1>${analyticsEntityName} ${analyticsScopeLabel} Analytics</h1>
             <div class="subtitle">Generated ${generatedAt}${user ? ` by ${getDisplayName(user)}` : ''} for ${analytics.timeframeLabel}</div>
             <div class="grid">
               <div class="card"><div class="label">Members</div><div class="value">${analytics.totalMembers}</div></div>
@@ -812,16 +871,17 @@ export default function AnalyticsScreen() {
               <div class="card"><div class="label">PT Sessions Logged</div><div class="value">${analytics.totalSessions}</div></div>
               <div class="card"><div class="label">Avg PFRA</div><div class="value">${analytics.avgPFRAScore}</div></div>
               <div class="card"><div class="label">Logged PFRAs</div><div class="value">${analytics.pfraTotalCount}</div></div>
-              <div class="card"><div class="label">Attendance This Week</div><div class="value">${analytics.totalAttendanceMarksThisWeek}</div></div>
+              <div class="card"><div class="label">Attended This Week</div><div class="value">${analytics.totalAttendanceMarksThisWeek}</div></div>
+              <div class="card"><div class="label">Excused This Week</div><div class="value">${analytics.excusedThisWeekCount}</div></div>
               <div class="card"><div class="label">Weekly Compliance</div><div class="value">${analytics.membersMeetingWeeklyTarget - analytics.excusedThisWeekCount}/${analytics.weeklyComplianceEligibleMembers} (${analytics.weeklyCompliancePercent}%)</div></div>
             </div>
             <div class="section">
-              <h2>Flight Breakdown</h2>
+              <h2>${breakdownLabel}</h2>
               <table>
                 <thead>
-                  <tr><th>Flight</th><th>Members</th><th>Sessions</th><th>Avg Attend</th><th>Minutes</th><th>Miles</th></tr>
+                  <tr><th>${isGroupAnalytics ? 'Squadron' : 'Flight'}</th><th>Members</th><th>Sessions</th><th>Attended</th><th>Excused</th><th>Avg Attend</th><th>Minutes</th><th>Miles</th></tr>
                 </thead>
-                <tbody>${flightRows}</tbody>
+                <tbody>${breakdownRows}</tbody>
               </table>
             </div>
           </div>
@@ -841,7 +901,7 @@ export default function AnalyticsScreen() {
       { header: 'Value', key: 'value', width: 22 },
     ];
     overviewSheet.addRows([
-      { metric: 'Squadron', value: userSquadron },
+      { metric: analyticsScopeLabel, value: analyticsEntityName },
       { metric: 'Total Members', value: analytics.totalMembers },
       { metric: 'Total PFLs', value: analytics.totalPFLs },
       { metric: 'Report View', value: formatAnalyticsViewLabel(analyticsView) },
@@ -850,7 +910,8 @@ export default function AnalyticsScreen() {
       { metric: 'Total PT Sessions Logged', value: analytics.totalSessions },
       { metric: 'Total Minutes', value: analytics.totalMinutes },
       { metric: 'Total Miles', value: analytics.totalMiles },
-      { metric: 'Attendance Marks This Week', value: analytics.totalAttendanceMarksThisWeek },
+      { metric: 'Attended This Week', value: analytics.totalAttendanceMarksThisWeek },
+      { metric: 'Excused This Week', value: analytics.excusedThisWeekCount },
       { metric: 'Weekly Compliance This Week', value: `${analytics.membersMeetingWeeklyTarget - analytics.excusedThisWeekCount}/${analytics.weeklyComplianceEligibleMembers}` },
       { metric: 'Weekly Compliance %', value: analytics.weeklyCompliancePercent },
       { metric: 'Average PFRA', value: analytics.avgPFRAScore },
@@ -869,7 +930,8 @@ export default function AnalyticsScreen() {
       { header: 'Minutes', key: 'minutes', width: 12 },
       { header: 'Miles', key: 'miles', width: 12 },
       { header: 'Workouts', key: 'workouts', width: 12 },
-      { header: 'Attendance This Week', key: 'attendance', width: 18 },
+      { header: 'Attended This Week', key: 'attendance', width: 18 },
+      { header: 'Excused This Week', key: 'excused', width: 18 },
       { header: 'Latest PFRA', key: 'pfra', width: 14 },
     ];
     analytics.memberPeriodSummaries.forEach((memberSummary) => {
@@ -888,20 +950,34 @@ export default function AnalyticsScreen() {
         miles: memberSummary.periodMiles,
         workouts: memberSummary.periodWorkoutCount,
         attendance: memberSummary.attendance,
+        excused: memberSummary.isExcused ? 'Yes' : '',
         pfra: latestPFRA?.overallScore ?? '',
       });
     });
 
-    const flightsSheet = workbook.addWorksheet('Flights');
+    const flightsSheet = workbook.addWorksheet(isGroupAnalytics ? 'Squadrons' : 'Flights');
     flightsSheet.columns = [
-      { header: 'Flight', key: 'flight', width: 12 },
+      { header: isGroupAnalytics ? 'Squadron' : 'Flight', key: 'label', width: 16 },
       { header: 'Members', key: 'memberCount', width: 12 },
       { header: 'Sessions', key: 'sessions', width: 12 },
+      { header: 'Attended', key: 'attendedThisWeek', width: 12 },
+      { header: 'Excused', key: 'excusedThisWeek', width: 12 },
       { header: 'Avg Attendance', key: 'avgAttendance', width: 16 },
       { header: 'Minutes', key: 'totalMinutes', width: 12 },
       { header: 'Miles', key: 'totalMiles', width: 12 },
     ];
-    analytics.flightStats.forEach((flight) => flightsSheet.addRow(flight));
+    breakdownStats.forEach((unit) =>
+      flightsSheet.addRow({
+        label: isGroupAnalytics ? (unit as typeof analytics.squadronStats[number]).squadron : formatFlightDisplay((unit as typeof analytics.flightStats[number]).flight),
+        memberCount: unit.memberCount,
+        sessions: unit.sessions,
+        attendedThisWeek: unit.attendedThisWeek,
+        excusedThisWeek: unit.excusedThisWeek,
+        avgAttendance: unit.avgAttendance,
+        totalMinutes: unit.totalMinutes,
+        totalMiles: unit.totalMiles,
+      })
+    );
 
     const workoutsSheet = workbook.addWorksheet('Workout Details');
     workoutsSheet.columns = [
@@ -1120,7 +1196,7 @@ export default function AnalyticsScreen() {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
       const buffer = await buildWorkbook();
-      const filename = `squadron_analytics_${new Date().toISOString().split('T')[0]}.xlsx`;
+      const filename = `${isGroupAnalytics ? 'group' : 'squadron'}_analytics_${new Date().toISOString().split('T')[0]}.xlsx`;
 
       if (Platform.OS === 'web') {
         await downloadWebFile(
@@ -1139,7 +1215,7 @@ export default function AnalyticsScreen() {
         if (await Sharing.isAvailableAsync()) {
           await Sharing.shareAsync(filePath, {
             mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            dialogTitle: 'Export Squadron Analytics Excel',
+            dialogTitle: `Export ${analyticsHeaderTitle} Excel`,
           });
         }
       }
@@ -1194,7 +1270,7 @@ export default function AnalyticsScreen() {
       setIsExporting(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       const html = buildPdfHtml();
-      const filename = `squadron_analytics_${new Date().toISOString().split('T')[0]}.pdf`;
+      const filename = `${isGroupAnalytics ? 'group' : 'squadron'}_analytics_${new Date().toISOString().split('T')[0]}.pdf`;
 
       if (Platform.OS === 'web') {
         const printWindow = window.open('', '_blank');
@@ -1215,7 +1291,7 @@ export default function AnalyticsScreen() {
         if (await Sharing.isAvailableAsync()) {
           await Sharing.shareAsync(targetPath, {
             mimeType: 'application/pdf',
-            dialogTitle: 'Export Squadron Analytics PDF',
+            dialogTitle: `Export ${analyticsHeaderTitle} PDF`,
           });
         }
       }
@@ -1315,7 +1391,7 @@ export default function AnalyticsScreen() {
             >
               <ChevronLeft size={24} color="#C0C0C0" />
             </Pressable>
-            <Text className="text-white text-xl font-bold">Squadron Analytics</Text>
+            <Text className="text-white text-xl font-bold">{analyticsHeaderTitle}</Text>
           </View>
         </Animated.View>
         </PageContainer>
@@ -1445,7 +1521,7 @@ export default function AnalyticsScreen() {
           >
             <View className="flex-row items-start justify-between mb-3">
               <View className="flex-1 pr-3">
-                <Text className="text-white font-semibold text-lg mb-1">Squadron Overview</Text>
+                <Text className="text-white font-semibold text-lg mb-1">{isGroupAnalytics ? 'Group Overview' : 'Squadron Overview'}</Text>
                 <Text className="text-af-silver text-xs">{analytics.timeframeLabel}</Text>
               </View>
             </View>
@@ -1491,10 +1567,14 @@ export default function AnalyticsScreen() {
               </View>
             </View>
             <View className="mt-3 pt-3 border-t border-white/10 flex-row items-center justify-between">
-              <Text className="text-af-silver text-xs">Attendance in selected week</Text>
+              <Text className="text-af-silver text-xs">Attended in selected week</Text>
               <Text className="text-white font-semibold text-sm">
                 {analytics.totalAttendanceMarksThisWeek} check-ins
               </Text>
+            </View>
+            <View className="mt-2 flex-row items-center justify-between">
+              <Text className="text-af-silver text-xs">Excused in selected week</Text>
+              <Text className="text-white font-semibold text-sm">{analytics.excusedThisWeekCount}</Text>
             </View>
             <View className="mt-2 flex-row items-center justify-between">
               <Text className="text-af-silver text-xs">Weekly Compliance</Text>
@@ -1502,12 +1582,6 @@ export default function AnalyticsScreen() {
                   {analytics.membersMeetingWeeklyTarget - analytics.excusedThisWeekCount}/{analytics.weeklyComplianceEligibleMembers} ({analytics.weeklyCompliancePercent}%)
                 </Text>
             </View>
-            {analytics.excusedThisWeekCount > 0 ? (
-              <View className="mt-2 flex-row items-center justify-between">
-                <Text className="text-af-silver text-xs">Excused this week</Text>
-                <Text className="text-white font-semibold text-sm">{analytics.excusedThisWeekCount}</Text>
-              </View>
-            ) : null}
             {expandedOverviewCard === 'workouts' && (
               <View className="mt-4 pt-4 border-t border-white/10">
                 <Text className="text-white font-semibold mb-3">Workout Details</Text>
@@ -1536,25 +1610,40 @@ export default function AnalyticsScreen() {
                 <Text className="text-white font-semibold mb-3">PT Session Details</Text>
                 <View className="flex-row justify-between mb-3">
                   <View>
-                    <Text className="text-af-silver text-xs">Attendance Marks in Selected Week</Text>
+                    <Text className="text-af-silver text-xs">Attended in Selected Week</Text>
                     <Text className="text-white font-semibold">{analytics.totalAttendanceMarksThisWeek}</Text>
                   </View>
                   <View className="items-end">
+                    <Text className="text-af-silver text-xs">Excused in Selected Week</Text>
+                    <Text className="text-white font-semibold">{analytics.excusedThisWeekCount}</Text>
+                  </View>
+                </View>
+                <View className="flex-row justify-between mb-3">
+                  <View>
                     <Text className="text-af-silver text-xs">Avg Attendance Per Session</Text>
                     <Text className="text-white font-semibold">
                       {analytics.totalSessions > 0 ? (analytics.totalAttendanceMarksThisWeek / Math.max(analytics.totalSessions, 1)).toFixed(1) : '0.0'}
                     </Text>
                   </View>
                 </View>
-                {analytics.flightStats.map((flight) => (
-                  <View key={flight.flight} className="flex-row items-center justify-between py-2 border-b border-white/5">
-                    <View>
-                      <Text className="text-white">{flight.flight}</Text>
-                      <Text className="text-af-silver text-xs">{flight.sessions} sessions</Text>
+                {breakdownStats.map((flight) => {
+                  const breakdownId = isGroupAnalytics
+                    ? (flight as typeof analytics.squadronStats[number]).squadron
+                    : (flight as typeof analytics.flightStats[number]).flight;
+                  return (
+                    <View key={breakdownId} className="flex-row items-center justify-between py-2 border-b border-white/5">
+                      <View>
+                        <Text className="text-white">
+                          {isGroupAnalytics
+                            ? (flight as typeof analytics.squadronStats[number]).squadron
+                            : formatFlightDisplay((flight as typeof analytics.flightStats[number]).flight)}
+                        </Text>
+                        <Text className="text-af-silver text-xs">{flight.sessions} sessions</Text>
+                      </View>
+                      <Text className="text-white font-semibold">{flight.attendedThisWeek} attended / {flight.excusedThisWeek} excused</Text>
                     </View>
-                    <Text className="text-white font-semibold">{flight.avgAttendance} avg attend</Text>
-                  </View>
-                ))}
+                  );
+                })}
               </View>
             )}
             {expandedOverviewCard === 'pfra' && (
@@ -1628,7 +1717,7 @@ export default function AnalyticsScreen() {
               </View>
             </View>
             <View className="mt-3 pt-3 border-t border-white/10 flex-row items-center justify-between">
-              <Text className="text-af-silver text-xs">Avg attendance per member in selected week</Text>
+              <Text className="text-af-silver text-xs">Avg attended check-ins per member in selected week</Text>
               <Text className="text-white font-semibold text-sm">
                 {analytics.averageWeeklyAttendance.toFixed(1)}/{analytics.averageWeeklyRequiredSessions.toFixed(1)}
               </Text>
@@ -1804,94 +1893,107 @@ export default function AnalyticsScreen() {
             className={useDesktopAnalyticsGrid ? '' : 'mt-4'}
             style={useDesktopAnalyticsGrid ? { width: '100%' } : undefined}
           >
-            <Text className="text-white font-semibold text-lg mb-3">Flight Breakdown</Text>
-            {analytics.flightStats.map((flight) => (
-              <Pressable
-                key={flight.flight}
-                onPress={() => toggleFlightBreakdown(flight.flight)}
-                className="bg-white/5 rounded-xl p-4 mb-2 border border-white/10"
-              >
-                <View className="flex-row items-center justify-between mb-2">
-                  <View>
-                    <Text className="text-white font-semibold">{formatFlightDisplay(flight.flight)}</Text>
-                    <Text className="text-af-silver text-sm">{flight.memberCount} members</Text>
+            <Text className="text-white font-semibold text-lg mb-3">{breakdownLabel}</Text>
+            {breakdownStats.map((flight) => {
+              const breakdownId = isGroupAnalytics
+                ? (flight as typeof analytics.squadronStats[number]).squadron
+                : (flight as typeof analytics.flightStats[number]).flight;
+              return (
+                <Pressable
+                  key={breakdownId}
+                  onPress={() => toggleFlightBreakdown(breakdownId)}
+                  className="bg-white/5 rounded-xl p-4 mb-2 border border-white/10"
+                >
+                  <View className="flex-row items-center justify-between mb-2">
+                    <View>
+                      <Text className="text-white font-semibold">
+                        {isGroupAnalytics
+                          ? (flight as typeof analytics.squadronStats[number]).squadron
+                          : formatFlightDisplay((flight as typeof analytics.flightStats[number]).flight)}
+                      </Text>
+                      <Text className="text-af-silver text-sm">{flight.memberCount} members</Text>
+                    </View>
+                    <View className="flex-row items-center">
+                      {analyticsView !== 'all_time' ? (
+                        <View className="mr-3">
+                          <ComplianceCircle
+                            percent={analyticsView === 'month' ? flight.monthCompliancePercent : flight.weeklyCompliancePercent}
+                            size={46}
+                            strokeWidth={5}
+                            label={analyticsView === 'month' ? 'Monthly' : 'Weekly'}
+                          />
+                        </View>
+                      ) : null}
+                      {expandedFlights.includes(breakdownId) ? <ChevronUp size={18} color="#C0C0C0" /> : <ChevronDown size={18} color="#C0C0C0" />}
+                    </View>
                   </View>
-                  <View className="flex-row items-center">
-                    {analyticsView !== 'all_time' ? (
-                      <View className="mr-3">
-                        <ComplianceCircle
-                          percent={analyticsView === 'month' ? flight.monthCompliancePercent : flight.weeklyCompliancePercent}
-                          size={46}
-                          strokeWidth={5}
-                          label={analyticsView === 'month' ? 'Monthly' : 'Weekly'}
-                        />
-                      </View>
-                    ) : null}
-                    {expandedFlights.includes(flight.flight) ? <ChevronUp size={18} color="#C0C0C0" /> : <ChevronDown size={18} color="#C0C0C0" />}
+                  <View className="flex-row items-center justify-between">
+                    <View className="flex-1">
+                      <Text className="text-af-silver text-xs">Minutes</Text>
+                      <Text className="text-white font-semibold">{flight.totalMinutes}</Text>
+                    </View>
+                    <View className="flex-1">
+                      <Text className="text-af-silver text-xs">Miles</Text>
+                      <Text className="text-white font-semibold">{flight.totalMiles.toFixed(2)}</Text>
+                    </View>
+                    <View className="flex-1">
+                      <Text className="text-af-silver text-xs">Sessions</Text>
+                      <Text className="text-white font-semibold">{flight.sessions}</Text>
+                    </View>
+                    <View className="flex-1">
+                      <Text className="text-af-silver text-xs">Attended</Text>
+                      <Text className="text-white font-semibold">{flight.attendedThisWeek}</Text>
+                    </View>
                   </View>
-                </View>
-                <View className="flex-row items-center justify-between">
-                  <View className="flex-1">
-                    <Text className="text-af-silver text-xs">Minutes</Text>
-                    <Text className="text-white font-semibold">{flight.totalMinutes}</Text>
+                  <View className="mt-2 flex-row items-center justify-between">
+                    <Text className="text-af-silver text-xs">Excused in selected week</Text>
+                    <Text className="text-white font-semibold">{flight.excusedThisWeek}</Text>
                   </View>
-                  <View className="flex-1">
-                    <Text className="text-af-silver text-xs">Miles</Text>
-                    <Text className="text-white font-semibold">{flight.totalMiles.toFixed(2)}</Text>
-                  </View>
-                  <View className="flex-1">
-                    <Text className="text-af-silver text-xs">Sessions</Text>
-                    <Text className="text-white font-semibold">{flight.sessions}</Text>
-                  </View>
-                  <View className="flex-1">
-                    <Text className="text-af-silver text-xs">Avg Attend</Text>
-                    <Text className="text-white font-semibold">{flight.avgAttendance}</Text>
-                  </View>
-                </View>
-                {expandedFlights.includes(flight.flight) ? (
-                  <View className="mt-4 border-t border-white/10 pt-4">
-                    {flight.members.length === 0 ? (
-                      <Text className="text-af-silver text-sm">No member activity recorded in this view yet.</Text>
-                    ) : (
-                      flight.members.map((member) => (
-                        <View key={member.id} className="mb-3 rounded-xl border border-white/10 bg-black/10 p-3 last:mb-0">
-                          <View className="flex-row items-center justify-between">
-                            <View className="flex-1 pr-3">
-                              <Text className="text-white font-semibold">{member.displayName}</Text>
-                              <View className="mt-1 flex-row flex-wrap items-center" style={{ gap: 8 }}>
-                                <Text className="text-af-silver text-xs">{formatFlightDisplay(member.flight)}</Text>
-                                {(() => {
-                                  const sourceMember = members.find((entry) => entry.id === member.id);
-                                  const roleLabel = sourceMember ? getAccountTypeLabel(sourceMember.accountType) : '';
-                                  return roleLabel && roleLabel !== 'standard' ? (
-                                    <View className="rounded-full border border-white/15 bg-white/10 px-2.5 py-1">
-                                      <Text className="text-af-silver text-[10px] font-semibold">{roleLabel}</Text>
-                                    </View>
-                                  ) : null;
-                                })()}
+                  {expandedFlights.includes(breakdownId) ? (
+                    <View className="mt-4 border-t border-white/10 pt-4">
+                      {flight.members.length === 0 ? (
+                        <Text className="text-af-silver text-sm">No member activity recorded in this view yet.</Text>
+                      ) : (
+                        flight.members.map((member) => (
+                          <View key={member.id} className="mb-3 rounded-xl border border-white/10 bg-black/10 p-3 last:mb-0">
+                            <View className="flex-row items-center justify-between">
+                              <View className="flex-1 pr-3">
+                                <Text className="text-white font-semibold">{member.displayName}</Text>
+                                <View className="mt-1 flex-row flex-wrap items-center" style={{ gap: 8 }}>
+                                  <Text className="text-af-silver text-xs">{formatFlightDisplay(member.flight)}</Text>
+                                  {(() => {
+                                    const sourceMember = members.find((entry) => entry.id === member.id);
+                                    const roleLabel = sourceMember ? getAccountTypeLabel(sourceMember.accountType) : '';
+                                    return roleLabel && roleLabel !== 'standard' ? (
+                                      <View className="rounded-full border border-white/15 bg-white/10 px-2.5 py-1">
+                                        <Text className="text-af-silver text-[10px] font-semibold">{roleLabel}</Text>
+                                      </View>
+                                    ) : null;
+                                  })()}
+                                </View>
+                              </View>
+                              <View className="items-end">
+                                <Text className="text-white text-sm font-semibold">{member.periodWorkoutCount} workouts</Text>
+                                <Text className="text-af-silver text-xs">{member.periodMinutes} min / {member.periodMiles.toFixed(2)} mi</Text>
                               </View>
                             </View>
-                            <View className="items-end">
-                              <Text className="text-white text-sm font-semibold">{member.periodWorkoutCount} workouts</Text>
-                              <Text className="text-af-silver text-xs">{member.periodMinutes} min • {member.periodMiles.toFixed(2)} mi</Text>
-                            </View>
+                            {analyticsView === 'week' ? (
+                              <Text className="mt-2 text-af-silver text-xs">
+                                {member.isExcused ? 'Excused for the selected week' : `${member.attendance}/${member.weeklyRequired} attendance for the selected week`}
+                              </Text>
+                            ) : analyticsView === 'month' ? (
+                              <Text className="mt-2 text-af-silver text-xs">
+                                Month Compliance: {member.monthCompliance.percent}% ({member.monthCompliance.compliantWeeks}/{member.monthCompliance.eligibleWeeks} eligible weeks)
+                              </Text>
+                            ) : null}
                           </View>
-                          {analyticsView === 'week' ? (
-                            <Text className="mt-2 text-af-silver text-xs">
-                              {member.isExcused ? 'Excused for the selected week' : `${member.attendance}/${member.weeklyRequired} attendance for the selected week`}
-                            </Text>
-                          ) : analyticsView === 'month' ? (
-                            <Text className="mt-2 text-af-silver text-xs">
-                              Month Compliance: {member.monthCompliance.percent}% ({member.monthCompliance.compliantWeeks}/{member.monthCompliance.eligibleWeeks} eligible weeks)
-                            </Text>
-                          ) : null}
-                        </View>
-                      ))
-                    )}
-                  </View>
-                ) : null}
-              </Pressable>
-            ))}
+                        ))
+                      )}
+                    </View>
+                  ) : null}
+                </Pressable>
+              );
+            })}
           </Animated.View>
           </View>
           </PageContainer>

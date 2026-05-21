@@ -9,7 +9,7 @@ import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { ThemeChrome } from '@/components/ThemeChrome';
 import { ThemeBackdrop } from '@/components/ThemeBackdrop';
-import { useAuthStore, useMemberStore, type AccountType, type Flight, type Member, type Squadron, type User as UserType, RANK_GROUPS, getDisplayName, SQUADRONS } from '@/lib/store';
+import { useAuthStore, useMemberStore, type AccountType, type Flight, type Member, type Squadron, type User as UserType, DEFAULT_SQUADRON, normalizeSquadron, RANK_GROUPS, getDisplayName, SQUADRONS } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { trackAnalyticsEvent } from '@/lib/googleAnalytics';
 import { getThemeBodyStyle, getThemeButtonStyle, getThemeButtonTextStyle, getThemeCardStyle, getThemeControlStyle, getThemeHeadingStyle, getThemeInputContainerStyle, useAppTheme } from '@/lib/theme';
@@ -160,7 +160,7 @@ async function sendPtlRequestNotifications(params: {
   const rosterMembers = await fetchRosterMembers(params.accessToken, params.requester.squadron).catch(() => []);
   const recipients = rosterMembers.filter((member) =>
     member.email.toLowerCase() !== params.requester.email.toLowerCase() &&
-    ['fitflight_creator', 'ufpm', 'squadron_leadership'].includes(member.accountType)
+    ['fitflight_creator', 'ufpm', 'squadron_leadership', 'group_personnel'].includes(member.accountType)
   );
 
   await Promise.all(
@@ -206,7 +206,7 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [selectedFlight, setSelectedFlight] = useState<Flight>('Apex');
-  const [selectedSquadron, setSelectedSquadron] = useState<Squadron>('Hawks');
+  const [selectedSquadron, setSelectedSquadron] = useState<Squadron>(DEFAULT_SQUADRON);
   const [selectedRank, setSelectedRank] = useState('A1C');
   const [wantsPTL, setWantsPTL] = useState(false);
   const [stayLoggedIn, setStayLoggedIn] = useState(true);
@@ -251,7 +251,7 @@ export default function LoginScreen() {
         const metadata = authUser.user_metadata ?? {};
         const normalizedEmail = (authUser.email ?? email).toLowerCase();
         const roleRecord = await fetchRoleForEmail(normalizedEmail, sessionFromHash.accessToken).catch(() => null);
-        const resolvedSquadron = (typeof metadata.squadron === 'string' ? metadata.squadron : 'Hawks') as Squadron;
+        const resolvedSquadron = normalizeSquadron(typeof metadata.squadron === 'string' ? metadata.squadron : null, DEFAULT_SQUADRON);
         const rosterMembers = await fetchRosterMembers(sessionFromHash.accessToken, resolvedSquadron).catch(() => []);
         const localExistingMember = findMatchingMember(members, {
           email: normalizedEmail,
@@ -285,7 +285,7 @@ export default function LoginScreen() {
               firstName: normalizedSpecialName.firstName,
               lastName: normalizedSpecialName.lastName,
               flight: (typeof metadata.flight === 'string' ? metadata.flight : 'Apex') as Flight,
-              squadron: (typeof metadata.squadron === 'string' ? metadata.squadron : 'Hawks') as Squadron,
+              squadron: normalizeSquadron(typeof metadata.squadron === 'string' ? metadata.squadron : null, DEFAULT_SQUADRON),
               accountType: roleRecord?.app_role ?? getInitialAccountType(
                 typeof metadata.firstName === 'string' ? metadata.firstName : 'Airman',
                 typeof metadata.lastName === 'string' ? metadata.lastName : 'Member'
@@ -319,7 +319,7 @@ export default function LoginScreen() {
           return matchesCurrentUser ? { ...rosterMember, id: authUser.id, email: normalizedEmail } : rosterMember;
         });
 
-        syncMembersFromRoster(normalizedRosterMembers);
+        syncMembersFromRoster(normalizedRosterMembers, { squadron: resolvedSquadron });
 
         const isPresentationDemoUser = normalizedEmail === DEMO_ACCOUNT_EMAIL;
 
@@ -431,7 +431,7 @@ export default function LoginScreen() {
       const metadata = response.user.user_metadata ?? {};
       const normalizedEmail = email.toLowerCase();
       const roleRecord = await fetchRoleForEmail(normalizedEmail, response.access_token).catch(() => null);
-      const resolvedSquadron = (typeof metadata.squadron === 'string' ? metadata.squadron : selectedSquadron) as Squadron;
+      const resolvedSquadron = normalizeSquadron(typeof metadata.squadron === 'string' ? metadata.squadron : null, selectedSquadron);
       const rosterMembers = await fetchRosterMembers(response.access_token, resolvedSquadron).catch(() => []);
       const localExistingMember = findMatchingMember(members, {
         email: normalizedEmail,
@@ -466,7 +466,7 @@ export default function LoginScreen() {
             firstName: normalizedSpecialName.firstName,
             lastName: normalizedSpecialName.lastName,
             flight: (typeof metadata.flight === 'string' ? metadata.flight : selectedFlight) as Flight,
-        squadron: (typeof metadata.squadron === 'string' ? metadata.squadron : selectedSquadron) as Squadron,
+        squadron: normalizeSquadron(typeof metadata.squadron === 'string' ? metadata.squadron : null, selectedSquadron),
             accountType: roleRecord?.app_role ?? getInitialAccountType(
               typeof metadata.firstName === 'string' ? metadata.firstName : 'Airman',
               typeof metadata.lastName === 'string' ? metadata.lastName : 'Member'
@@ -500,7 +500,7 @@ export default function LoginScreen() {
         return matchesCurrentUser ? { ...rosterMember, id: response.user.id, email: normalizedEmail } : rosterMember;
       });
 
-      syncMembersFromRoster(normalizedRosterMembers);
+      syncMembersFromRoster(normalizedRosterMembers, { squadron: resolvedSquadron });
 
       const isPresentationDemoUser = normalizedEmail === DEMO_ACCOUNT_EMAIL;
 

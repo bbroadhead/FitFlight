@@ -70,6 +70,18 @@ function normalizeWorkoutType(type: WorkoutType): WorkoutType {
   return type === 'Strength' ? 'Weightlifting' : type;
 }
 
+function formatMetricValue(value: number, suffix = '') {
+  if (!Number.isFinite(value)) {
+    return '--';
+  }
+
+  const formatted = value.toLocaleString('en-US', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
+  return suffix ? `${formatted} ${suffix}` : formatted;
+}
+
 function getWorkoutTypeLabel(type: WorkoutType) {
   return normalizeWorkoutType(type);
 }
@@ -100,31 +112,31 @@ function formatPace(minutesPerMile: number) {
 }
 
 function formatSpeed(mph: number) {
-  return Number.isFinite(mph) && mph > 0 ? `${mph.toFixed(1)} mph` : '--';
+  return Number.isFinite(mph) && mph > 0 ? `${formatMetricValue(mph)} mph` : '--';
 }
 
 function formatDistance(distance?: number) {
-  return typeof distance === 'number' && Number.isFinite(distance) ? `${distance.toFixed(1)} mi` : '--';
+  return typeof distance === 'number' && Number.isFinite(distance) ? `${formatMetricValue(distance)} mi` : '--';
 }
 
 function formatSteps(steps: number) {
-  return `${Math.round(steps).toLocaleString()} steps`;
+  return `${formatMetricValue(steps)} steps`;
 }
 
 function formatMinutes(value: number) {
-  return `${Math.round(value)} min`;
+  return `${formatMetricValue(value)} min`;
 }
 
 function formatWeight(weight: number) {
-  return `${Math.round(weight)} lb`;
+  return `${formatMetricValue(weight)} lb`;
 }
 
 function formatDepth(depth: number) {
-  return `${depth.toFixed(1)} ft`;
+  return `${formatMetricValue(depth)} ft`;
 }
 
 function formatVertical(vertical: number) {
-  return `${Math.round(vertical)} ft`;
+  return `${formatMetricValue(vertical)} ft`;
 }
 
 function buildDurationFallbackCard(type: WorkoutType, workouts: Workout[], timeframeLabel: string): WorkoutTypeAnalyticsCard {
@@ -741,7 +753,7 @@ export default function PersonalAnalyticsScreen() {
   );
   const [selectedMonthKey, setSelectedMonthKey] = useState(getMonthKey());
   const scoredWorkoutHistory = useMemo(
-    () => (member ? getWorkoutScoreHistory(member, ptSessions).filter((entry) => entry.workout.source !== 'attendance') : []),
+    () => (member ? getWorkoutScoreHistory(member, ptSessions).filter((entry) => !['attendance', 'pfra'].includes(entry.workout.source)) : []),
     [member, ptSessions]
   );
   const availableTimeframes = useMemo(() => [ALL_TIME_KEY, ...availableMonths], [availableMonths]);
@@ -760,10 +772,10 @@ export default function PersonalAnalyticsScreen() {
     }
 
     const summary = isAllTimeView ? null : getMemberMonthSummary(member, activeMonthKey, ptSessions);
-    const workouts = (isAllTimeView ? member.workouts : summary?.workouts ?? []).filter((workout) => workout.source !== 'attendance');
+    const workouts = (isAllTimeView ? member.workouts : summary?.workouts ?? []).filter((workout) => !['attendance', 'pfra'].includes(workout.source));
     const grouped = new Map<string, { type: WorkoutType; title: string; workouts: Workout[]; scoreEntries: ScoredWorkoutEntry[] }>();
 
-    (isAllTimeView ? scoredWorkoutHistory : summary?.scoredWorkouts.filter((entry) => entry.workout.source !== 'attendance') ?? [])
+    (isAllTimeView ? scoredWorkoutHistory : summary?.scoredWorkouts.filter((entry) => !['attendance', 'pfra'].includes(entry.workout.source)) ?? [])
       .forEach((entry) => {
         const type = normalizeWorkoutType(entry.workout.type);
         const title = entry.breakdown.analyticsLabel;

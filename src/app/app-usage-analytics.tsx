@@ -51,7 +51,8 @@ export default function AppUsageAnalyticsScreen() {
     user.accountType === 'fitflight_creator' ||
     user.accountType === 'ufpm' ||
     user.accountType === 'demo' ||
-    user.accountType === 'squadron_leadership'
+    user.accountType === 'squadron_leadership' ||
+    user.accountType === 'group_personnel'
   );
 
   const loadReport = async (isRefresh = false) => {
@@ -103,7 +104,7 @@ export default function AppUsageAnalyticsScreen() {
         <ThemeBackdrop />
         <Text style={[getThemeHeadingStyle(theme, 24), { textAlign: 'center' }]}>Admin access required</Text>
         <Text style={[getThemeBodyStyle(theme, 15), { textAlign: 'center', marginTop: 12 }]}>
-          Only Owner, UFPM, Demo Role, and Squadron Leadership can view app usage analytics.
+          Only Owner, UFPM, Demo Role, Squadron Leadership, and Group Personnel can view app usage analytics.
         </Text>
       </View>
     );

@@ -17,7 +17,7 @@ import type {
   WorkoutSegment,
   WorkoutType,
 } from '@/lib/store';
-import { normalizeAccountType, PCS_OUTPRO_FLIGHT, isPCSOutproFlight } from '@/lib/store';
+import { DEFAULT_SQUADRON, GROUP_PERSONNEL_FLIGHT, GROUP_SQUADRON, normalizeAccountType, normalizeSquadron, PCS_OUTPRO_FLIGHT, isPCSOutproFlight } from '@/lib/store';
 import { getValidAccessToken } from '@/lib/supabaseAuth';
 import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
@@ -25,7 +25,7 @@ import { Buffer } from 'buffer';
 
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '') ?? '';
 const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
-export const ROSTER_BACKED_SQUADRON = 'Hawks' as const;
+export const ROSTER_BACKED_SQUADRON = DEFAULT_SQUADRON;
 const DEFAULT_ROSTER_TABLE = 'roster';
 const STORAGE_BUCKET = 'fitflight-images';
 const DEMO_ACCOUNT_EMAIL = 'fitflight@us.af.mil';
@@ -564,6 +564,7 @@ const FLIGHT_MAP: Record<string, Flight> = {
   'pcs-outpro': PCS_OUTPRO_FLIGHT,
   pcs: PCS_OUTPRO_FLIGHT,
   outpro: PCS_OUTPRO_FLIGHT,
+  group: GROUP_PERSONNEL_FLIGHT,
 };
 
 const RANK_MAP: Record<string, string> = {
@@ -626,6 +627,7 @@ const FLIGHT_TO_ROSTER: Record<Flight, string> = {
   DO: 'DO',
   ADF: 'ADF',
   DET: 'DET 1',
+  Group: '',
   'PCS/Outpro': 'PCS/OUTPRO',
 };
 
@@ -1292,12 +1294,34 @@ function slugify(value: string) {
     .replace(/^-+|-+$/g, '');
 }
 
-function getRosterTableName(squadron: Squadron = 'Hawks') {
+function getRosterTableName(squadron: Squadron = DEFAULT_SQUADRON) {
   if (squadron === ROSTER_BACKED_SQUADRON) {
     return DEFAULT_ROSTER_TABLE;
   }
 
   return `${slugify(squadron).replace(/-/g, '_')}_roster`;
+}
+
+export async function ensureRosterImportSchema(squadron: Squadron, accessToken?: string) {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/ensure_roster_import_schema`, {
+    method: 'POST',
+    headers: {
+      ...(await getHeaders(accessToken)),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      p_squadron: normalizeSquadron(squadron, DEFAULT_SQUADRON),
+    }),
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    const message =
+      typeof (payload as { message?: unknown }).message === 'string'
+        ? (payload as { message: string }).message
+        : 'Unable to prepare roster table schema for import.';
+    throw new Error(message);
+  }
 }
 
 function getAccountType(firstName: string, lastName: string, email?: string): AccountType {
@@ -1401,7 +1425,7 @@ async function getMemberRoleHeaders(accessToken?: string) {
   };
 }
 
-function normalizeRosterRow(row: SupabaseRow): Member | null {
+function normalizeRosterRow(row: SupabaseRow, squadron: Squadron): Member | null {
   const nameValue = getStringValue(row, ['name', 'full_name', 'member_name', 'FULL_NAME']);
   const firstNameValue = getStringValue(row, ['first_name', 'firstname', 'first']);
   const lastNameValue = getStringValue(row, ['last_name', 'lastname', 'last']);
@@ -1410,12 +1434,12 @@ function normalizeRosterRow(row: SupabaseRow): Member | null {
   const lastName = lastNameValue || parsedName?.lastName || '';
   const rank = normalizeRank(getStringValue(row, ['rank', 'grade', 'RANK']));
   const flight = normalizeFlight(getStringValue(row, ['flight', 'flt', 'section', 'FLT-DET']));
+  const resolvedFlight = squadron === GROUP_SQUADRON ? (flight ?? GROUP_PERSONNEL_FLIGHT) : flight;
 
-  if (!firstName || !lastName || !rank || !flight) {
+  if (!firstName || !lastName || !rank || !resolvedFlight) {
     return null;
   }
 
-  const squadron = 'Hawks' as Squadron;
   const email = buildEmail(row, firstName, lastName);
   const normalizedEmail = email.toLowerCase();
   if (normalizedEmail === DEMO_ACCOUNT_EMAIL) {
@@ -1426,7 +1450,7 @@ function normalizeRosterRow(row: SupabaseRow): Member | null {
   const normalizedRank = normalizedEmail === 'fitflight@us.af.mil' ? 'Lt. Col.' : rank;
   const stableId =
     getStringValue(row, ['auth_user_id', 'AUTH_USER_ID', 'id', 'member_id']) ||
-    `roster-${slugify(`${normalizedRank}-${normalizedLastName}-${normalizedFirstName}-${flight}`)}`;
+    `roster-${slugify(`${squadron}-${normalizedRank}-${normalizedLastName}-${normalizedFirstName}-${resolvedFlight}`)}`;
   const mustChangePassword = getBooleanValue(row, ['must_change_password', 'MUST_CHANGE_PASSWORD']) ?? false;
   const hasLoggedIntoApp = getBooleanValue(row, ['has_logged_into_app', 'HAS_LOGGED_INTO_APP', 'has_logged_in', 'HAS_LOGGED_IN']) ?? false;
   const profilePicture = getDisplayImageUri(getStringValue(row, ['profile_picture', 'PROFILE_PICTURE'])) || undefined;
@@ -1461,9 +1485,9 @@ function normalizeRosterRow(row: SupabaseRow): Member | null {
     rank: normalizedRank,
     firstName: normalizedFirstName,
     lastName: normalizedLastName,
-    flight,
+    flight: resolvedFlight,
     squadron,
-    accountType: normalizeAccountType(getAccountType(normalizedFirstName, normalizedLastName, normalizedEmail)),
+    accountType: squadron === GROUP_SQUADRON ? 'group_personnel' : normalizeAccountType(getAccountType(normalizedFirstName, normalizedLastName, normalizedEmail)),
     email: normalizedEmail,
     exerciseMinutes: 0,
     distanceRun: 0,
@@ -1489,7 +1513,7 @@ function normalizeRosterRow(row: SupabaseRow): Member | null {
   };
 }
 
-export async function fetchRosterMembers(accessToken?: string, squadron: Squadron = 'Hawks') {
+export async function fetchRosterMembers(accessToken?: string, squadron: Squadron = DEFAULT_SQUADRON) {
   const [response, memberRolesResponse] = await Promise.all([
     fetch(`${SUPABASE_URL}/rest/v1/${getRosterTableName(squadron)}?select=*`, {
       method: 'GET',
@@ -1522,7 +1546,7 @@ export async function fetchRosterMembers(accessToken?: string, squadron: Squadro
 
   const rows = parseResponse<SupabaseRow[]>(payload);
   return rows
-    .map(normalizeRosterRow)
+    .map((row) => normalizeRosterRow(row, normalizeSquadron(squadron)))
     .map((member) => {
       if (!member) {
         return null;
@@ -1530,11 +1554,11 @@ export async function fetchRosterMembers(accessToken?: string, squadron: Squadro
       if (isPCSOutproFlight(member.flight)) {
         return { ...member, accountType: 'standard' };
       }
-      if (member.flight === 'DO') {
+      if (member.squadron !== GROUP_SQUADRON && member.flight === 'DO') {
         return { ...member, accountType: 'squadron_leadership' };
       }
       const liveRole = roleByEmail.get(member.email.toLowerCase());
-      return liveRole ? { ...member, accountType: liveRole } : member;
+      return liveRole ? { ...member, accountType: liveRole } : member.squadron === GROUP_SQUADRON ? { ...member, accountType: 'group_personnel' } : member;
     })
     .filter((member): member is Member => Boolean(member));
 }
@@ -1694,9 +1718,14 @@ export async function markMemberTrophyCelebrationShown(id: string, accessToken?:
   }
 }
 
-export async function fetchAttendanceSessions(accessToken?: string) {
+export async function fetchAttendanceSessions(accessToken?: string, squadron?: Squadron) {
+  const sessionsQuery = new URLSearchParams();
+  sessionsQuery.set('select', 'id,date,flight,squadron,created_by');
+  if (squadron) {
+    sessionsQuery.set('squadron', `eq.${squadron}`);
+  }
   const [sessionsResponse, attendeesResponse] = await Promise.all([
-    fetch(`${SUPABASE_URL}/rest/v1/pt_sessions?select=id,date,flight,squadron,created_by`, {
+    fetch(`${SUPABASE_URL}/rest/v1/pt_sessions?${sessionsQuery.toString()}`, {
       method: 'GET',
       headers: await getHeaders(accessToken),
     }),

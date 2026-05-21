@@ -601,7 +601,7 @@ export default function BulkPFRAEntryScreen() {
     return (
       <View className="flex-1 items-center justify-center px-6" style={{ backgroundColor: theme.background }}>
         <ThemeBackdrop />
-        <Text style={[getThemeBodyStyle(theme, 16), { textAlign: 'center' }]}>Only PFL, UFPM, Owner, and Squadron Leadership roles can use bulk PFRA entry.</Text>
+        <Text style={[getThemeBodyStyle(theme, 16), { textAlign: 'center' }]}>Only PFL, UFPM, Owner, Squadron Leadership, and Group Personnel roles can use bulk PFRA entry.</Text>
       </View>
     );
   }

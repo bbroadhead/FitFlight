@@ -1,4 +1,5 @@
 import type { Member, PTSession, Workout, WorkoutIntent, WorkoutType } from '@/lib/store';
+import { getMemberEffectiveWorkouts } from '@/lib/effectiveWorkouts';
 
 export const WORKOUT_SCORE_ENGINE_NAME = 'Leaderboard Score Engine';
 export const WORKOUT_SCORE_ENGINE_ROLLOUT_DATE = '2026-05-11';
@@ -110,12 +111,22 @@ const slugify = (value: string) =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
 
-const buildLegacyRosterId = (member: Pick<Member, 'rank' | 'firstName' | 'lastName' | 'flight'>) =>
-  `roster-${slugify(`${member.rank}-${member.lastName}-${member.firstName}-${member.flight}`)}`;
+const buildLegacyRosterId = (
+  member: Pick<Member, 'rank' | 'firstName' | 'lastName' | 'flight'> & Partial<Pick<Member, 'squadron'>>,
+  includeSquadron = false
+) =>
+  `roster-${slugify(
+    includeSquadron && member.squadron
+      ? `${member.squadron}-${member.rank}-${member.lastName}-${member.firstName}-${member.flight}`
+      : `${member.rank}-${member.lastName}-${member.firstName}-${member.flight}`
+  )}`;
 
-const getAttendanceAliases = (member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight'>) => {
+const getAttendanceAliases = (
+  member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight'> & Partial<Pick<Member, 'squadron'>>
+) => {
   const aliases = new Set<string>([member.id]);
   aliases.add(buildLegacyRosterId(member));
+  aliases.add(buildLegacyRosterId(member, true));
   return aliases;
 };
 
@@ -135,6 +146,8 @@ const formatFeet = (value: number) => `${formatNumber(value)} ft`;
 const formatSteps = (value: number) => `${Math.round(value).toLocaleString()} steps`;
 const formatPace = (value: number) => `${formatNumber(value)} min/mi`;
 const formatSpeed = (value: number) => `${formatNumber(value)} mph`;
+const formatHeartRate = (value: number) => `${formatNumber(value)} bpm`;
+const formatCalories = (value: number) => `${formatNumber(value)} cal`;
 
 const normalizeWorkoutType = (type: WorkoutType): WorkoutType => (type === 'Strength' ? 'Weightlifting' : type);
 const getWorkoutSubtype = (workout: Workout) => workout.metrics?.subtype?.trim() || undefined;
@@ -179,6 +192,9 @@ const getWeightliftingVolume = (workout: Workout) => {
   const sets = workout.metrics?.sets ?? 1;
   return weight > 0 && reps > 0 ? weight * reps * Math.max(1, sets) : undefined;
 };
+
+const isPFRAWorkout = (workout: Workout) =>
+  workout.source === 'pfra' && typeof workout.metrics?.pfraScore === 'number' && Number.isFinite(workout.metrics.pfraScore);
 
 const getWorkoutSessionKey = (workout: Workout) =>
   workout.sessionId ||
@@ -393,7 +409,12 @@ const getEffortMetricDescriptors = (workout: Workout): EffortMetricDescriptor[] 
     case 'Other':
     default:
       return [
-        effortMetric('duration', 'Duration', 1, 'higher', 'general', 30, getWorkoutMinutes, formatMinutes),
+        effortMetric('duration', 'Duration', 0.35, 'higher', 'general', 30, getWorkoutMinutes, formatMinutes),
+        effortMetric('distance', 'Distance', 0.2, 'higher', 'general', 2, (candidate) => getWorkoutDistance(candidate), formatDistance),
+        effortMetric('steps', 'Steps', 0.15, 'higher', 'general', 5000, (candidate) => candidate.metrics?.steps, formatSteps),
+        effortMetric('averageHeartRate', 'Avg Heart Rate', 0.1, 'higher', 'general', 130, (candidate) => candidate.metrics?.averageHeartRate, formatHeartRate),
+        effortMetric('caloriesBurned', 'Calories Burned', 0.1, 'higher', 'general', 300, (candidate) => candidate.metrics?.caloriesBurned, formatCalories),
+        effortMetric('elevationGain', 'Elevation Gain', 0.1, 'higher', 'general', 200, (candidate) => candidate.metrics?.elevationGain, formatFeet),
       ];
   }
 };
@@ -459,8 +480,16 @@ const getComparisonMetricDescriptors = (workout: Workout): MetricDescriptor[] =>
         numericMetric('distance', 'Distance', 0.4, 'higher', (candidate) => getWorkoutDistance(candidate), formatDistance),
       ];
     case 'Flexibility':
-    case 'Surfing':
     case 'Other':
+      return [
+        numericMetric('duration', 'Duration', 0.35, 'higher', getWorkoutMinutes, formatMinutes),
+        numericMetric('distance', 'Distance', 0.2, 'higher', (candidate) => getWorkoutDistance(candidate), formatDistance),
+        numericMetric('steps', 'Steps', 0.15, 'higher', (candidate) => candidate.metrics?.steps, formatSteps),
+        numericMetric('averageHeartRate', 'Avg Heart Rate', 0.1, 'higher', (candidate) => candidate.metrics?.averageHeartRate, formatHeartRate),
+        numericMetric('caloriesBurned', 'Calories Burned', 0.1, 'higher', (candidate) => candidate.metrics?.caloriesBurned, formatCalories),
+        numericMetric('elevationGain', 'Elevation Gain', 0.1, 'higher', (candidate) => candidate.metrics?.elevationGain, formatFeet),
+      ];
+    case 'Surfing':
     default:
       return [
         numericMetric('duration', 'Duration', 1, 'higher', getWorkoutMinutes, formatMinutes),
@@ -474,6 +503,10 @@ const isWorkoutScoreEngineWorkout = (workout: Workout) =>
   workout.date >= WORKOUT_SCORE_ENGINE_ROLLOUT_DATE;
 
 const getLegacyWorkoutPoints = (workout: Workout) => {
+  if (isPFRAWorkout(workout)) {
+    return Math.max(0, workout.metrics?.pfraScore ?? 0);
+  }
+
   if (workout.source === 'attendance') {
     return ATTENDANCE_CHECK_IN_POINTS;
   }
@@ -485,6 +518,9 @@ const getLegacyWorkoutPoints = (workout: Workout) => {
 
 const buildLegacyBreakdown = (workout: Workout): WorkoutScoreBreakdown => {
   const typeLabel = getWorkoutTypeLabel(workout.type, getWorkoutSubtype(workout));
+  const pfraScore = workout.metrics?.pfraScore ?? 0;
+  const precisePFRA = formatNumber(pfraScore);
+  const roundedPFRA = Math.round(pfraScore);
   return {
     engine: 'legacy',
     type: normalizeWorkoutType(workout.type),
@@ -493,21 +529,23 @@ const buildLegacyBreakdown = (workout: Workout): WorkoutScoreBreakdown => {
     typeLabel,
     analyticsKey: typeLabel,
     analyticsLabel: typeLabel,
-    finalPoints: getLegacyWorkoutPoints(workout),
-    preciseFinalPoints: getLegacyWorkoutPoints(workout),
-    workoutPoints: getLegacyWorkoutPoints(workout),
-    effortScore: getLegacyWorkoutPoints(workout),
+    finalPoints: isPFRAWorkout(workout) ? roundedPFRA : getLegacyWorkoutPoints(workout),
+    preciseFinalPoints: isPFRAWorkout(workout) ? pfraScore : getLegacyWorkoutPoints(workout),
+    workoutPoints: isPFRAWorkout(workout) ? pfraScore : getLegacyWorkoutPoints(workout),
+    effortScore: isPFRAWorkout(workout) ? pfraScore : getLegacyWorkoutPoints(workout),
     intentMatchScore: 0,
     consistencyBonus: 0,
     improvementBonus: 0,
     weeklySessionCount: 0,
     metricScore: 0,
     baselineSampleSize: 0,
-    baselineLabel: 'Legacy scoring',
-    comparedToLabel: 'Legacy points model',
+    baselineLabel: isPFRAWorkout(workout) ? 'Recorded PFRA assessment' : 'Legacy scoring',
+    comparedToLabel: isPFRAWorkout(workout) ? 'PFRA assessment score' : 'Legacy points model',
     metrics: [],
     effortMetrics: [],
-    explanation: workout.source === 'attendance'
+    explanation: isPFRAWorkout(workout)
+      ? `Latest session: ${precisePFRA} pts = PFRA overall score ${precisePFRA} → leaderboard points ${roundedPFRA}`
+      : workout.source === 'attendance'
       ? `Latest session: ${ATTENDANCE_CHECK_IN_POINTS} pts = attendance check-in`
       : `Latest session: ${getLegacyWorkoutPoints(workout)} pts = max(duration ${Math.round(workout.duration)} min → ${Math.max(0, Math.round(workout.duration))} pts, distance ${(workout.distance ?? 0).toFixed(2)} mi × 15 = ${Math.max(0, Math.round((workout.distance ?? 0) * 15))} pts)`,
   };
@@ -710,39 +748,19 @@ const getBaselineContext = (priorWorkouts: Workout[], scoreInfo: WorkoutScoreKey
 };
 
 function buildScoredWorkoutEntries(
-  member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight' | 'workouts'>,
+  member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight' | 'workouts' | 'fitnessAssessments'>,
   ptSessions: Array<Pick<PTSession, 'id' | 'date' | 'flight' | 'attendees'> & { attendeeSources?: PTSession['attendeeSources'] }> = [],
   previewWorkouts: Workout[] = []
 ): ScoredWorkoutEntry[] {
-  const effectiveWorkouts = [...member.workouts, ...previewWorkouts];
-  const attendanceAliases = getAttendanceAliases(member);
-  const datesWithRealWorkouts = new Set(
-    effectiveWorkouts.filter((workout) => workout.source !== 'attendance').map((workout) => workout.date)
+  const previewRealWorkoutDates = new Set(
+    previewWorkouts.filter((workout) => workout.source !== 'attendance').map((workout) => workout.date)
   );
-
-  ptSessions.forEach((session) => {
-    const matchedAttendeeId = session.attendees.find((attendeeId) => attendanceAliases.has(attendeeId));
-    if (!matchedAttendeeId) {
-      return;
-    }
-
-    const source = session.attendeeSources?.[matchedAttendeeId] ?? 'manual';
-    if (source === 'excused' || datesWithRealWorkouts.has(session.date)) {
-      return;
-    }
-
-    effectiveWorkouts.push({
-      id: `attendance-${session.id}-${member.id}`,
-      externalId: session.id,
-      date: session.date,
-      type: 'Other',
-      duration: 0,
-      distance: 0,
-      source: 'attendance',
-      title: `Attendance - ${session.flight}`,
-      isPrivate: false,
-    });
-  });
+  const effectiveWorkouts = [
+    ...getMemberEffectiveWorkouts(member, ptSessions).filter(
+      (workout) => !(workout.source === 'attendance' && previewRealWorkoutDates.has(workout.date))
+    ),
+    ...previewWorkouts,
+  ];
 
   const sessionGroups = new Map<string, Workout[]>();
   effectiveWorkouts
@@ -775,7 +793,7 @@ function buildScoredWorkoutEntries(
     const scoredSessionCandidates = sessionWorkouts.map((workout) => {
       const scoreInfo = getWorkoutScoreKeyInfo(workout);
 
-      if (!isWorkoutScoreEngineWorkout(workout)) {
+      if (isPFRAWorkout(workout) || !isWorkoutScoreEngineWorkout(workout)) {
         return {
           workout,
           scoreKey: scoreInfo.key,
@@ -786,7 +804,10 @@ function buildScoredWorkoutEntries(
         };
       }
 
-      const baselineContext = getBaselineContext(priorHistory.filter((item) => item.source !== 'attendance'), scoreInfo);
+      const baselineContext = getBaselineContext(
+        priorHistory.filter((item) => item.source !== 'attendance' && item.source !== 'pfra'),
+        scoreInfo
+      );
       if (baselineContext.bucket === 'none' || baselineContext.workouts.length === 0) {
         const breakdown: WorkoutScoreBreakdown = {
           engine: 'leaderboard_score_engine',
@@ -908,14 +929,14 @@ function buildScoredWorkoutEntries(
 }
 
 export function getWorkoutScoreHistory(
-  member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight' | 'workouts'>,
+  member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight' | 'workouts' | 'fitnessAssessments'>,
   ptSessions: Array<Pick<PTSession, 'id' | 'date' | 'flight' | 'attendees'> & { attendeeSources?: PTSession['attendeeSources'] }> = []
 ): ScoredWorkoutEntry[] {
   return buildScoredWorkoutEntries(member, ptSessions);
 }
 
 export function estimateWorkoutSessionScore(params: {
-  member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight' | 'workouts'>;
+  member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight' | 'workouts' | 'fitnessAssessments'>;
   ptSessions?: Array<Pick<PTSession, 'id' | 'date' | 'flight' | 'attendees'> & { attendeeSources?: PTSession['attendeeSources'] }>;
   previewWorkouts: Workout[];
 }) {
