@@ -152,7 +152,17 @@ function TabsInner() {
     }
 
     return {
-      mapMemberId: (memberId: string) => idMap.get(memberId) ?? memberId,
+      mapMemberId: (memberId: string) => {
+        let nextId = memberId;
+        const visited = new Set<string>();
+
+        while (idMap.has(nextId) && !visited.has(nextId)) {
+          visited.add(nextId);
+          nextId = idMap.get(nextId) ?? nextId;
+        }
+
+        return nextId;
+      },
       hasMemberId: (memberId: string) => nextIds.has(memberId),
     };
   };

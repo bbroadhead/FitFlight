@@ -57,6 +57,13 @@ export function getMemberAttendanceRecords(
 }
 
 function createPFRAWorkout(memberId: string, assessment: FitnessAssessment): Workout {
+  const components = assessment.components ?? {
+    cardio: { score: 0 },
+    pushups: { score: 0, reps: 0 },
+    situps: { score: 0, reps: 0 },
+  };
+  const cardio = components.cardio ?? { score: 0 };
+
   return {
     id: `pfra-workout-${assessment.id}-${memberId}`,
     externalId: assessment.id,
@@ -71,9 +78,9 @@ function createPFRAWorkout(memberId: string, assessment: FitnessAssessment): Wor
     metrics: {
       pfraScore: assessment.overallScore,
       pfraRecordType: assessment.recordType,
-      cardioTest: assessment.components.cardio.test,
-      cardioTime: assessment.components.cardio.time,
-      cardioLaps: assessment.components.cardio.laps,
+      cardioTest: cardio.test,
+      cardioTime: cardio.time,
+      cardioLaps: cardio.laps,
     },
   };
 }
@@ -81,16 +88,18 @@ function createPFRAWorkout(memberId: string, assessment: FitnessAssessment): Wor
 export function getMemberPFRAWorkouts(
   member: Pick<Member, 'id' | 'fitnessAssessments'>
 ): Workout[] {
-  return member.fitnessAssessments.map((assessment) => createPFRAWorkout(member.id, assessment));
+  return (Array.isArray(member.fitnessAssessments) ? member.fitnessAssessments : [])
+    .map((assessment) => createPFRAWorkout(member.id, assessment));
 }
 
 export function getMemberEffectiveWorkouts(
   member: Pick<Member, 'id' | 'rank' | 'firstName' | 'lastName' | 'flight' | 'workouts' | 'fitnessAssessments'> & Partial<Pick<Member, 'squadron'>>,
   ptSessions: Pick<PTSession, 'id' | 'date' | 'flight' | 'attendees' | 'attendeeSources'>[] = []
 ) {
+  const workouts = Array.isArray(member.workouts) ? member.workouts : [];
   const pfraWorkouts = getMemberPFRAWorkouts(member);
   const datesWithRealWorkouts = new Set(
-    [...member.workouts, ...pfraWorkouts]
+    [...workouts, ...pfraWorkouts]
       .filter((workout) => workout.source !== 'attendance')
       .map((workout) => workout.date)
   );
@@ -109,5 +118,5 @@ export function getMemberEffectiveWorkouts(
       isPrivate: false,
     }));
 
-  return [...member.workouts, ...pfraWorkouts, ...attendanceWorkouts];
+  return [...workouts, ...pfraWorkouts, ...attendanceWorkouts];
 }

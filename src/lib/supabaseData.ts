@@ -29,6 +29,7 @@ export const ROSTER_BACKED_SQUADRON = DEFAULT_SQUADRON;
 const DEFAULT_ROSTER_TABLE = 'roster';
 const STORAGE_BUCKET = 'fitflight-images';
 const DEMO_ACCOUNT_EMAIL = 'fitflight@us.af.mil';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type SupabaseRow = Record<string, unknown>;
 type RosterColumnName =
@@ -512,9 +513,13 @@ function getAttendanceWriteErrorMessage(payload: unknown, fallbackMessage: strin
       ? (payload as { message: string }).message
       : fallbackMessage;
   const normalized = rawMessage.toLowerCase();
-  return normalized.includes('attendance_source') && normalized.includes('check constraint')
-    ? 'Attendance status is blocked by Supabase attendance rules. Re-run supabase/sql/attendance_rls.sql, then try again.'
-    : rawMessage;
+  if (normalized.includes('attendance_source') && normalized.includes('check constraint')) {
+    return 'Attendance status is blocked by Supabase attendance rules. Re-run supabase/sql/attendance_rls.sql, then try again.';
+  }
+  if (normalized.includes('row-level security') || normalized.includes('permission denied')) {
+    return 'Your account does not have the required attendance permission in Supabase. Verify its member role, run supabase/sql/attendance_stability_and_scope.sql, then try again.';
+  }
+  return rawMessage;
 }
 
 function normalizeAttendanceSource(source?: string | null): AttendanceSource {
@@ -572,10 +577,15 @@ const RANK_MAP: Record<string, string> = {
   amn: 'Amn',
   a1c: 'A1C',
   sra: 'SrA',
+  ssg: 'SSgt',
   ssgt: 'SSgt',
+  tsg: 'TSgt',
   tsgt: 'TSgt',
+  msg: 'MSgt',
   msgt: 'MSgt',
+  sms: 'SMSgt',
   smsgt: 'SMSgt',
+  cms: 'CMSgt',
   cmsgt: 'CMSgt',
   '2nd lt': '2nd Lt.',
   '2d lt': '2nd Lt.',
@@ -617,7 +627,7 @@ const RANK_TO_ROSTER: Record<string, string> = {
   'Gen.': 'GEN',
 };
 
-const FLIGHT_TO_ROSTER: Record<Flight, string> = {
+const FLIGHT_TO_ROSTER: Record<string, string> = {
   Apex: 'A FLT',
   Bomber: 'B FLT',
   Cryptid: 'C FLT',
@@ -894,6 +904,47 @@ export async function resetUserPasswordAsAdmin(params: {
   }
 
   return payload as { success: true };
+}
+
+export async function provisionRosterAccounts(params: {
+  squadron: Squadron;
+  members: Array<{
+    email: string;
+    firstName: string;
+    middleInitial?: string;
+    lastName: string;
+  }>;
+  accessToken?: string;
+}) {
+  const response = await fetch(`${SUPABASE_URL}/functions/v1/provision-roster-accounts`, {
+    method: 'POST',
+    headers: {
+      ...(await getHeaders(params.accessToken)),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      squadron: params.squadron,
+      members: params.members,
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message =
+      typeof (payload as { error?: unknown; message?: unknown }).error === 'string'
+        ? (payload as { error: string }).error
+        : typeof (payload as { error?: unknown; message?: unknown }).message === 'string'
+          ? (payload as { message: string }).message
+          : 'Roster members were imported, but their accounts could not be provisioned automatically.';
+    throw new Error(message);
+  }
+
+  return payload as {
+    created: number;
+    existing: number;
+    failed: number;
+    failures: Array<{ email: string; error: string }>;
+  };
 }
 
 function normalizeSharedWorkoutRow(row: SharedWorkoutRow): SharedWorkout {
@@ -1252,7 +1303,7 @@ function getBooleanValue(row: SupabaseRow, candidates: string[]) {
 
 function normalizeFlight(value: string): Flight | null {
   const normalized = value.trim().toLowerCase();
-  return FLIGHT_MAP[normalized] ?? null;
+  return FLIGHT_MAP[normalized] ?? (value.trim() || null);
 }
 
 function normalizeRank(value: string) {
@@ -1374,7 +1425,7 @@ function getRosterFullName(member: Pick<Member, 'firstName' | 'lastName'>) {
 }
 
 function getRosterFlight(member: Pick<Member, 'flight'>) {
-  return FLIGHT_TO_ROSTER[member.flight];
+  return FLIGHT_TO_ROSTER[member.flight] ?? member.flight;
 }
 
 function getRosterPayload(
@@ -1433,7 +1484,8 @@ function normalizeRosterRow(row: SupabaseRow, squadron: Squadron): Member | null
   const firstName = firstNameValue || parsedName?.firstName || '';
   const lastName = lastNameValue || parsedName?.lastName || '';
   const rank = normalizeRank(getStringValue(row, ['rank', 'grade', 'RANK']));
-  const flight = normalizeFlight(getStringValue(row, ['flight', 'flt', 'section', 'FLT-DET']));
+  const rawFlight = getStringValue(row, ['flight', 'flt', 'section', 'office_symbol', 'OFFICE_SYMBOL', 'FLT-DET']);
+  const flight = normalizeFlight(rawFlight);
   const resolvedFlight = squadron === GROUP_SQUADRON ? (flight ?? GROUP_PERSONNEL_FLIGHT) : flight;
 
   if (!firstName || !lastName || !rank || !resolvedFlight) {
@@ -1448,8 +1500,11 @@ function normalizeRosterRow(row: SupabaseRow, squadron: Squadron): Member | null
   const normalizedFirstName = normalizedEmail === 'fitflight@us.af.mil' ? 'Ima' : firstName;
   const normalizedLastName = normalizedEmail === 'fitflight@us.af.mil' ? 'Demo' : lastName;
   const normalizedRank = normalizedEmail === 'fitflight@us.af.mil' ? 'Lt. Col.' : rank;
+  const authUserId = getStringValue(row, ['auth_user_id', 'AUTH_USER_ID']);
+  const rowId = getStringValue(row, ['id', 'member_id']);
   const stableId =
-    getStringValue(row, ['auth_user_id', 'AUTH_USER_ID', 'id', 'member_id']) ||
+    (authUserId && UUID_PATTERN.test(authUserId) ? authUserId : '') ||
+    rowId ||
     `roster-${slugify(`${squadron}-${normalizedRank}-${normalizedLastName}-${normalizedFirstName}-${resolvedFlight}`)}`;
   const mustChangePassword = getBooleanValue(row, ['must_change_password', 'MUST_CHANGE_PASSWORD']) ?? false;
   const hasLoggedIntoApp = getBooleanValue(row, ['has_logged_into_app', 'HAS_LOGGED_INTO_APP', 'has_logged_in', 'HAS_LOGGED_IN']) ?? false;
@@ -1569,13 +1624,15 @@ export async function fetchMemberTrophies(
   includeInactive = false,
   options?: { updatedAfter?: string }
 ) {
-  const buildQuery = (includeCelebrationShownAt: boolean) => {
+  const buildQuery = (mode: 'full' | 'withoutCelebration' | 'minimal') => {
     const query = new URLSearchParams();
     query.set(
       'select',
-      includeCelebrationShownAt
+      mode === 'full'
         ? 'id,member_id,member_email,squadron,trophy_id,earned_at,awarded_by_member_id,is_active,celebration_shown_at,revoked_at,created_at,updated_at'
-        : 'id,member_id,member_email,squadron,trophy_id,earned_at,awarded_by_member_id,is_active,revoked_at,created_at,updated_at'
+        : mode === 'withoutCelebration'
+          ? 'id,member_id,member_email,squadron,trophy_id,earned_at,awarded_by_member_id,is_active,revoked_at,created_at,updated_at'
+          : 'id,member_id,member_email,squadron,trophy_id,earned_at,awarded_by_member_id,is_active'
     );
     query.set('order', 'earned_at.asc');
     if (squadron) {
@@ -1590,8 +1647,8 @@ export async function fetchMemberTrophies(
     return query;
   };
 
-  const requestTrophies = async (includeCelebrationShownAt: boolean) => {
-    const response = await fetch(`${SUPABASE_URL}/rest/v1/member_trophies?${buildQuery(includeCelebrationShownAt).toString()}`, {
+  const requestTrophies = async (mode: 'full' | 'withoutCelebration' | 'minimal') => {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/member_trophies?${buildQuery(mode).toString()}`, {
       method: 'GET',
       headers: await getHeaders(accessToken),
     });
@@ -1600,7 +1657,7 @@ export async function fetchMemberTrophies(
     return { response, payload };
   };
 
-  let { response, payload } = await requestTrophies(true);
+  let { response, payload } = await requestTrophies('minimal');
   if (!response.ok) {
     const message =
       typeof (payload as { message?: unknown }).message === 'string'
@@ -1608,7 +1665,7 @@ export async function fetchMemberTrophies(
         : 'Unable to load member trophies from Supabase.';
 
     if (isMissingTrophyCelebrationShownColumnError(message)) {
-      ({ response, payload } = await requestTrophies(false));
+      ({ response, payload } = await requestTrophies('withoutCelebration'));
     }
 
     if (!response.ok) {
@@ -1718,62 +1775,158 @@ export async function markMemberTrophyCelebrationShown(id: string, accessToken?:
   }
 }
 
+const SUPABASE_PAGE_SIZE = 1000;
+
+async function fetchAllSupabaseRows<T>(params: {
+  table: string;
+  query: URLSearchParams;
+  accessToken?: string;
+  fallbackMessage: string;
+}): Promise<T[]> {
+  const rows: T[] = [];
+  const baseHeaders = await getHeaders(params.accessToken);
+
+  for (let offset = 0; offset < 100_000; offset += SUPABASE_PAGE_SIZE) {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/${params.table}?${params.query.toString()}`, {
+      method: 'GET',
+      headers: {
+        ...baseHeaders,
+        Range: `${offset}-${offset + SUPABASE_PAGE_SIZE - 1}`,
+      },
+    });
+    const payload = await response.json().catch(() => []);
+    if (!response.ok) {
+      const message =
+        typeof (payload as { message?: unknown }).message === 'string'
+          ? (payload as { message: string }).message
+          : params.fallbackMessage;
+      throw new Error(message);
+    }
+
+    const page = Array.isArray(payload) ? (payload as T[]) : [];
+    rows.push(...page);
+    if (page.length < SUPABASE_PAGE_SIZE) {
+      return rows;
+    }
+  }
+
+  throw new Error(`${params.fallbackMessage} Too many rows were returned.`);
+}
+
 export async function fetchAttendanceSessions(accessToken?: string, squadron?: Squadron) {
   const sessionsQuery = new URLSearchParams();
   sessionsQuery.set('select', 'id,date,flight,squadron,created_by');
+  sessionsQuery.set('order', 'id.asc');
   if (squadron) {
     sessionsQuery.set('squadron', `eq.${squadron}`);
   }
-  const [sessionsResponse, attendeesResponse] = await Promise.all([
-    fetch(`${SUPABASE_URL}/rest/v1/pt_sessions?${sessionsQuery.toString()}`, {
-      method: 'GET',
-      headers: await getHeaders(accessToken),
-    }),
-      fetch(`${SUPABASE_URL}/rest/v1/pt_session_attendees?select=session_id,member_id,attendance_source`, {
-      method: 'GET',
-      headers: await getHeaders(accessToken),
-    }),
-  ]);
-
-  const sessionsPayload = await sessionsResponse.json().catch(() => []);
-  if (!sessionsResponse.ok) {
-    const message =
-      typeof (sessionsPayload as { message?: unknown }).message === 'string'
-        ? (sessionsPayload as { message: string }).message
-        : 'Unable to load attendance sessions from Supabase.';
-    throw new Error(message);
+  const sessionRows = await fetchAllSupabaseRows<AttendanceSessionRow>({
+    table: 'pt_sessions',
+    query: sessionsQuery,
+    accessToken,
+    fallbackMessage: 'Unable to load attendance sessions from Supabase.',
+  });
+  if (sessionRows.length === 0) {
+    return [];
   }
 
-  const attendeesPayload = await attendeesResponse.json().catch(() => []);
-  if (!attendeesResponse.ok) {
-    const message =
-      typeof (attendeesPayload as { message?: unknown }).message === 'string'
-        ? (attendeesPayload as { message: string }).message
-        : 'Unable to load attendance attendees from Supabase.';
-    throw new Error(message);
-  }
+  const attendeesQuery = new URLSearchParams();
+  attendeesQuery.set('select', 'session_id,member_id,attendance_source');
+  attendeesQuery.set('order', 'session_id.asc,member_id.asc');
+  const attendeesPayload = await fetchAllSupabaseRows<AttendanceAttendeeRow>({
+    table: 'pt_session_attendees',
+    query: attendeesQuery,
+    accessToken,
+    fallbackMessage: 'Unable to load attendance attendees from Supabase.',
+  });
 
-    const attendeeMap = new Map<string, string[]>();
-    const attendeeSourceMap = new Map<string, Record<string, AttendanceSource>>();
-    (attendeesPayload as AttendanceAttendeeRow[]).forEach((attendee) => {
-      const current = attendeeMap.get(attendee.session_id) ?? [];
-      current.push(attendee.member_id);
-      attendeeMap.set(attendee.session_id, current);
+  // The RLS policy scopes attendees through their parent PT session. Fetching
+  // those visible rows directly avoids a PostgREST multi-ID filter that can
+  // silently omit valid attendee IDs on some deployed schema versions.
+  const sessionIds = new Set(sessionRows.map((session) => session.id));
+  const attendeeMap = new Map<string, string[]>();
+  const attendeeSourceMap = new Map<string, Record<string, AttendanceSource>>();
+  (attendeesPayload as AttendanceAttendeeRow[]).forEach((attendee) => {
+    if (!sessionIds.has(attendee.session_id)) {
+      return;
+    }
 
-      const currentSources = attendeeSourceMap.get(attendee.session_id) ?? {};
-      currentSources[attendee.member_id] = normalizeAttendanceSource(attendee.attendance_source);
-      attendeeSourceMap.set(attendee.session_id, currentSources);
-    });
+    const current = attendeeMap.get(attendee.session_id) ?? [];
+    current.push(attendee.member_id);
+    attendeeMap.set(attendee.session_id, current);
 
-  return (sessionsPayload as AttendanceSessionRow[]).map((session) => ({
+    const currentSources = attendeeSourceMap.get(attendee.session_id) ?? {};
+    currentSources[attendee.member_id] = normalizeAttendanceSource(attendee.attendance_source);
+    attendeeSourceMap.set(attendee.session_id, currentSources);
+  });
+
+  return sessionRows.map((session) => ({
     id: session.id,
     date: session.date,
     flight: session.flight,
-      squadron: session.squadron,
-      createdBy: session.created_by,
-      attendees: attendeeMap.get(session.id) ?? [],
-      attendeeSources: attendeeSourceMap.get(session.id) ?? {},
-    })).filter((session) => session.attendees.length > 0) as PTSession[];
+    squadron: session.squadron,
+    createdBy: session.created_by,
+    attendees: attendeeMap.get(session.id) ?? [],
+    attendeeSources: attendeeSourceMap.get(session.id) ?? {},
+  })).filter((session) => session.attendees.length > 0) as PTSession[];
+}
+
+function reconcileAttendanceStatus(
+  sessions: PTSession[],
+  session: AttendanceSessionRow,
+  params: Pick<Parameters<typeof setAttendanceStatus>[0], 'memberId' | 'isAttending' | 'source'>
+): PTSession[] {
+  const source = normalizeAttendanceSource(params.source);
+  const existingIndex = sessions.findIndex((item) => item.id === session.id);
+
+  if (params.isAttending) {
+    if (existingIndex < 0) {
+      return [
+        ...sessions,
+        {
+          id: session.id,
+          date: session.date,
+          flight: session.flight,
+          squadron: session.squadron,
+          createdBy: session.created_by,
+          attendees: [params.memberId],
+          attendeeSources: { [params.memberId]: source },
+        },
+      ];
+    }
+
+    return sessions.map((item, index) => {
+      if (index !== existingIndex) {
+        return item;
+      }
+
+      return {
+        ...item,
+        attendees: item.attendees.includes(params.memberId)
+          ? item.attendees
+          : [...item.attendees, params.memberId],
+        attendeeSources: {
+          ...(item.attendeeSources ?? {}),
+          [params.memberId]: source,
+        },
+      };
+    });
+  }
+
+  return sessions
+    .map((item) => {
+      if (item.id !== session.id) {
+        return item;
+      }
+
+      const { [params.memberId]: _removedSource, ...attendeeSources } = item.attendeeSources ?? {};
+      return {
+        ...item,
+        attendees: item.attendees.filter((memberId) => memberId !== params.memberId),
+        attendeeSources,
+      };
+    })
+    .filter((item) => item.attendees.length > 0);
 }
 
 export async function fetchScheduledPTSessions(
@@ -3051,12 +3204,12 @@ async function ensureAttendanceSession(params: {
   }
 
   const sessionId = `pt-${params.squadron}-${params.flight}-${params.date}`;
-  const createResponse = await fetch(`${SUPABASE_URL}/rest/v1/pt_sessions`, {
+  const createResponse = await fetch(`${SUPABASE_URL}/rest/v1/pt_sessions?on_conflict=date,flight,squadron`, {
     method: 'POST',
     headers: {
       ...(await getHeaders(params.accessToken)),
       'Content-Type': 'application/json',
-      Prefer: 'return=representation',
+      Prefer: 'resolution=ignore-duplicates,return=representation',
     },
     body: JSON.stringify({
       id: sessionId,
@@ -3076,7 +3229,26 @@ async function ensureAttendanceSession(params: {
     throw new Error(message);
   }
 
-  return (createPayload as AttendanceSessionRow[])[0] ?? {
+  if ((createPayload as AttendanceSessionRow[])[0]) {
+    return (createPayload as AttendanceSessionRow[])[0];
+  }
+
+  // A concurrent authorized user can create the same date/flight session
+  // between our lookup and insert. Resolve that harmless race to the row that won.
+  const resolvedResponse = await fetch(`${SUPABASE_URL}/rest/v1/pt_sessions?${query.toString()}`, {
+    method: 'GET',
+    headers: await getHeaders(params.accessToken),
+  });
+  const resolvedPayload = await resolvedResponse.json().catch(() => []);
+  if (!resolvedResponse.ok) {
+    const message =
+      typeof (resolvedPayload as { message?: unknown }).message === 'string'
+        ? (resolvedPayload as { message: string }).message
+        : 'Unable to confirm the attendance session in Supabase.';
+    throw new Error(message);
+  }
+
+  return (resolvedPayload as AttendanceSessionRow[])[0] ?? {
     id: sessionId,
     date: params.date,
     flight: params.flight,
@@ -3098,12 +3270,12 @@ export async function setAttendanceStatus(params: {
   const session = await ensureAttendanceSession(params);
 
   if (params.isAttending) {
-    const response = await fetch(`${SUPABASE_URL}/rest/v1/pt_session_attendees`, {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/pt_session_attendees?on_conflict=session_id,member_id`, {
       method: 'POST',
       headers: {
         ...(await getHeaders(params.accessToken)),
         'Content-Type': 'application/json',
-        Prefer: 'resolution=merge-duplicates,return=minimal',
+        Prefer: 'resolution=merge-duplicates,return=representation',
       },
         body: JSON.stringify({
           session_id: session.id,
@@ -3112,10 +3284,19 @@ export async function setAttendanceStatus(params: {
         }),
       });
 
+    const payload = await response.json().catch(() => []);
     if (!response.ok) {
-      const payload = await response.json().catch(() => ({}));
       const message = getAttendanceWriteErrorMessage(payload, 'Unable to mark attendance in Supabase.');
       throw new Error(message);
+    }
+
+    const savedAttendee = (payload as AttendanceAttendeeRow[]).some(
+      (attendee) => attendee.session_id === session.id && attendee.member_id === params.memberId
+    );
+    if (!savedAttendee) {
+      throw new Error(
+        'Supabase accepted the attendance request but did not return the saved attendee. Run the attendance stability SQL migration, then try again.'
+      );
     }
   } else {
     const attendeeFilter = new URLSearchParams();
@@ -3124,7 +3305,10 @@ export async function setAttendanceStatus(params: {
 
     const response = await fetch(`${SUPABASE_URL}/rest/v1/pt_session_attendees?${attendeeFilter.toString()}`, {
       method: 'DELETE',
-      headers: await getHeaders(params.accessToken),
+      headers: {
+        ...(await getHeaders(params.accessToken)),
+        Prefer: 'return=representation',
+      },
     });
 
     if (!response.ok) {
@@ -3132,45 +3316,14 @@ export async function setAttendanceStatus(params: {
       const message = getAttendanceWriteErrorMessage(payload, 'Unable to remove attendance in Supabase.');
       throw new Error(message);
     }
-
-    const remainingAttendeesResponse = await fetch(
-      `${SUPABASE_URL}/rest/v1/pt_session_attendees?select=member_id&session_id=eq.${encodeURIComponent(session.id)}`,
-      {
-        method: 'GET',
-        headers: await getHeaders(params.accessToken),
-      }
-    );
-
-    const remainingAttendeesPayload = await remainingAttendeesResponse.json().catch(() => []);
-    if (!remainingAttendeesResponse.ok) {
-      const message =
-        typeof (remainingAttendeesPayload as { message?: unknown }).message === 'string'
-          ? (remainingAttendeesPayload as { message: string }).message
-          : 'Unable to verify remaining attendance in Supabase.';
-      throw new Error(message);
-    }
-
-    if ((remainingAttendeesPayload as AttendanceAttendeeRow[]).length === 0) {
-      const deleteSessionResponse = await fetch(
-        `${SUPABASE_URL}/rest/v1/pt_sessions?id=eq.${encodeURIComponent(session.id)}`,
-        {
-          method: 'DELETE',
-          headers: await getHeaders(params.accessToken),
-        }
-      );
-
-      if (!deleteSessionResponse.ok) {
-        const payload = await deleteSessionResponse.json().catch(() => ({}));
-        const message =
-          typeof (payload as { message?: unknown }).message === 'string'
-            ? (payload as { message: string }).message
-            : 'Unable to clean up empty PT session in Supabase.';
-        throw new Error(message);
-      }
-    }
   }
 
-  return fetchAttendanceSessions(params.accessToken);
+  // The POST/DELETE response is the authoritative mutation confirmation. A
+  // follow-up aggregate read may briefly lag during a Supabase API recovery,
+  // so reconcile it with the confirmed row instead of reporting a false save
+  // failure and blocking workflows such as manual-workout approval.
+  const refreshedSessions = await fetchAttendanceSessions(params.accessToken, params.squadron).catch(() => []);
+  return reconcileAttendanceStatus(refreshedSessions, session, params);
 }
 
 export async function fetchWeeklyAttendanceExcusals(params: {
@@ -3264,43 +3417,73 @@ export async function setWeeklyAttendanceExcusal(params: {
   });
 }
 
-export async function createRosterMember(member: Member, accessToken?: string) {
-  const headers = await getRosterHeaders(accessToken);
-  const requestUrl = `${SUPABASE_URL}/rest/v1/${getRosterTableName(member.squadron)}`;
-  let activePayload: Record<string, unknown> = { ...getRosterPayload(member) };
-  let response = await fetch(requestUrl, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(activePayload),
+export async function createRosterMembers(members: Member[], accessToken?: string) {
+  if (members.length === 0) {
+    return;
+  }
+
+  const membersBySquadron = new Map<Squadron, Member[]>();
+  members.forEach((member) => {
+    const group = membersBySquadron.get(member.squadron) ?? [];
+    group.push(member);
+    membersBySquadron.set(member.squadron, group);
   });
 
-  let errorPayload = await response.json().catch(() => ({}));
-  while (!response.ok) {
-    const message =
-      typeof (errorPayload as { message?: unknown }).message === 'string'
-        ? (errorPayload as { message: string }).message
-        : 'Unable to add member to Supabase roster.';
-    const missingColumn = extractMissingSchemaCacheColumn(message)?.toUpperCase() ?? null;
-    if (!missingColumn || !(missingColumn in activePayload) || !OPTIONAL_ROSTER_WRITE_COLUMNS.has(missingColumn)) {
-      break;
+  const headers = await getRosterHeaders(accessToken);
+  for (const [squadron, squadronMembers] of membersBySquadron) {
+    const requestUrl = `${SUPABASE_URL}/rest/v1/${getRosterTableName(squadron)}`;
+    // Keep requests comfortably below the API body limit while making each
+    // batch atomic. A 280-person roster completes in only a few requests.
+    for (let start = 0; start < squadronMembers.length; start += 100) {
+      let activePayloads: Record<string, unknown>[] = squadronMembers
+        .slice(start, start + 100)
+        .map((member) => ({ ...getRosterPayload(member) }));
+      let response = await fetch(requestUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(activePayloads),
+      });
+
+      let errorPayload = await response.json().catch(() => ({}));
+      while (!response.ok) {
+        const message =
+          typeof (errorPayload as { message?: unknown }).message === 'string'
+            ? (errorPayload as { message: string }).message
+            : 'Unable to add members to the Supabase roster.';
+        const missingColumn = extractMissingSchemaCacheColumn(message)?.toUpperCase() ?? null;
+        if (!missingColumn || !OPTIONAL_ROSTER_WRITE_COLUMNS.has(missingColumn)) {
+          break;
+        }
+
+        const removedColumn = activePayloads.some((payload) => missingColumn in payload);
+        if (!removedColumn) {
+          break;
+        }
+        activePayloads = activePayloads.map((payload) => {
+          const { [missingColumn]: _unsupportedColumn, ...supportedPayload } = payload;
+          return supportedPayload;
+        });
+        response = await fetch(requestUrl, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(activePayloads),
+        });
+        errorPayload = await response.json().catch(() => ({}));
+      }
+
+      if (!response.ok) {
+        const message =
+          typeof (errorPayload as { message?: unknown }).message === 'string'
+            ? (errorPayload as { message: string }).message
+            : 'Unable to add members to the Supabase roster.';
+        throw new Error(message);
+      }
     }
-
-    delete activePayload[missingColumn];
-    response = await fetch(requestUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(activePayload),
-    });
-    errorPayload = await response.json().catch(() => ({}));
   }
+}
 
-  if (!response.ok) {
-    const message =
-      typeof (errorPayload as { message?: unknown }).message === 'string'
-        ? (errorPayload as { message: string }).message
-        : 'Unable to add member to Supabase roster.';
-    throw new Error(message);
-  }
+export async function createRosterMember(member: Member, accessToken?: string) {
+  await createRosterMembers([member], accessToken);
 }
 
 export async function updateRosterMember(previousMember: Member, nextMember: Member, accessToken?: string) {
@@ -3552,12 +3735,14 @@ export async function assignUFPMRole(nextEmail: string, accessToken?: string) {
 export async function updateRosterPasswordStatus(
   email: string,
   status: Partial<RosterPasswordStatus>,
-  accessToken?: string
+  accessToken?: string,
+  squadron: Squadron = DEFAULT_SQUADRON
 ) {
   const params = new URLSearchParams();
   params.set('EMAIL', `eq.${email.toLowerCase()}`);
 
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/roster?${params.toString()}`, {
+  const rosterTable = getRosterTableName(normalizeSquadron(squadron, DEFAULT_SQUADRON));
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/${rosterTable}?${params.toString()}`, {
     method: 'PATCH',
     headers: await getRosterHeaders(accessToken),
     body: JSON.stringify({

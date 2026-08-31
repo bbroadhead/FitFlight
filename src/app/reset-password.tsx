@@ -70,7 +70,8 @@ export default function ResetPasswordScreen() {
         {
           mustChangePassword: false,
         },
-        accessToken
+        accessToken,
+        authUser.squadron
       ).catch(() => undefined);
 
       updateUser({
@@ -116,7 +117,8 @@ export default function ResetPasswordScreen() {
           {
             mustChangePassword: false,
           },
-          accessToken
+          accessToken,
+          authUser.squadron
         ).catch(() => undefined);
 
         updateUser({

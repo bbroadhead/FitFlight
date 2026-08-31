@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { View, Text, Pressable, ScrollView, Modal, TextInput, Alert, useWindowDimensions } from 'react-native';
+import { View, Text, Pressable, ScrollView, Modal, TextInput, Alert, Platform, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -8,9 +8,11 @@ import Animated, { FadeInDown } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
+import ExcelJS from 'exceljs';
+import { Buffer } from 'buffer';
 import { ALL_RANKS, DEFAULT_SQUADRON, GROUP_PERSONNEL_FLIGHT, GROUP_SQUADRON, PCS_OUTPRO_FLIGHT, SQUADRONS, normalizeSquadron, useMemberStore, useAuthStore, type Flight, type Member, type Squadron } from '@/lib/store';
 import { cn } from '@/lib/cn';
-import { createRosterMember, ensureRosterImportSchema } from '@/lib/supabaseData';
+import { createRosterMembers, ensureRosterImportSchema, fetchRosterMembers, provisionRosterAccounts } from '@/lib/supabaseData';
 import { PageContainer } from '@/components/PageContainer';
 
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'DO', 'ADF', 'DET', PCS_OUTPRO_FLIGHT];
@@ -19,6 +21,7 @@ const RANKS = [...ALL_RANKS];
 interface ParsedRow {
   rank: string;
   firstName: string;
+  middleInitial?: string;
   lastName: string;
   email: string;
   flight: string;
@@ -57,16 +60,73 @@ function parseCSV(content: string): string[][] {
   });
 }
 
-// Simple XLSX parser (reads as CSV after conversion - we'll handle the basic case)
-// For full XLSX support in production, you'd use a library like xlsx
-function parseXLSX(content: string): string[][] {
-  // If it's actually a CSV formatted as xlsx, try to parse it
-  // Real XLSX files are binary and need special handling
-  try {
-    return parseCSV(content);
-  } catch {
+type BrowserSelectedFile = {
+  arrayBuffer: () => Promise<ArrayBuffer>;
+  text: () => Promise<string>;
+};
+
+function getSpreadsheetCellText(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value).trim();
+  }
+  if (typeof value === 'object') {
+    const cell = value as {
+      text?: unknown;
+      result?: unknown;
+      richText?: Array<{ text?: unknown }>;
+      hyperlink?: unknown;
+    };
+    if (typeof cell.text === 'string') {
+      return cell.text.trim();
+    }
+    if (Array.isArray(cell.richText)) {
+      return cell.richText.map((part) => String(part.text ?? '')).join('').trim();
+    }
+    if (typeof cell.result === 'string' || typeof cell.result === 'number') {
+      return String(cell.result).trim();
+    }
+    if (typeof cell.hyperlink === 'string') {
+      return cell.hyperlink.trim();
+    }
+  }
+  return '';
+}
+
+async function parseXLSX(uri: string, browserFile?: BrowserSelectedFile): Promise<string[][]> {
+  const workbook = new ExcelJS.Workbook();
+  if (Platform.OS === 'web') {
+    if (!browserFile) {
+      throw new Error('The selected browser file could not be read. Please choose the roster file again.');
+    }
+    await workbook.xlsx.load(await browserFile.arrayBuffer());
+  } else {
+    const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+    await workbook.xlsx.load(Buffer.from(base64, 'base64') as any);
+  }
+
+  const worksheet = [...workbook.worksheets].sort((left, right) => right.rowCount - left.rowCount)[0];
+  if (!worksheet) {
     return [];
   }
+
+  return Array.from({ length: worksheet.rowCount }, (_, rowIndex) => {
+    const values = worksheet.getRow(rowIndex + 1).values as Array<unknown>;
+    return values.slice(1).map(getSpreadsheetCellText);
+  });
+}
+
+async function readTextRosterFile(uri: string, browserFile?: BrowserSelectedFile) {
+  if (Platform.OS === 'web') {
+    if (!browserFile) {
+      throw new Error('The selected browser file could not be read. Please choose the roster file again.');
+    }
+    return browserFile.text();
+  }
+
+  return FileSystem.readAsStringAsync(uri);
 }
 
 export default function ImportRosterScreen() {
@@ -74,7 +134,7 @@ export default function ImportRosterScreen() {
   const { width } = useWindowDimensions();
   const user = useAuthStore(s => s.user);
   const members = useMemberStore(s => s.members);
-  const addMember = useMemberStore(s => s.addMember);
+  const syncMembersFromRoster = useMemberStore(s => s.syncMembersFromRoster);
 
   const [step, setStep] = useState<'upload' | 'mapping' | 'preview' | 'complete'>('upload');
   const [rawData, setRawData] = useState<string[][]>([]);
@@ -87,10 +147,12 @@ export default function ImportRosterScreen() {
   });
   const [parsedRows, setParsedRows] = useState<ParsedRow[]>([]);
   const [importedCount, setImportedCount] = useState(0);
+  const [provisioningSummary, setProvisioningSummary] = useState<{ created: number; existing: number; failed: number; error?: string } | null>(null);
   const [showMappingModal, setShowMappingModal] = useState(false);
   const [selectedColumn, setSelectedColumn] = useState<keyof ColumnMapping | null>(null);
   const [fileName, setFileName] = useState<string>('');
   const [targetSquadron, setTargetSquadron] = useState<Squadron>(normalizeSquadron(user?.squadron, DEFAULT_SQUADRON));
+  const [isImporting, setIsImporting] = useState(false);
   const contentMaxWidth = width >= 1440 ? 1240 : width >= 1180 ? 1100 : 980;
 
   const userSquadron: Squadron = normalizeSquadron(user?.squadron, DEFAULT_SQUADRON);
@@ -115,14 +177,15 @@ export default function ImportRosterScreen() {
     }
 
     const [lastPart, firstPart = ''] = trimmed.split(',', 2);
-    const firstName = firstPart.trim().split(/\s+/)[0] ?? '';
+    const nameParts = firstPart.trim().split(/\s+/).filter(Boolean);
+    const firstName = nameParts[0] ?? '';
     const lastName = lastPart.trim();
 
     if (!firstName || !lastName) {
       return null;
     }
 
-    return { firstName, lastName };
+    return { firstName, middleInitial: nameParts[1]?.slice(0, 1), lastName };
   };
 
   // Validate and normalize rank
@@ -133,16 +196,24 @@ export default function ImportRosterScreen() {
       'AMN': 'Amn',
       'A1C': 'A1C',
       'SRA': 'SrA',
+      'SSG': 'SSgt',
       'SSGT': 'SSgt',
+      'TSG': 'TSgt',
       'TSGT': 'TSgt',
+      'MSG': 'MSgt',
       'MSGT': 'MSgt',
+      'SMS': 'SMSgt',
       'SMSGT': 'SMSgt',
+      'CMS': 'CMSgt',
       'CMSGT': 'CMSgt',
       '2DLT': '2nd Lt.',
       '2D LT': '2nd Lt.',
+      '2LT': '2nd Lt.',
+      '2 LT': '2nd Lt.',
       '2ND LT': '2nd Lt.',
       '1LT': '1st Lt.',
       '1ST LT': '1st Lt.',
+      'CPT': 'Capt.',
       'CAPT': 'Capt.',
       'MAJ': 'Maj.',
       'LTC': 'Lt. Col.',
@@ -206,7 +277,9 @@ export default function ImportRosterScreen() {
       'e': 'Ewok',
       'f': 'Foxhound',
     };
-    return flightMap[normalized] || FLIGHTS.find(f => f.toLowerCase() === normalized) || null;
+    // Preserve unit-specific office/flight codes. Only Hawks' display defaults
+    // need the friendly mappings above.
+    return flightMap[normalized] || FLIGHTS.find(f => f.toLowerCase() === normalized) || input.trim() || null;
   };
 
   // Parse and validate rows
@@ -227,7 +300,11 @@ export default function ImportRosterScreen() {
 
       if (!parsedName) errors.push(`Invalid name format: "${rawFullName}"`);
       if (!normalizedRank) errors.push(`Invalid rank: "${rawRank}"`);
-      if (!rawEmail) errors.push('Missing email');
+      if (!rawEmail) {
+        errors.push('Missing email');
+      } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)) {
+        errors.push(`Invalid email: "${rawEmail}"`);
+      }
       if (!normalizedFlight) errors.push(targetSquadron === GROUP_SQUADRON ? 'Missing group assignment' : `Invalid flight: "${rawFlight}"`);
 
       // Check for duplicates
@@ -245,6 +322,7 @@ export default function ImportRosterScreen() {
       return {
         rank: normalizedRank || rawRank,
         firstName: parsedName?.firstName ?? '',
+        middleInitial: parsedName?.middleInitial,
         lastName: parsedName?.lastName ?? '',
         email: rawEmail,
         flight: normalizedFlight || rawFlight,
@@ -277,20 +355,26 @@ export default function ImportRosterScreen() {
 
       const file = result.assets[0];
       setFileName(file.name);
+      if (canSelectImportSquadron) {
+        if (/tigers/i.test(file.name)) {
+          setTargetSquadron('Tigers');
+        } else if (/krakens/i.test(file.name)) {
+          setTargetSquadron('Krakens');
+        }
+      }
 
       // Read file content
-      const content = await FileSystem.readAsStringAsync(file.uri);
-
       // Parse based on file type
       let data: string[][];
-      if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
-        // For XLSX, we'd need a proper library, but we'll try basic parsing
-        data = parseXLSX(content);
+      const lowerFileName = file.name.toLowerCase();
+      if (lowerFileName.endsWith('.xlsx') || lowerFileName.endsWith('.xls')) {
+        data = await parseXLSX(file.uri, file.file);
         if (data.length === 0) {
           Alert.alert('Error', 'Could not parse XLSX file. Please export as CSV and try again.');
           return;
         }
       } else {
+        const content = await readTextRosterFile(file.uri, file.file);
         data = parseCSV(content);
       }
 
@@ -307,13 +391,13 @@ export default function ImportRosterScreen() {
 
       headerRow.forEach((cell, index) => {
         const lower = cell.toLowerCase();
-        if (lower.includes('full_name') || lower.includes('full name') || lower === 'name') {
+        if (lower.includes('full_name') || lower.includes('full name') || lower.includes('last name') || lower === 'name') {
           autoMapping.fullName = index;
         } else if (lower.includes('rank') || lower === 'grade') {
           autoMapping.rank = index;
         } else if (lower.includes('email') || lower === 'mail') {
           autoMapping.email = index;
-        } else if (lower.includes('flight') || lower.includes('flt') || lower === 'section' || lower === 'unit') {
+        } else if (lower.includes('flight') || lower.includes('flt') || lower.includes('office') || lower === 'section' || lower === 'unit') {
           autoMapping.flight = index;
         }
       });
@@ -335,13 +419,13 @@ export default function ImportRosterScreen() {
         return;
       }
 
-    await ensureRosterImportSchema(targetSquadron, accessToken);
+      setIsImporting(true);
+      await ensureRosterImportSchema(targetSquadron, accessToken);
 
-    const validRows = parsedRows.filter(row => row.isValid);
+      const validRows = parsedRows.filter(row => row.isValid);
 
-    for (const row of validRows) {
-      const newMember: Member = {
-        id: Date.now().toString() + Math.random().toString(36).substring(2, 9),
+      const newMembers: Member[] = validRows.map((row, index) => ({
+        id: `import-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
         rank: row.rank,
         firstName: row.firstName,
         lastName: row.lastName,
@@ -361,19 +445,41 @@ export default function ImportRosterScreen() {
         monthlyPlacements: [],
         leaderboardHistory: [],
         trophyCount: 0,
-      };
-      await createRosterMember(newMember, accessToken);
-      addMember(newMember);
-    }
+        // Provisioned accounts receive a temporary password and must replace it on first sign-in.
+        mustChangePassword: true,
+        hasLoggedIntoApp: false,
+      }));
 
-    setImportedCount(validRows.length);
-    setStep('complete');
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      await createRosterMembers(newMembers, accessToken);
+      const accountProvisioning = await provisionRosterAccounts({
+        squadron: targetSquadron,
+        members: validRows.map((row) => ({
+          email: row.email,
+          firstName: row.firstName,
+          middleInitial: row.middleInitial,
+          lastName: row.lastName,
+        })),
+        accessToken,
+      }).catch((error) => ({
+        created: 0,
+        existing: 0,
+        failed: validRows.length,
+        error: error instanceof Error ? error.message : 'Unable to create the imported user accounts.',
+      }));
+      setProvisioningSummary(accountProvisioning);
+      const refreshedRoster = await fetchRosterMembers(accessToken, targetSquadron);
+      syncMembersFromRoster(refreshedRoster, { squadron: targetSquadron });
+
+      setImportedCount(validRows.length);
+      setStep('complete');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     };
 
-    void run().catch((error) => {
-      Alert.alert('Import failed', error instanceof Error ? error.message : 'Unable to import this roster.');
-    });
+    void run()
+      .catch((error) => {
+        Alert.alert('Import failed', error instanceof Error ? error.message : 'Unable to import this roster.');
+      })
+      .finally(() => setIsImporting(false));
   };
 
   const validCount = parsedRows.filter(r => r.isValid).length;
@@ -441,6 +547,36 @@ export default function ImportRosterScreen() {
                 </View>
               </View>
 
+              {canSelectImportSquadron && (
+                <View className="mt-6 p-4 bg-white/5 rounded-2xl border border-white/10">
+                  <Text className="text-white font-semibold mb-3">Import Into Squadron</Text>
+                  <Text className="text-af-silver text-sm mb-3">
+                    Choose which squadron should receive this roster upload.
+                  </Text>
+                  <View className="flex-row flex-wrap -mx-1">
+                    {SQUADRONS.map((squadron) => (
+                      <Pressable
+                        key={squadron}
+                        onPress={() => {
+                          setTargetSquadron(squadron);
+                          Haptics.selectionAsync();
+                        }}
+                        className={cn(
+                          "mx-1 mb-2 px-4 py-2 rounded-xl border",
+                          targetSquadron === squadron
+                            ? "bg-af-accent/20 border-af-accent"
+                            : "bg-white/5 border-white/10"
+                        )}
+                      >
+                        <Text className={targetSquadron === squadron ? "text-white font-semibold" : "text-af-silver"}>
+                          {squadron}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
+              )}
+
               {/* Expected format */}
               <View className="mt-6 p-4 bg-white/5 rounded-2xl border border-white/10">
                 <Text className="text-white font-semibold mb-3">Expected Format</Text>
@@ -481,36 +617,6 @@ export default function ImportRosterScreen() {
                   </Text>
                 </View>
               </View>
-
-              {canSelectImportSquadron && (
-                <View className="mt-6 p-4 bg-white/5 rounded-2xl border border-white/10">
-                  <Text className="text-white font-semibold mb-3">Import Into Squadron</Text>
-                  <Text className="text-af-silver text-sm mb-3">
-                    Choose which squadron should receive this roster upload.
-                  </Text>
-                  <View className="flex-row flex-wrap -mx-1">
-                    {SQUADRONS.map((squadron) => (
-                      <Pressable
-                        key={squadron}
-                        onPress={() => {
-                          setTargetSquadron(squadron);
-                          Haptics.selectionAsync();
-                        }}
-                        className={cn(
-                          "mx-1 mb-2 px-4 py-2 rounded-xl border",
-                          targetSquadron === squadron
-                            ? "bg-af-accent/20 border-af-accent"
-                            : "bg-white/5 border-white/10"
-                        )}
-                      >
-                        <Text className={targetSquadron === squadron ? "text-white font-semibold" : "text-af-silver"}>
-                          {squadron}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                </View>
-              )}
 
               {/* Supported formats */}
               <View className="mt-4 flex-row">
@@ -686,17 +792,17 @@ export default function ImportRosterScreen() {
                 </Pressable>
                 <Pressable
                   onPress={handleImport}
-                  disabled={validCount === 0}
+                  disabled={validCount === 0 || isImporting}
                   className={cn(
                     "flex-1 py-4 rounded-xl ml-2",
-                    validCount > 0 ? "bg-af-accent" : "bg-white/10"
+                    validCount > 0 && !isImporting ? "bg-af-accent" : "bg-white/10"
                   )}
                 >
                   <Text className={cn(
                     "font-bold text-center",
-                    validCount > 0 ? "text-white" : "text-white/40"
+                    validCount > 0 && !isImporting ? "text-white" : "text-white/40"
                   )}>
-                    Import {validCount} Members
+                    {isImporting ? `Importing ${validCount} Members...` : `Import ${validCount} Members`}
                   </Text>
                 </Pressable>
               </View>
@@ -711,8 +817,28 @@ export default function ImportRosterScreen() {
               </View>
               <Text className="text-white text-2xl font-bold mb-2">Import Complete</Text>
               <Text className="text-af-silver text-center mb-6">
-                Successfully added {importedCount} members to the {userSquadron} roster
+                Successfully added {importedCount} members to the {targetSquadron} roster
               </Text>
+
+              {provisioningSummary && !provisioningSummary.error && provisioningSummary.failed === 0 && (
+                <View className="w-full bg-af-success/15 rounded-xl border border-af-success/40 p-4 mb-4">
+                  <Text className="text-af-success font-semibold text-center">
+                    Created {provisioningSummary.created} login account{provisioningSummary.created === 1 ? '' : 's'}
+                  </Text>
+                  <Text className="text-af-silver text-center text-sm mt-1">
+                    New users must change their temporary password when they first sign in.
+                  </Text>
+                </View>
+              )}
+
+              {provisioningSummary && (provisioningSummary.error || provisioningSummary.failed > 0) && (
+                <View className="w-full bg-af-warning/15 rounded-xl border border-af-warning/40 p-4 mb-4">
+                  <Text className="text-af-warning font-semibold text-center">Roster imported, but accounts need attention</Text>
+                  <Text className="text-af-silver text-center text-sm mt-1">
+                    {provisioningSummary.error ?? `${provisioningSummary.created} created and ${provisioningSummary.failed} account${provisioningSummary.failed === 1 ? '' : 's'} could not be created.`}
+                  </Text>
+                </View>
+              )}
 
               <View className="flex-row items-center bg-white/5 rounded-xl p-4 mb-6">
                 <Users size={24} color="#4A90D9" />

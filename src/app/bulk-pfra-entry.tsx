@@ -511,7 +511,7 @@ export default function BulkPFRAEntryScreen() {
           fetchPFRABatchById(batchId, accessToken),
           fetchPFRABatchMembers(batchId, accessToken),
           fetchPFRARecords(accessToken, user.squadron),
-          fetchAttendanceSessions(accessToken).catch(() => []),
+          fetchAttendanceSessions(accessToken, user.squadron).catch(() => []),
           fetchPFRABatches(accessToken, user.squadron).catch(() => recentBatches),
         ]);
 

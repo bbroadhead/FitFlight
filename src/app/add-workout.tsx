@@ -672,7 +672,7 @@ export default function AddWorkoutScreen() {
 
         const [approvedManualWorkouts, nextSessions] = await Promise.all([
           fetchApprovedManualWorkouts(accessToken, user.squadron).catch(() => []),
-          fetchAttendanceSessions(accessToken).catch(() => []),
+          fetchAttendanceSessions(accessToken, user.squadron).catch(() => []),
         ]);
         syncApprovedManualWorkouts(approvedManualWorkouts);
         syncPTSessions(nextSessions);

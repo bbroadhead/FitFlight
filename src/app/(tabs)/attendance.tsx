@@ -27,7 +27,6 @@ import { useErrorLogScreenContext } from '@/lib/errorLog';
 import ExcelJS from 'exceljs';
 import { TutorialTarget } from '@/contexts/TutorialTourContext';
 
-const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'DO', 'ADF', 'DET'];
 const WEEKLY_PROGRESS_TARGET = 5;
 const NAME_COLUMN_WIDTH = 120;
 const PROGRESS_COLUMN_WIDTH = 56;
@@ -182,6 +181,7 @@ export default function AttendanceScreen() {
   const flightScrollXRef = useRef(0);
   const attendanceInteractionRef = useRef(false);
   const attendanceInteractionResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const attendanceRefreshVersionRef = useRef(0);
   const suppressNextAttendancePressRef = useRef(false);
   const weekTouchStartRef = useRef<{ x: number; y: number } | null>(null);
   const weekDragActivatedRef = useRef(false);
@@ -204,6 +204,14 @@ export default function AttendanceScreen() {
     : false;
   const userSquadron = normalizeSquadron(user?.squadron, DEFAULT_SQUADRON);
   const currentWeekStartKey = format(currentWeekStart, 'yyyy-MM-dd');
+  const availableFlights = useMemo(
+    () => Array.from(new Set(
+      members
+        .filter((member) => member.squadron === userSquadron && shouldIncludeFlightInSquadronRollups(member.flight))
+        .map((member) => member.flight)
+    )).sort((left, right) => left.localeCompare(right)),
+    [members, userSquadron]
+  );
 
   const weekDays = useMemo(
     () => Array.from({ length: 7 }, (_, index) => addDays(currentWeekStart, index)),
@@ -213,8 +221,8 @@ export default function AttendanceScreen() {
   const flightStripWidth = useMemo(() => {
     const allWidth = 68;
     const flightWidth = 94;
-    return allWidth + FLIGHTS.length * flightWidth;
-  }, []);
+    return allWidth + availableFlights.length * flightWidth;
+  }, [availableFlights]);
 
   const dayColumnsWidth = weekDays.length * DAY_COLUMN_WIDTH;
   const attendanceTableNaturalWidth = NAME_COLUMN_WIDTH + dayColumnsWidth + PROGRESS_COLUMN_WIDTH;
@@ -275,7 +283,28 @@ export default function AttendanceScreen() {
       return new Set([memberId]);
     }
 
-    return new Set<string>([member.id, buildLegacyRosterId(member), buildLegacyRosterId(member, true)]);
+    const normalizedEmail = member.email?.trim().toLowerCase() ?? '';
+    const normalizedFirstName = member.firstName.trim().toLowerCase();
+    const normalizedLastName = member.lastName.trim().toLowerCase();
+    const equivalentMembers = members.filter((entry) => {
+      if (entry.id === member.id) {
+        return true;
+      }
+
+      if (normalizedEmail.length > 0 && entry.email?.trim().toLowerCase() === normalizedEmail) {
+        return true;
+      }
+
+      return (
+        entry.squadron === member.squadron &&
+        entry.firstName.trim().toLowerCase() === normalizedFirstName &&
+        entry.lastName.trim().toLowerCase() === normalizedLastName
+      );
+    });
+
+    return new Set<string>(
+      equivalentMembers.flatMap((entry) => [entry.id, buildLegacyRosterId(entry), buildLegacyRosterId(entry, true)])
+    );
   }, [members]);
 
   const isAttending = useCallback((date: Date, memberId: string, flight: Flight, squadron: typeof userSquadron = userSquadron) => {
@@ -463,9 +492,17 @@ export default function AttendanceScreen() {
       return;
     }
 
-    const sessions = await fetchAttendanceSessions(accessToken, userSquadron);
-    syncPTSessions(sessions);
-  }, [accessToken, syncPTSessions]);
+    const refreshVersion = attendanceRefreshVersionRef.current;
+    try {
+      const sessions = await fetchAttendanceSessions(accessToken, userSquadron);
+      // Never let a request that started before a mutation replace its confirmed state.
+      if (refreshVersion === attendanceRefreshVersionRef.current) {
+        syncPTSessions(sessions);
+      }
+    } catch (error) {
+      console.error('Unable to refresh attendance from Supabase.', error);
+    }
+  }, [accessToken, syncPTSessions, userSquadron]);
 
   const loadWeeklyExcusals = useCallback(async () => {
     if (!accessToken) {
@@ -485,7 +522,11 @@ export default function AttendanceScreen() {
       return;
     }
 
+    markAttendanceInteraction(true);
+    attendanceRefreshVersionRef.current += 1;
+
     if (isMemberWeeklyExcused(memberId)) {
+      markAttendanceInteraction(false);
       Alert.alert('Member excused this week', 'This member is currently excused from the weekly workout requirement for this week.');
       return;
     }
@@ -493,6 +534,7 @@ export default function AttendanceScreen() {
     const attendanceSource = getAttendanceSource(date, memberId, flight, squadron);
     const currentlyAttending = isAttending(date, memberId, flight, squadron);
     if (currentlyAttending && attendanceSource && attendanceSource !== 'manual') {
+      markAttendanceInteraction(false);
       Alert.alert(
         'Managed attendance',
         attendanceSource === 'pfra'
@@ -541,7 +583,7 @@ export default function AttendanceScreen() {
             ? {
                 ...candidate,
                 attendees: nextAttendees,
-                attendanceSources: nextAttendanceSources,
+                attendeeSources: nextAttendanceSources,
               }
             : candidate
         );
@@ -593,7 +635,13 @@ export default function AttendanceScreen() {
         });
       }
     } catch (error) {
+      // Restore the last server state when an online write is rejected instead
+      // of allowing a later background refresh to silently undo the UI.
+      await loadAttendanceFromBackend();
+      Alert.alert('Attendance was not saved', error instanceof Error ? error.message : 'Please try again.');
       console.error('Unable to update attendance in Supabase.', error);
+    } finally {
+      markAttendanceInteraction(false);
     }
   };
 
@@ -602,9 +650,11 @@ export default function AttendanceScreen() {
       return;
     }
 
+    markAttendanceInteraction(true);
     suppressNextAttendancePressRef.current = true;
 
     if (isMemberWeeklyExcused(memberId)) {
+      markAttendanceInteraction(false);
       Alert.alert('Member excused this week', 'This member is already excused from the weekly workout requirement for this week.');
       return;
     }
@@ -614,6 +664,7 @@ export default function AttendanceScreen() {
     const isSingleDayExcused = attendanceSource === 'excused';
 
     if (currentlyAttending && !isSingleDayExcused) {
+      markAttendanceInteraction(false);
       Alert.alert(
         'Attendance already recorded',
         'This member already has attendance for that day. Remove the attendance first if you need to use a single-day excusal instead.'
@@ -704,6 +755,8 @@ export default function AttendanceScreen() {
     } catch (error) {
       Alert.alert('Unable to update daily excusal', error instanceof Error ? error.message : 'Please try again.');
       console.error('Unable to update daily attendance excusal in Supabase.', error);
+    } finally {
+      markAttendanceInteraction(false);
     }
   };
 
@@ -856,7 +909,7 @@ export default function AttendanceScreen() {
     void loadAttendanceFromBackend();
     const interval = setInterval(() => {
       void loadAttendanceFromBackend();
-    }, 15000);
+    }, 90000);
 
     return () => clearInterval(interval);
   }, [accessToken, loadAttendanceFromBackend]);
@@ -878,7 +931,7 @@ export default function AttendanceScreen() {
         return;
       }
 
-      if (storedFilter === 'all' || FLIGHTS.includes(storedFilter as Flight)) {
+      if (storedFilter === 'all' || availableFlights.includes(storedFilter as Flight)) {
         setSelectedFlight(storedFilter as Flight | 'all');
       }
     };
@@ -888,7 +941,7 @@ export default function AttendanceScreen() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [availableFlights]);
 
   useEffect(() => {
     void AsyncStorage.setItem(ATTENDANCE_FILTER_STORAGE_KEY, selectedFlight);
@@ -1359,7 +1412,7 @@ export default function AttendanceScreen() {
                       <Text className={cn('font-medium', selectedFlight === 'all' ? 'text-white' : 'text-white/60')}>All</Text>
                     </Pressable>
 
-                    {FLIGHTS.map((flight) => (
+                    {availableFlights.map((flight) => (
                       <Pressable
                         key={flight}
                         onPress={() => {

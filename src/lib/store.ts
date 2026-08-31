@@ -4,7 +4,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { buildLeaderboardHistory, getMonthKey } from '@/lib/monthlyStats';
 
 // Types
-export type Flight = 'Apex' | 'Bomber' | 'Cryptid' | 'Doom' | 'Ewok' | 'Foxhound' | 'DO' | 'ADF' | 'DET' | 'Group' | 'PCS/Outpro';
+// Squadrons may use their own office or flight designators. Keep the known
+// labels for UI defaults while preserving roster-provided values verbatim.
+export type Flight = string;
 export type AccountType = 'fitflight_creator' | 'ufpm' | 'demo' | 'squadron_leadership' | 'group_personnel' | 'pfl' | 'ptl' | 'standard';
 export type Squadron = 'Knights' | 'Hawks' | 'Tigers' | 'Krakens' | 'Warriors';
 export type WorkoutType =
@@ -813,6 +815,36 @@ const isSameMember = (left: Member, right: Member) => {
   );
 };
 
+const resolveMappedMemberId = (memberIdMap: Map<string, string>, memberId: string) => {
+  let currentId = memberId;
+  const visited = new Set<string>();
+
+  while (!visited.has(currentId)) {
+    visited.add(currentId);
+    const nextId = memberIdMap.get(currentId);
+    if (!nextId || nextId === currentId) {
+      break;
+    }
+    currentId = nextId;
+  }
+
+  return currentId;
+};
+
+const getPTSessionSyncKey = (sessions: PTSession[]) => JSON.stringify(
+  sessions
+    .map((session) => ({
+      id: session.id,
+      date: session.date,
+      flight: session.flight,
+      squadron: session.squadron ?? DEFAULT_SQUADRON,
+      createdBy: session.createdBy,
+      attendees: [...session.attendees].sort(),
+      attendeeSources: Object.entries(session.attendeeSources ?? {}).sort(([left], [right]) => left.localeCompare(right)),
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id))
+);
+
 const mergeMember = (base: Member, existing?: Member): Member => {
   if (!existing) {
     return {
@@ -1155,7 +1187,7 @@ export const useMemberStore = create<MemberState>()(
           }
         });
 
-        const mapMemberId = (memberId: string) => memberIdMap.get(memberId) ?? memberId;
+        const mapMemberId = (memberId: string) => resolveMappedMemberId(memberIdMap, memberId);
         const fallbackCreatorId =
           nextMembers.find((member) => member.accountType === 'fitflight_creator')?.id ??
           nextMembers[0]?.id ??
@@ -1246,6 +1278,12 @@ export const useMemberStore = create<MemberState>()(
           const syncedSquadrons = new Set(normalizedSessions.map((session) => session.squadron));
           const preservedSessions = state.ptSessions.filter((session) => !syncedSquadrons.has(session.squadron ?? DEFAULT_SQUADRON));
           const nextSessions = [...preservedSessions, ...normalizedSessions];
+
+          // Background refreshes frequently return the same attendance data.
+          // Avoid recalculating every member's derived analytics in that case.
+          if (getPTSessionSyncKey(state.ptSessions) === getPTSessionSyncKey(nextSessions)) {
+            return state;
+          }
           const nextMembers = hydrateDerivedMemberState(state.members, nextSessions, state.sharedWorkouts);
 
         return {

@@ -3,12 +3,16 @@ import { Alert, View, Text, Pressable, RefreshControl, ScrollView, TextInput, Mo
 import { BlurView } from 'expo-blur';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import ExcelJS from 'exceljs';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
 import { User, Shield, LogOut, LogIn, UserPlus, Trash2, Users, Activity, X, Check, Bell, Crown, Settings, Plus, FileText, Calendar, Building2, AlertTriangle, Upload, Dumbbell, HelpCircle, Mail, ChevronDown, ChevronUp, Pencil, Search, Star, MessageSquare, Trophy, UserCheck } from 'lucide-react-native';
 import Animated, { FadeIn, FadeInDown, FadeInUp, SlideInDown } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
+import { Buffer } from 'buffer';
 import SmartSlider from '@/components/SmartSlider';
 import { useAuthStore, useMemberStore, formatFlightDisplay, type Flight, type Member, type AccountType, type Squadron, type IntegrationService, type Workout, type WorkoutType, type AppTheme, DEFAULT_SQUADRON, RANK_GROUPS, getDisplayName, canEditAttendance, canManagePTL, canManagePTPrograms, isAdmin, SQUADRONS, ALL_ACHIEVEMENTS, isPFLAccountType, normalizeAccountType, normalizeSquadron, PCS_OUTPRO_FLIGHT, isPCSOutproFlight, shouldIncludeFlightInSquadronRollups } from '@/lib/store';
 import { cn } from '@/lib/cn';
@@ -22,7 +26,7 @@ import { TopStatusBar } from '@/components/TopStatusBar';
 import { TutorialTarget, useTutorialTour } from '@/contexts/TutorialTourContext';
 import { useErrorLogScreenContext } from '@/lib/errorLog';
 import { canUseStravaSync, disconnectStrava, getStravaSetupError, mapImportedWorkouts, startStravaConnect, syncStravaWorkouts } from '@/lib/strava';
-import { signOutFromSupabase } from '@/lib/supabaseAuth';
+import { signInWithPassword, signOutFromSupabase } from '@/lib/supabaseAuth';
 import { buildTrophyStats, getRarestEarnedTrophies } from '@/lib/trophies';
 import { formatMonthLabel, getAvailableMonthKeys, getMemberEffectiveWorkouts, getMemberMonthSummary, getMonthKey } from '@/lib/monthlyStats';
 import { getWorkoutScoreHistory, WORKOUT_SCORE_ENGINE_NAME } from '@/lib/workoutScoreEngine';
@@ -34,6 +38,7 @@ import {
   publishAppUpdateNote,
   fetchApprovedManualWorkouts,
   fetchAttendanceSessions,
+  fetchPFRARecords,
   fetchManualWorkoutProofImageMap,
   fetchManualWorkoutSubmissions,
   fetchAdminAuditTrail,
@@ -69,7 +74,7 @@ import { createOfflineActionId, requestRegisteredSync, runOrQueueOfflineMutation
 const FLIGHTS: Flight[] = ['Apex', 'Bomber', 'Cryptid', 'Doom', 'Ewok', 'Foxhound', 'DO', 'ADF', 'DET'];
 const OWNER_EMAIL = 'benjamin.broadhead.2@us.af.mil';
 const PROJECT_COORDINATOR_EMAIL = 'jacob.de_la_rosa@us.af.mil';
-const FITFLIGHT_VERSION = 'v1.1.0';
+const FITFLIGHT_VERSION = 'v1.1.2';
 const DEVELOPER_NAME = 'SSgt Benjamin Broadhead';
 const DEVELOPER_TITLE = 'Developer';
 const PROJECT_COORDINATOR_NAME = 'SSgt Jacob De La Rosa';
@@ -232,14 +237,14 @@ function getScheduledSessionKindLabel(kind: 'pt' | 'pfra_mock' | 'pfra_diagnosti
   }
 }
 
-function getScheduledSessionScopeLabel(session: { scope: 'squadron' | 'flight' | 'personal'; flights: Flight[] }) {
+function getScheduledSessionScopeLabel(session: { scope: 'squadron' | 'flight' | 'personal'; flights?: Flight[] | null }) {
   if (session.scope === 'personal') {
     return 'Personal';
   }
   if (session.scope === 'squadron') {
     return 'Squadron PT';
   }
-  return session.flights.join(', ');
+  return Array.isArray(session.flights) && session.flights.length > 0 ? session.flights.join(', ') : 'Flight PT';
 }
 
 function isVisibleScheduledSession(date: string, time: string) {
@@ -255,6 +260,94 @@ const getWebSafeFadeIn = (duration: number) =>
 
 const getWebSafeSlideInDown = (duration: number) =>
   Platform.OS === 'web' ? undefined : SlideInDown.duration(duration);
+
+function getMemberDataRichness(member: Member) {
+  return (
+    (member.workouts?.length ?? 0) * 4 +
+    (member.fitnessAssessments?.length ?? 0) * 4 +
+    (member.achievements?.length ?? 0) * 2 +
+    (member.leaderboardHistory?.length ?? 0) * 2 +
+    (member.connectedApps?.length ?? 0) +
+    (member.monthlyPlacements?.length ?? 0) +
+    (member.email ? 1 : 0)
+  );
+}
+
+type ResolvableUser = {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  squadron: Squadron;
+};
+
+function pickBestMemberMatch(candidates: Member[], memberUser: ResolvableUser) {
+  const normalizedEmail = memberUser.email?.trim().toLowerCase() ?? '';
+
+  return [...candidates].sort((left, right) => {
+    const leftEmailMatch = normalizedEmail.length > 0 && left.email?.trim().toLowerCase() === normalizedEmail ? 1 : 0;
+    const rightEmailMatch = normalizedEmail.length > 0 && right.email?.trim().toLowerCase() === normalizedEmail ? 1 : 0;
+    if (leftEmailMatch !== rightEmailMatch) {
+      return rightEmailMatch - leftEmailMatch;
+    }
+
+    const leftSquadronMatch = left.squadron === memberUser.squadron ? 1 : 0;
+    const rightSquadronMatch = right.squadron === memberUser.squadron ? 1 : 0;
+    if (leftSquadronMatch !== rightSquadronMatch) {
+      return rightSquadronMatch - leftSquadronMatch;
+    }
+
+    const richnessDelta = getMemberDataRichness(right) - getMemberDataRichness(left);
+    if (richnessDelta !== 0) {
+      return richnessDelta;
+    }
+
+    const leftExactId = left.id === memberUser.id ? 1 : 0;
+    const rightExactId = right.id === memberUser.id ? 1 : 0;
+    return rightExactId - leftExactId;
+  })[0] ?? null;
+}
+
+function getEquivalentMemberMatches(candidates: Member[], memberUser: ResolvableUser) {
+  const normalizedEmail = memberUser.email?.trim().toLowerCase() ?? '';
+  const normalizedFirstName = memberUser.firstName.trim().toLowerCase();
+  const normalizedLastName = memberUser.lastName.trim().toLowerCase();
+
+  return candidates.filter((member) =>
+    member.id === memberUser.id ||
+    (normalizedEmail.length > 0 && member.email?.trim().toLowerCase() === normalizedEmail) ||
+    (
+      member.squadron === memberUser.squadron &&
+      member.firstName.trim().toLowerCase() === normalizedFirstName &&
+      member.lastName.trim().toLowerCase() === normalizedLastName
+    )
+  );
+}
+
+function mergeEquivalentMemberData(primary: Member, matches: Member[]): Member {
+  const uniqueBy = <T,>(items: T[], keyFor: (item: T) => string) => {
+    const seen = new Set<string>();
+    return items.filter((item) => {
+      const key = keyFor(item);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+
+  return {
+    ...primary,
+    workouts: uniqueBy(matches.flatMap((member) => member.workouts ?? []), (workout) => workout.id || `${workout.date}-${workout.type}-${workout.externalId ?? ''}`),
+    fitnessAssessments: uniqueBy(
+      matches.flatMap((member) => member.fitnessAssessments ?? []),
+      (assessment) => `${assessment.date}-${assessment.recordType ?? ''}-${assessment.overallScore}`
+    ),
+    achievements: Array.from(new Set(matches.flatMap((member) => member.achievements ?? []))),
+    leaderboardHistory: uniqueBy(matches.flatMap((member) => member.leaderboardHistory ?? []), (entry) => entry.month),
+    monthlyPlacements: uniqueBy(matches.flatMap((member) => member.monthlyPlacements ?? []), (entry) => entry.month),
+    connectedApps: Array.from(new Set(matches.flatMap((member) => member.connectedApps ?? []))),
+  };
+}
 
 function getWorkoutDisplayTitle(type: WorkoutType) {
   switch (type) {
@@ -280,6 +373,83 @@ function formatDisplayNumber(value: number) {
 
 function formatDistanceValue(value?: number) {
   return typeof value === 'number' && Number.isFinite(value) ? `${formatDisplayNumber(value)} mi` : 'N/A';
+}
+
+async function downloadWebFile(filename: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+function appendWorkbookSheet(
+  workbook: ExcelJS.Workbook,
+  title: string,
+  headers: string[],
+  rows: unknown[][]
+) {
+  const worksheet = workbook.addWorksheet(title.slice(0, 31));
+  worksheet.addRow(headers);
+
+  if (rows.length === 0) {
+    worksheet.addRow(['No data']);
+  } else {
+    rows.forEach((row) => worksheet.addRow(row));
+  }
+
+  worksheet.getRow(1).font = { bold: true };
+  worksheet.views = [{ state: 'frozen', ySplit: 1 }];
+
+  worksheet.columns = headers.map((header, index) => {
+    const maxLength = Math.max(
+      header.length,
+      ...rows.map((row) => String(row[index] ?? '').length),
+      rows.length === 0 && index === 0 ? 'No data'.length : 0
+    );
+
+    return {
+      key: `${index}`,
+      width: Math.min(Math.max(maxLength + 2, 16), 42),
+    };
+  });
+}
+
+function escapeCsvValue(value: unknown) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  const normalized = typeof value === 'string'
+    ? value
+    : typeof value === 'number' || typeof value === 'boolean'
+      ? String(value)
+      : JSON.stringify(value);
+
+  const cleaned = normalized.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  if (/[",\n]/.test(cleaned)) {
+    return `"${cleaned.replace(/"/g, '""')}"`;
+  }
+
+  return cleaned;
+}
+
+function buildCsvRow(values: unknown[]) {
+  return values.map((value) => escapeCsvValue(value)).join(',');
+}
+
+function appendCsvSection(lines: string[], title: string, headers: string[], rows: unknown[][]) {
+  lines.push(buildCsvRow([title]));
+  lines.push(buildCsvRow(headers));
+  if (rows.length === 0) {
+    lines.push(buildCsvRow(['No data']));
+  } else {
+    rows.forEach((row) => lines.push(buildCsvRow(row)));
+  }
+  lines.push('');
 }
 
 function isPFRAWorkoutItem(workout: Pick<Workout, 'source' | 'metrics'>) {
@@ -448,6 +618,10 @@ export default function ProfileScreen() {
   const [showPFRAHistoryModal, setShowPFRAHistoryModal] = useState(false);
   const [pfraSummaryMode, setPfraSummaryMode] = useState<'latest' | 'best'>('latest');
   const [showUpcomingPTSessionsModal, setShowUpcomingPTSessionsModal] = useState(false);
+  const [showExportDataModal, setShowExportDataModal] = useState(false);
+  const [exportDataPassword, setExportDataPassword] = useState('');
+  const [exportDataError, setExportDataError] = useState<string | null>(null);
+  const [isExportingData, setIsExportingData] = useState(false);
   const [expandedWorkoutImageUri, setExpandedWorkoutImageUri] = useState<string | null>(null);
   const [manualWorkoutProofMap, setManualWorkoutProofMap] = useState<Record<string, string>>({});
   const [selectedSummaryMonth, setSelectedSummaryMonth] = useState(getMonthKey());
@@ -526,6 +700,7 @@ export default function ProfileScreen() {
     if (showWorkoutHistoryModal) return 'Workout History';
     if (showPFRAHistoryModal) return 'PFRA History';
     if (showUpcomingPTSessionsModal) return 'Upcoming PT Sessions';
+    if (showExportDataModal) return 'Export All Of My Data';
     if (showLeaderboardHistoryModal) return 'Leaderboard History';
     if (showAuditTrailModal) return 'Admin Audit Trail';
     if (showResetUserPasswordModal) return 'Reset User Password';
@@ -544,6 +719,7 @@ export default function ProfileScreen() {
     showDeveloperContact,
     showDeveloperMessageModal,
     showDisconnectModal,
+    showExportDataModal,
     showInstallModal,
     showLeaderboardHistoryModal,
     showManageModal,
@@ -571,24 +747,19 @@ export default function ProfileScreen() {
       return null;
     }
 
-    const normalizedEmail = memberUser.email?.trim().toLowerCase() ?? '';
-    const normalizedFirstName = memberUser.firstName.trim().toLowerCase();
-    const normalizedLastName = memberUser.lastName.trim().toLowerCase();
+    const matches = getEquivalentMemberMatches(members, memberUser);
 
-    return (
-      members.find((member) => member.id === memberUser.id) ??
-      members.find(
-        (member) =>
-          normalizedEmail.length > 0 &&
-          member.email?.trim().toLowerCase() === normalizedEmail
-      ) ??
-      members.find(
-        (member) =>
-          member.firstName.trim().toLowerCase() === normalizedFirstName &&
-          member.lastName.trim().toLowerCase() === normalizedLastName
-      ) ??
-      null
-    );
+    return pickBestMemberMatch(matches, memberUser);
+  };
+  const resolveExportMemberForUser = (memberUser: typeof user) => {
+    if (!memberUser) {
+      return null;
+    }
+
+    const matches = getEquivalentMemberMatches(members, memberUser)
+      .filter((member) => member.squadron === memberUser.squadron);
+    const primary = pickBestMemberMatch(matches, memberUser);
+    return primary ? mergeEquivalentMemberData(primary, matches) : null;
   };
   const currentMember = resolveMemberForUser(user);
   const profileVisibilitySettings = {
@@ -710,7 +881,28 @@ export default function ProfileScreen() {
       return new Set([memberId]);
     }
 
-    return new Set<string>([member.id, buildLegacyRosterId(member), buildLegacyRosterId(member, true)]);
+    const normalizedEmail = member.email?.trim().toLowerCase() ?? '';
+    const normalizedFirstName = member.firstName.trim().toLowerCase();
+    const normalizedLastName = member.lastName.trim().toLowerCase();
+    const equivalentMembers = members.filter((entry) => {
+      if (entry.id === member.id) {
+        return true;
+      }
+
+      if (normalizedEmail.length > 0 && entry.email?.trim().toLowerCase() === normalizedEmail) {
+        return true;
+      }
+
+      return (
+        entry.squadron === member.squadron &&
+        entry.firstName.trim().toLowerCase() === normalizedFirstName &&
+        entry.lastName.trim().toLowerCase() === normalizedLastName
+      );
+    });
+
+    return new Set<string>(
+      equivalentMembers.flatMap((entry) => [entry.id, buildLegacyRosterId(entry), buildLegacyRosterId(entry, true)])
+    );
   };
 
   useEffect(() => {
@@ -2687,6 +2879,19 @@ export default function ProfileScreen() {
       formula: breakdown.explanation,
     };
   }, [latestScoreEntry]);
+  const attendanceAliases = useMemo(
+    () => (currentMember ? getAttendanceAliases(currentMember.id) : new Set<string>()),
+    [currentMember]
+  );
+  const personalAttendanceSessions = useMemo(
+    () =>
+      currentMember
+        ? ptSessions
+          .filter((session) => session.attendees.some((attendeeId) => attendanceAliases.has(attendeeId)))
+          .sort((left, right) => `${right.date}`.localeCompare(left.date))
+        : [],
+    [attendanceAliases, currentMember, ptSessions]
+  );
 
   useEffect(() => {
     if (!accessToken || !user?.id || !user?.squadron) {
@@ -2833,6 +3038,435 @@ export default function ProfileScreen() {
     () => (userStats && 'leaderboardHistory' in userStats ? [...(userStats as Member).leaderboardHistory].sort((a, b) => b.month.localeCompare(a.month)) : []),
     [userStats]
   );
+  const exportAllMyData = useCallback(async () => {
+    const exportMember =
+      resolveExportMemberForUser(user) ??
+      (user
+        ? {
+            ...user,
+            showWorkoutHistoryOnProfile: user.showWorkoutHistoryOnProfile ?? true,
+            showWorkoutUploadsOnProfile: user.showWorkoutUploadsOnProfile ?? true,
+            showPFRARecordsOnProfile: user.showPFRARecordsOnProfile ?? true,
+            showUpdateNotes: user.showUpdateNotes ?? true,
+            appTheme: user.appTheme ?? 'default',
+            hasLoggedIntoApp: user.hasLoggedIntoApp ?? false,
+            mustChangePassword: user.mustChangePassword ?? false,
+          }
+        : null);
+    if (!user?.email || !exportMember) {
+      setExportDataError('Your account data is not ready yet. Please try again in a moment.');
+      return;
+    }
+
+    const password = exportDataPassword.trim();
+    if (!password) {
+      setExportDataError('Enter your password to export your data.');
+      return;
+    }
+
+    setIsExportingData(true);
+    setExportDataError(null);
+
+    try {
+      const exportSession = await signInWithPassword(user.email.trim().toLowerCase(), password);
+      const exportAccessToken = exportSession.access_token;
+
+      const exportStatsMember = resolveExportMemberForUser(user);
+      if (!exportStatsMember) {
+        throw new Error('Your member record could not be resolved. Refresh the app and try again.');
+      }
+
+      const exportMemberMatches = getEquivalentMemberMatches(members, user)
+        .filter((member) => member.squadron === exportStatsMember.squadron);
+      const exportMemberIds = new Set(exportMemberMatches.map((member) => member.id));
+      const normalizedExportEmail = (exportStatsMember.email ?? user.email).trim().toLowerCase();
+
+      const [latestManualSubmissionsResponse, latestApprovedWorkoutGroups, latestPfraGroups, latestAttendanceSessions, latestAppNotifications] = await Promise.all([
+        fetchManualWorkoutSubmissions({
+          memberId: exportStatsMember.id,
+          memberEmail: normalizedExportEmail,
+          squadron: exportStatsMember.squadron,
+          canReview: false,
+          accessToken: exportAccessToken,
+        }),
+        fetchApprovedManualWorkouts(exportAccessToken, exportStatsMember.squadron, { includeProofImage: true }),
+        fetchPFRARecords(exportAccessToken, exportStatsMember.squadron),
+        fetchAttendanceSessions(exportAccessToken, exportStatsMember.squadron),
+        fetchAppNotifications({ recipientEmail: normalizedExportEmail, accessToken: exportAccessToken }),
+      ]);
+
+      const latestWorkouts = latestApprovedWorkoutGroups
+        .filter((entry) =>
+          (entry.memberId ? exportMemberIds.has(entry.memberId) : false) ||
+          entry.memberEmail?.trim().toLowerCase() === normalizedExportEmail
+        )
+        .flatMap((entry) => entry.workouts);
+      const latestAssessments = latestPfraGroups
+        .filter((entry) =>
+          (entry.memberId ? exportMemberIds.has(entry.memberId) : false) ||
+          entry.memberEmail?.trim().toLowerCase() === normalizedExportEmail
+        )
+        .flatMap((entry) => entry.assessments);
+      const hydratedExportMember = mergeEquivalentMemberData(exportStatsMember, [{
+        ...exportStatsMember,
+        workouts: latestWorkouts,
+        fitnessAssessments: latestAssessments,
+      }]);
+
+      const requesterThreads = exportAccessToken
+        ? await fetchSupportThreads({
+            email: user.email,
+            isStaff: false,
+            accessToken: exportAccessToken,
+          })
+        : [];
+      const supportMessagesByThread = exportAccessToken
+        ? await Promise.all(
+            requesterThreads.map(async (thread) => ({
+              thread,
+              messages: await fetchSupportMessages(thread.id, exportAccessToken),
+            }))
+          )
+        : [];
+
+      const exportManualWorkoutSubmissions = latestManualSubmissionsResponse.mine.filter((submission) =>
+        exportMemberIds.has(submission.memberId) ||
+        (normalizedExportEmail.length > 0 && submission.memberEmail?.trim().toLowerCase() === normalizedExportEmail)
+      );
+      const exportScoredWorkoutHistory = getWorkoutScoreHistory(hydratedExportMember, latestAttendanceSessions);
+      const exportScoreEntriesById = new Map(exportScoredWorkoutHistory.map((entry) => [entry.workout.id, entry]));
+      const exportWorkoutHistory = getMemberEffectiveWorkouts(hydratedExportMember, latestAttendanceSessions)
+        .sort((a, b) => b.date.localeCompare(a.date));
+      const exportPFRAHistory = [...hydratedExportMember.fitnessAssessments]
+        .sort((a, b) => b.date.localeCompare(a.date));
+      const exportAttendanceAliases = new Set<string>([
+        ...exportMemberIds,
+        ...exportMemberMatches.flatMap((member) => [buildLegacyRosterId(member), buildLegacyRosterId(member, true)]),
+      ]);
+      const exportAttendanceSessions = latestAttendanceSessions
+        .filter((session) => session.attendees.some((attendeeId) => exportAttendanceAliases.has(attendeeId)));
+
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'FitFlight';
+      workbook.created = new Date();
+      const exportDate = new Date();
+      const baseFilename = `fitflight-my-data-${exportMember.lastName.toLowerCase()}-${exportMember.firstName.toLowerCase()}-${exportDate.toISOString().slice(0, 10)}.xlsx`;
+
+      appendWorkbookSheet(
+        workbook,
+        'Overview',
+        ['Field', 'Value'],
+        [
+          ['Exported At', exportDate.toLocaleString()],
+            ['Member Name', getDisplayName(hydratedExportMember)],
+            ['Email', hydratedExportMember.email ?? user.email],
+            ['Squadron', hydratedExportMember.squadron],
+            ['Flight', hydratedExportMember.flight],
+            ['Role', hydratedExportMember.accountType],
+            ['Theme', hydratedExportMember.appTheme ?? user.appTheme ?? 'default'],
+          ['Keep Awake Enabled', user.keepAwakeEnabled ?? false],
+          ['Has Logged Into App', exportMember.hasLoggedIntoApp ?? false],
+          ['Must Change Password', exportMember.mustChangePassword ?? false],
+        ]
+      );
+
+      appendWorkbookSheet(
+        workbook,
+        'Connected Apps',
+        ['Service', 'Connected', 'Display Name', 'Connected At', 'Last Synced At', 'External Id'],
+        Object.entries(user.integrationConnections ?? {}).map(([service, connection]) => [
+          service,
+          true,
+          connection?.displayName ?? '',
+          connection?.connectedAt ?? '',
+          connection?.lastSyncedAt ?? '',
+          connection?.externalId ?? '',
+        ])
+      );
+
+      appendWorkbookSheet(
+        workbook,
+        'Workouts',
+        [
+          'Workout Date',
+          'Workout Id',
+          'Type',
+          'Subtype',
+          'Intent',
+          'Source',
+          'Duration Minutes',
+          'Duration Seconds',
+          'Distance',
+          'Visible To Squadron',
+          'Points',
+          'Score Engine',
+          'Score Breakdown',
+          'Metrics',
+          'Proof Images',
+          'Additional Info',
+        ],
+        exportWorkoutHistory.map((workout) => {
+          const scoreEntry = exportScoreEntriesById.get(workout.id);
+          const proofImages = workout.proofImageUris?.join(' | ') ?? (workout.screenshotUri ?? '');
+          const metrics = workout.metrics ?? {};
+          return [
+            workout.date,
+            workout.id,
+            workout.type,
+            workout.metrics?.subtype ?? '',
+            workout.metrics?.intent ?? '',
+            workout.source,
+            workout.duration,
+            workout.durationSeconds ?? '',
+            typeof workout.distance === 'number' ? workout.distance : '',
+            !workout.isPrivate,
+            scoreEntry?.points ?? '',
+            scoreEntry?.breakdown.engine ?? '',
+            scoreEntry?.breakdown.explanation ?? '',
+            JSON.stringify({
+              ...metrics,
+              segments: workout.segments ?? [],
+            }),
+            proofImages,
+            workout.metrics?.additionalInfo ?? '',
+          ];
+        })
+      );
+
+      appendWorkbookSheet(
+        workbook,
+        'PFRA History',
+        [
+          'Date',
+          'Overall Score',
+          'Record Type',
+          'Cardio Test',
+          'Cardio Score',
+          'Cardio Time',
+          'Cardio Laps',
+          'Pushups Score',
+          'Plank Score',
+          'WHtR Score',
+        ],
+        exportPFRAHistory.map((assessment) => [
+          assessment.date,
+          assessment.overallScore,
+          assessment.recordType ?? '',
+          assessment.components.cardio.test ?? '',
+          assessment.components.cardio.score,
+          assessment.components.cardio.time ?? '',
+          assessment.components.cardio.laps ?? '',
+          assessment.components.pushups.score,
+          assessment.components.situps.score,
+          assessment.components.waist?.score ?? '',
+        ])
+      );
+
+      appendWorkbookSheet(
+        workbook,
+        'Attendance',
+        ['Date', 'Session Id', 'Flight', 'Squadron', 'Attendance Source', 'Created By'],
+        exportAttendanceSessions.map((session) => {
+          const attendeeId = session.attendees.find((entry) => exportAttendanceAliases.has(entry)) ?? '';
+          return [
+            session.date,
+            session.id,
+            session.flight,
+            session.squadron,
+            attendeeId ? session.attendeeSources?.[attendeeId] ?? 'manual' : 'manual',
+            session.createdBy,
+          ];
+        })
+      );
+
+      appendWorkbookSheet(
+        workbook,
+        'Upcoming PT',
+        ['Date', 'Time', 'Description', 'Location', 'Scope', 'Kind', 'Flights', 'Created By'],
+        upcomingPTSessions.map((session) => [
+          session.date,
+          session.time,
+          session.description,
+          session.location ?? '',
+          getScheduledSessionScopeLabel(session),
+          getScheduledSessionKindLabel(session.kind),
+          session.flights.join(', '),
+          session.createdBy,
+        ])
+      );
+
+      appendWorkbookSheet(
+        workbook,
+        'Trophies',
+        ['Trophy Id', 'Name', 'Description', 'Category', 'Is Hard', 'Earned'],
+        trophyStats.map((trophy) => [
+          trophy.id,
+          trophy.name,
+          trophy.description,
+          trophy.category,
+          trophy.isHard,
+          trophy.isEarned,
+        ])
+      );
+
+      appendWorkbookSheet(
+        workbook,
+        'Leaderboard',
+        ['Month', 'Position', 'Score'],
+        leaderboardHistory.map((entry) => [entry.month, entry.position, entry.score])
+      );
+
+      appendWorkbookSheet(
+        workbook,
+        'Manual Submissions',
+        [
+          'Submission Id',
+          'Workout Date',
+          'Workout Type',
+          'Workout Types',
+          'Duration Minutes',
+          'Duration Seconds',
+          'Distance',
+          'Private',
+          'Status',
+          'Reviewer Name',
+          'Reviewer Note',
+          'Attendance Marked',
+          'Created At',
+          'Updated At',
+          'Workout Details',
+        ],
+        exportManualWorkoutSubmissions.map((submission) => [
+          submission.id,
+          submission.workoutDate,
+          submission.workoutType,
+          submission.workoutTypes?.join(' | ') ?? '',
+          submission.duration,
+          submission.durationSeconds,
+          submission.distance ?? '',
+          submission.isPrivate,
+          submission.status,
+          submission.reviewerName ?? '',
+          submission.reviewerNote ?? '',
+          submission.attendanceMarkedBySubmission,
+          submission.createdAt,
+          submission.updatedAt,
+          JSON.stringify(submission.workoutDetails ?? []),
+        ])
+      );
+
+      appendWorkbookSheet(
+        workbook,
+        'Notifications',
+        ['Created At', 'Title', 'Message', 'Type', 'Read At', 'Action Type', 'Action Target Id'],
+        latestAppNotifications.map((notification) => [
+          notification.createdAt,
+          notification.title,
+          notification.message,
+          notification.type,
+          notification.readAt ?? '',
+          notification.actionType ?? '',
+          notification.actionTargetId ?? '',
+        ])
+      );
+
+      appendWorkbookSheet(
+        workbook,
+        'Support Threads',
+        [
+          'Thread Id',
+          'Subject',
+          'Recipient Name',
+          'Recipient Email',
+          'Created At',
+          'Updated At',
+          'Message Count',
+          'Unread For Requester',
+        ],
+        requesterThreads.map((thread) => [
+          thread.id,
+          thread.subject,
+          thread.recipientName,
+          thread.recipientEmail,
+          thread.createdAt,
+          thread.updatedAt,
+          thread.messageCount,
+          thread.unreadForRequester,
+        ])
+      );
+
+      appendWorkbookSheet(
+        workbook,
+        'Support Messages',
+        ['Thread Id', 'Message Id', 'Created At', 'Sender Name', 'Sender Email', 'Subject', 'Body', 'From Staff', 'Read By Requester'],
+        supportMessagesByThread.flatMap(({ thread, messages }) =>
+          messages.map((message) => [
+            thread.id,
+            message.id,
+            message.createdAt,
+            message.senderName,
+            message.senderEmail,
+            message.subject ?? '',
+            message.body,
+            message.isFromOwner,
+            message.readByRequester,
+          ])
+        )
+      );
+
+      const buffer = await workbook.xlsx.writeBuffer();
+
+      if (Platform.OS === 'web') {
+        await downloadWebFile(
+          baseFilename,
+          new Blob([buffer], {
+            type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          })
+        );
+      } else {
+        const exportPath = `${FileSystem.cacheDirectory ?? FileSystem.documentDirectory}${baseFilename}`;
+        const base64 = Buffer.from(buffer).toString('base64');
+        await FileSystem.writeAsStringAsync(exportPath, base64, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(exportPath, {
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            dialogTitle: 'Export All of My Data',
+          });
+        } else {
+          Alert.alert('Export Ready', `Your export was saved to:\n${exportPath}`);
+        }
+      }
+
+      setShowExportDataModal(false);
+      setExportDataPassword('');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      setExportDataError(error instanceof Error ? error.message : 'Unable to export your data.');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setIsExportingData(false);
+    }
+  }, [
+    accessToken,
+    appNotifications,
+    attendanceAliases,
+    exportDataPassword,
+    leaderboardHistory,
+    manualWorkoutSubmissions,
+    members,
+    personalAttendanceSessions,
+    pfraHistory,
+    ptSessions,
+    resolveMemberForUser,
+    scoredWorkoutHistory,
+    trophyStats,
+    upcomingPTSessions,
+    user,
+    workoutHistory,
+  ]);
   const rarestTrophies = useMemo(
     () => getRarestEarnedTrophies(
       ALL_ACHIEVEMENTS,
@@ -4144,6 +4778,27 @@ export default function ProfileScreen() {
           </TutorialTarget>
 
           {/* Logout */}
+          {isAuthenticated ? (
+            <Animated.View
+              entering={getWebSafeFadeInDown(340)}
+              className={useDesktopCardGrid ? 'mt-0' : 'mx-6 mt-6'}
+              style={useDesktopCardGrid ? { width: contentMaxWidth } : undefined}
+            >
+              <Pressable
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setExportDataError(null);
+                  setExportDataPassword('');
+                  setShowExportDataModal(true);
+                }}
+                className="flex-row items-center justify-center rounded-xl border border-af-accent/40 bg-af-accent/15 p-4"
+              >
+                <FileText size={20} color="#4A90D9" />
+                <Text className="ml-2 font-semibold text-white">Export All of My Data</Text>
+              </Pressable>
+            </Animated.View>
+          ) : null}
+
           <Animated.View
             entering={getWebSafeFadeInDown(350)}
             className={useDesktopCardGrid ? 'mt-0' : 'mx-6 mt-6'}
@@ -5807,6 +6462,90 @@ export default function ProfileScreen() {
         </View>
       </Modal>
 
+      <Modal visible={showExportDataModal} transparent animationType="fade">
+        <View className="flex-1 bg-black/80 items-center justify-center p-6">
+          <View className="bg-af-navy rounded-3xl p-6 w-full max-w-md border border-white/20">
+            <View className="flex-row items-center justify-between mb-4">
+              <View className="flex-1 pr-4">
+                <Text className="text-white text-xl font-bold">Export All of My Data</Text>
+                <Text className="text-af-silver text-sm mt-1">
+                  Enter your password to export your FitFlight account data into a CSV.
+                </Text>
+              </View>
+              <Pressable
+                onPress={() => {
+                  if (isExportingData) {
+                    return;
+                  }
+                  setShowExportDataModal(false);
+                  setExportDataPassword('');
+                  setExportDataError(null);
+                }}
+                className="w-8 h-8 bg-white/10 rounded-full items-center justify-center"
+              >
+                <X size={20} color="#C0C0C0" />
+              </Pressable>
+            </View>
+
+            <View className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+              <Text className="text-af-silver text-xs uppercase tracking-wider mb-2">Password</Text>
+              <TextInput
+                value={exportDataPassword}
+                onChangeText={(value) => {
+                  setExportDataPassword(value);
+                  if (exportDataError) {
+                    setExportDataError(null);
+                  }
+                }}
+                placeholder="Enter your password"
+                placeholderTextColor="#ffffff40"
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!isExportingData}
+                className="text-white py-1"
+              />
+            </View>
+
+            {exportDataError ? (
+              <View className="mt-4 rounded-2xl border border-af-danger/30 bg-af-danger/10 px-4 py-3">
+                <Text className="text-af-danger text-sm">{exportDataError}</Text>
+              </View>
+            ) : null}
+
+            <View className="mt-6 flex-row">
+              <Pressable
+                onPress={() => {
+                  if (isExportingData) {
+                    return;
+                  }
+                  setShowExportDataModal(false);
+                  setExportDataPassword('');
+                  setExportDataError(null);
+                }}
+                className="flex-1 bg-white/10 py-3 rounded-xl mr-2"
+              >
+                <Text className="text-white text-center font-semibold">Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  void exportAllMyData();
+                }}
+                disabled={isExportingData}
+                className={cn(
+                  "flex-1 py-3 rounded-xl ml-2",
+                  isExportingData ? "bg-white/10" : "bg-af-accent"
+                )}
+              >
+                <Text className={cn("text-center font-semibold", isExportingData ? "text-white/40" : "text-white")}>
+                  {isExportingData ? 'Exporting...' : 'Export CSV'}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={showSettingsModal} transparent animationType="fade">
         <View className="flex-1 bg-black/80 items-center justify-center p-6">
           <View
@@ -6337,7 +7076,7 @@ export default function ProfileScreen() {
 
             {activeWorkoutSubmission ? (
               (() => {
-                const proofImageUris = activeWorkoutSubmission.proofImageDataList && activeWorkoutSubmission.proofImageDataList.length > 0
+                const proofImageUris = Array.isArray(activeWorkoutSubmission.proofImageDataList) && activeWorkoutSubmission.proofImageDataList.length > 0
                   ? activeWorkoutSubmission.proofImageDataList
                   : activeWorkoutSubmission.proofImageData
                     ? [activeWorkoutSubmission.proofImageData]
@@ -6971,7 +7710,7 @@ export default function ProfileScreen() {
                           </Text>
                           {session.scope !== 'personal' ? (
                             <View className="flex-row flex-wrap mt-3" style={{ gap: 8 }}>
-                              {session.flights.map((flight) => (
+                              {(Array.isArray(session.flights) ? session.flights : []).map((flight) => (
                                 <View key={`${session.id}-${flight}`} className="rounded-full border border-white/10 bg-black/15 px-3 py-1.5">
                                   <Text className="text-white text-xs font-medium">{flight}</Text>
                                 </View>

@@ -75,7 +75,7 @@ export default function StravaCallbackScreen() {
               )
             );
 
-            const nextSessions = await fetchAttendanceSessions(accessToken).catch(() => []);
+            const nextSessions = await fetchAttendanceSessions(accessToken, currentMember.squadron).catch(() => []);
             syncPTSessions(nextSessions);
           }
         }
